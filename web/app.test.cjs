@@ -146,7 +146,7 @@ test('identity changes clear protected data and reject late API and log response
     document:{querySelector:element}, sessionStorage:{getItem(){return storedToken;}, removeItem(){storedToken='';}},
     fetch: (path, options) => new Promise((resolve) => requests.push({path, options, resolve})),
   });
-  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.authUI = {state, api, loadLogs, applyAuth, logout, discoverAuth};', sandbox);
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.authUI = {state, api, loadLogs, applyAuth, logout, discoverAuth, refresh};', sandbox);
   const ui = sandbox.authUI;
   ui.applyAuth({mode:'oidc',authenticated:true,subject:'operator',role:'admin',csrfToken:'admin-session',required:true,capabilities:{dashboard:true,telemetry:true,logs:true,events:true}});
   Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], telemetry:{secret:true}, selectedEventId:'secret', modalAction:'restart', modalServerId:'world'});
@@ -175,6 +175,9 @@ test('identity changes clear protected data and reject late API and log response
   assert.equal(element('#login-dialog').open, false);
   ui.applyAuth({mode:'oidc',authenticated:true,subject:'reader',role:'viewer',csrfToken:'expired-session',required:true,capabilities:{dashboard:true,telemetry:true}});
   const logout = ui.logout();
+  const requestCount = requests.length;
+  await ui.refresh();
+  assert.equal(requests.length, requestCount);
   assert.equal(requests.at(-1).options.headers['X-CSRF-Token'], 'expired-session');
   assert.equal(ui.state.authRequired, true);
   requests.at(-1).resolve({status:401,ok:false,headers:{get:()=>null},text:async()=>'{"error":"authentication required"}'});

@@ -395,6 +395,7 @@ async function loadLogs(signal) {
   state.logs = Array.isArray(lines) ? lines.map((line) => typeof line === 'string' ? line : `${date(line.timestamp)} [${line.level || 'INFO'}] ${line.message || ''}`).join('\n') : String(lines);
 }
 async function refresh() {
+  if (state.logoutCSRF) return;
   const sequence = ++refreshSequence;
   let controller;
   state.refreshing = true;
