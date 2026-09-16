@@ -199,7 +199,7 @@ func (k *kubeOrchestrator) podGameAPI(ctx context.Context, target podTarget, end
 	if err != nil || port < 1 || port > 65535 {
 		return nil, errors.New("invalid game API port")
 	}
-	if endpoint != "health" && endpoint != "players" {
+	if endpoint != "health" && endpoint != "players" && endpoint != "metrics" {
 		return nil, errors.New("unsupported game API endpoint")
 	}
 	script := fmt.Sprintf("curl -fsS --max-time 3 -H \"Authorization: Bearer $(cat /run/rsdwapi/token)\" http://127.0.0.1:%d/api/%s", port, endpoint)
@@ -218,9 +218,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 	result.status = status
 	if err != nil {
 		for key := range result.metrics {
-			if key != "tickRate" {
-				failReadings(result.metrics, []string{key}, "unavailable", "Pod discovery: "+err.Error(), nil)
-			}
+			failReadings(result.metrics, []string{key}, "unavailable", "Pod discovery: "+err.Error(), nil)
 		}
 		return result
 	}
@@ -274,6 +272,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 			}
 		}
 	}
+	k.collectTicks(sourceCtx, target, result.metrics)
 	// kubectl exec pins a name, not a UID. Discard a collection spanning replacement.
 	var after telemetryPod
 	if err := k.kubeJSON(ctx, &after, "-n", target.pod.Metadata.Namespace, "get", "pod", target.pod.Metadata.Name, "-o", "json"); err != nil || !sameContainer(target, after) {
@@ -282,9 +281,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 			reason = "Pod identity verification failed: " + err.Error()
 		}
 		for key := range result.metrics {
-			if key != "tickRate" {
-				failReadings(result.metrics, []string{key}, "unavailable", reason, nil)
-			}
+			failReadings(result.metrics, []string{key}, "unavailable", reason, nil)
 		}
 		result.network = nil
 		result.image = ""
@@ -447,6 +444,101 @@ func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, me
 				setReading(metrics, "players", *payload.Count, at)
 			}
 		}
+	}
+}
+
+func (k *kubeOrchestrator) collectTicks(ctx context.Context, target podTarget, metrics map[string]MetricReading) {
+	started := time.Now()
+	data, err := k.podGameAPI(ctx, target, "metrics")
+	received := time.Now()
+	if err != nil {
+		status := "error"
+		if strings.Contains(err.Error(), "requested URL returned error: 404") {
+			status = "unsupported"
+		}
+		failReadings(metrics, tickKeys, status, "Game API metrics: "+err.Error(), nil)
+		return
+	}
+	applyTicks(metrics, data, received.UTC(), received.Sub(started))
+}
+
+func applyTicks(metrics map[string]MetricReading, data []byte, now time.Time, transport time.Duration) {
+	var payload struct {
+		SchemaVersion int `json:"schemaVersion"`
+		Tick          *struct {
+			Status     string   `json:"status"`
+			Source     string   `json:"source"`
+			Scope      string   `json:"scope"`
+			Reason     string   `json:"reason"`
+			Window     *float64 `json:"windowSeconds"`
+			Count      *uint64  `json:"sampleCount"`
+			Age        *float64 `json:"lastSampleAgeSeconds"`
+			ObservedAt *int64   `json:"observedAtUnixMs"`
+			Rate       *float64 `json:"rateHz"`
+			Execution  *struct {
+				P50 *float64 `json:"p50"`
+				P95 *float64 `json:"p95"`
+				P99 *float64 `json:"p99"`
+			} `json:"executionMs"`
+		} `json:"tick"`
+	}
+	fail := func(status, reason string, at *time.Time) {
+		failReadings(metrics, tickKeys, status, reason, at)
+	}
+	if json.Unmarshal(data, &payload) != nil || payload.SchemaVersion != 1 || payload.Tick == nil {
+		fail("error", "Invalid or missing schemaVersion 1 tick snapshot", nil)
+		return
+	}
+	tick := payload.Tick
+	if tick.Source != "engine_tick_hook" || tick.Scope != "UDomGameEngine::Tick" {
+		fail("error", "Unverified tick source or scope", nil)
+		return
+	}
+	switch tick.Status {
+	case "ready":
+	case "warming", "unsupported", "stale", "faulted", "stopped", "starting":
+		fail(tick.Status, defaultValue(tick.Reason, "Tick source is "+tick.Status), nil)
+		return
+	default:
+		fail("error", "Invalid or missing tick status", nil)
+		return
+	}
+	if tick.Execution == nil || tick.Count == nil || *tick.Count == 0 || *tick.Count > 8192 || tick.ObservedAt == nil || *tick.ObservedAt <= 0 {
+		fail("error", "Missing or invalid tick count, timestamp or execution snapshot", nil)
+		return
+	}
+	for _, value := range []*float64{tick.Window, tick.Rate, tick.Age, tick.Execution.P50, tick.Execution.P95, tick.Execution.P99} {
+		if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
+			fail("error", "Missing or invalid non-negative tick measurement", nil)
+			return
+		}
+	}
+	expectedRate := float64(*tick.Count) / *tick.Window
+	if *tick.Window < 1 || math.IsInf(expectedRate, 0) || math.Abs(expectedRate-*tick.Rate) > math.Max(0.00001, expectedRate*0.00001) || *tick.Execution.P50 > *tick.Execution.P95 || *tick.Execution.P95 > *tick.Execution.P99 || *tick.Execution.P99 > *tick.Window*1000+0.00001 {
+		fail("error", "Incoherent tick rate, window or percentile order", nil)
+		return
+	}
+	rank := func(percent uint64) uint64 { return (percent**tick.Count + 99) / 100 }
+	if (rank(50) == rank(95) && *tick.Execution.P50 != *tick.Execution.P95) || (rank(95) == rank(99) && *tick.Execution.P95 != *tick.Execution.P99) {
+		fail("error", "Coincident percentile ranks have different durations", nil)
+		return
+	}
+	at := time.UnixMilli(*tick.ObservedAt).UTC()
+	age := now.Sub(at).Seconds()
+	if transport < 0 || transport > tickTransportLimit || *tick.Age > tickMaxAge.Seconds() || age > (tickMaxAge+transport).Seconds()+0.001 {
+		fail("stale", "Tick observation exceeds the two-second freshness window and bounded transport", &at)
+		return
+	}
+	if age < -0.1 || age-*tick.Age < -0.1 || age-*tick.Age > transport.Seconds()+0.1 {
+		fail("error", "Tick timestamp disagrees with source age", &at)
+		return
+	}
+	for key, value := range map[string]float64{
+		"tickRate": *tick.Rate, "tickP50Ms": *tick.Execution.P50,
+		"tickP95Ms": *tick.Execution.P95, "tickP99Ms": *tick.Execution.P99,
+		"tickWindowSeconds": *tick.Window, "tickSampleCount": float64(*tick.Count),
+	} {
+		setReading(metrics, key, value, at)
 	}
 }
 

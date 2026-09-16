@@ -11,7 +11,13 @@ const (
 	telemetryMaxAge     = 45 * time.Second
 	telemetryRetention  = time.Hour
 	telemetryMaxSamples = 240
+	tickMaxAge          = 2 * time.Second
+	tickTransportLimit  = 1500 * time.Millisecond
 )
+
+var tickKeys = []string{"tickRate", "tickP50Ms", "tickP95Ms", "tickP99Ms", "tickWindowSeconds", "tickSampleCount"}
+
+const tickSource = "game API /api/metrics engine_tick_hook UDomGameEngine::Tick"
 
 type MetricReading struct {
 	Value      *float64   `json:"value"`
@@ -37,7 +43,12 @@ var metricCatalog = []struct{ key, unit, source, description string }{
 	{"inboundBytesPerSecond", "bytes/second", "Pod /proc/net/dev", "Received bytes per second across non-loopback pod interfaces."},
 	{"outboundBytesPerSecond", "bytes/second", "Pod /proc/net/dev", "Transmitted bytes per second across non-loopback pod interfaces."},
 	{"networkBytesPerSecond", "bytes/second", "Pod /proc/net/dev", "Combined received and transmitted pod bytes per second."},
-	{"tickRate", "ticks/second", "unsupported", "The game API does not expose a verified tick rate."},
+	{"tickRate", "ticks/second", tickSource, "Completed UDomGameEngine::Tick calls divided by the observed window."},
+	{"tickP50Ms", "milliseconds", tickSource, "Median elapsed execution time inside UDomGameEngine::Tick."},
+	{"tickP95Ms", "milliseconds", tickSource, "95th percentile elapsed execution time inside UDomGameEngine::Tick."},
+	{"tickP99Ms", "milliseconds", tickSource, "99th percentile elapsed execution time inside UDomGameEngine::Tick."},
+	{"tickWindowSeconds", "seconds", tickSource, "Actual observation window for the tick snapshot."},
+	{"tickSampleCount", "ticks", tickSource, "Completed calls represented by the tick snapshot."},
 }
 
 func emptyMetrics() map[string]MetricReading {
@@ -45,9 +56,6 @@ func emptyMetrics() map[string]MetricReading {
 	for _, item := range metricCatalog {
 		metrics[item.key] = MetricReading{Status: "unavailable", Source: item.source, Unit: item.unit, Reason: "No observation collected"}
 	}
-	reading := metrics["tickRate"]
-	reading.Status, reading.Reason = "unsupported", "The game API does not expose a verified tick rate"
-	metrics["tickRate"] = reading
 	return metrics
 }
 
@@ -202,6 +210,8 @@ func joinObservation(server Server, result observation, now time.Time) Server {
 			server.DiskPercent = *reading.Value
 		case "networkBytesPerSecond":
 			server.NetworkBytesPerSecond = int64(*reading.Value)
+		case "tickRate":
+			server.TickRate = *reading.Value
 		}
 	}
 	server.Status = StatusUnknown

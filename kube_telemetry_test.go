@@ -50,6 +50,7 @@ func TestSourceTimeoutPreservesOtherMetrics(t *testing.T) {
 		{"get --raw", "cpuCores", "players"},
 		{"/api/health", "engineReady", "players"},
 		{"/api/players", "players", "engineReady"},
+		{"/api/metrics", "tickRate", "players"},
 		{"df -Pk", "diskPercent", "players"},
 		{"cat /proc/net/dev", "networkBytesPerSecond", "players"},
 		{"exec ", "engineReady", "cpuCores"},
@@ -98,6 +99,10 @@ func netFixture(rx, tx uint64) string {
 	return fmt.Sprintf("Inter-| Receive | Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n lo: 999999 0 0 0 0 0 0 0 999999 0 0 0 0 0 0 0\n eth0: %d 0 0 0 0 0 0 0 %d 0 0 0 0 0 0 0\n", rx, tx)
 }
 
+func tickFixture(now time.Time) string {
+	return fmt.Sprintf(`{"schemaVersion":1,"tick":{"status":"ready","source":"engine_tick_hook","scope":"UDomGameEngine::Tick","reason":"","windowSeconds":10,"sampleCount":300,"lastSampleAgeSeconds":0.25,"observedAtUnixMs":%d,"rateHz":30,"executionMs":{"p50":1,"p95":4,"p99":8}}}`, now.Add(-250*time.Millisecond).UnixMilli())
+}
+
 func (r *telemetryRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -127,6 +132,8 @@ func (r *telemetryRunner) Run(ctx context.Context, name string, args ...string) 
 		return []byte(`{"engineReady":true,"uptimeSeconds":120}`), nil
 	case strings.Contains(call, "/api/players"):
 		return []byte(`{"count":2,"players":[{},{}]}`), nil
+	case strings.Contains(call, "/api/metrics"):
+		return []byte(tickFixture(time.Now())), nil
 	case strings.Contains(call, "df -Pk"):
 		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/data 1000 250 750 25% /data\n"), nil
 	case strings.Contains(call, "cat /proc/net/dev"):
@@ -166,7 +173,9 @@ func TestCollectRealSourceContract(t *testing.T) {
 	for key, value := range map[string]float64{"players": 2, "uptimeSeconds": 120, "engineReady": 1, "cpuCores": .125, "cpuPercent": 25, "cpuLimitCores": .5, "memoryUsedBytes": 67108864, "memoryLimitBytes": 2147483648, "diskUsedBytes": 256000, "diskCapacityBytes": 1024000, "diskPercent": 25} {
 		expectMetric(t, observed.metrics, key, "available", number(value))
 	}
-	expectMetric(t, observed.metrics, "tickRate", "unsupported", nil)
+	for key, value := range map[string]float64{"tickRate": 30, "tickP50Ms": 1, "tickP95Ms": 4, "tickP99Ms": 8, "tickWindowSeconds": 10, "tickSampleCount": 300} {
+		expectMetric(t, observed.metrics, key, "available", number(value))
+	}
 	for _, key := range networkKeys {
 		expectMetric(t, observed.metrics, key, "warming_up", nil)
 	}
@@ -448,5 +457,212 @@ func TestLocalKernelTelemetryParsers(t *testing.T) {
 	_, capacity, err := parseDisk(data)
 	if err != nil || capacity <= 0 {
 		t.Fatalf("local data filesystem capacity=%g error=%v", capacity, err)
+	}
+}
+
+func TestTickSnapshotValidation(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, tc := range []struct {
+		name, old, replacement, status string
+	}{
+		{"ready", `"rateHz":30`, `"rateHz":30`, "available"},
+		{"rounded rate", `"rateHz":30`, `"rateHz":30.000001`, "available"},
+		{"zero durations", `"executionMs":{"p50":1,"p95":4,"p99":8}`, `"executionMs":{"p50":0,"p95":0,"p99":0}`, "available"},
+		{"wrong version", `"schemaVersion":1`, `"schemaVersion":2`, "error"},
+		{"wrong source", "engine_tick_hook", "rpc_counter", "error"},
+		{"wrong scope", "UDomGameEngine::Tick", "UWorld::Tick", "error"},
+		{"base class scope", "UDomGameEngine::Tick", "UGameEngine::Tick", "error"},
+		{"unknown status", `"status":"ready"`, `"status":"ok"`, "error"},
+		{"negative rate", `"rateHz":30`, `"rateHz":-1`, "error"},
+		{"zero rate with samples", `"rateHz":30`, `"rateHz":0`, "error"},
+		{"wrong rate convention", `"rateHz":30`, `"rateHz":29.9`, "error"},
+		{"zero window", `"windowSeconds":10`, `"windowSeconds":0`, "error"},
+		{"negative window", `"windowSeconds":10`, `"windowSeconds":-10`, "error"},
+		{"overflow window", `"windowSeconds":10`, `"windowSeconds":1e999`, "error"},
+		{"underflow window", `"windowSeconds":10`, `"windowSeconds":1e-999`, "error"},
+		{"fractional count", `"sampleCount":300`, `"sampleCount":300.5`, "error"},
+		{"negative count", `"sampleCount":300`, `"sampleCount":-300`, "error"},
+		{"empty distribution", `"sampleCount":300`, `"sampleCount":0`, "error"},
+		{"imprecise count", `"sampleCount":300`, `"sampleCount":9007199254740993`, "error"},
+		{"string count", `"sampleCount":300`, `"sampleCount":"300"`, "error"},
+		{"unordered p95", `"p95":4`, `"p95":0`, "error"},
+		{"unordered p99", `"p99":8`, `"p99":2`, "error"},
+		{"duration exceeds window", `"p99":8`, `"p99":10001`, "error"},
+		{"negative duration", `"p50":1`, `"p50":-1`, "error"},
+		{"nan", `"p50":1`, `"p50":NaN`, "error"},
+		{"infinity", `"p99":8`, `"p99":1e999`, "error"},
+		{"negative age", `"lastSampleAgeSeconds":0.25`, `"lastSampleAgeSeconds":-1`, "error"},
+		{"old advertised age", `"lastSampleAgeSeconds":0.25`, `"lastSampleAgeSeconds":3`, "stale"},
+		{"false source age", `"lastSampleAgeSeconds":0.25`, `"lastSampleAgeSeconds":1`, "error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := emptyMetrics()
+			data := strings.Replace(tickFixture(now), tc.old, tc.replacement, 1)
+			applyTicks(metrics, []byte(data), now, 10*time.Millisecond)
+			for _, key := range tickKeys {
+				if tc.status == "available" {
+					if metrics[key].Status != "available" || metrics[key].Value == nil || !metrics[key].ObservedAt.Equal(now.Add(-250*time.Millisecond)) {
+						t.Fatalf("%s: %+v", key, metrics[key])
+					}
+				} else {
+					expectMetric(t, metrics, key, tc.status, nil)
+				}
+			}
+		})
+	}
+	for _, status := range []string{"warming", "unsupported", "stale", "faulted", "stopped", "starting"} {
+		t.Run(status, func(t *testing.T) {
+			metrics := emptyMetrics()
+			applyTicks(metrics, []byte(tickFixture(now)), now, 0)
+			data := strings.Replace(tickFixture(now), `"status":"ready"`, `"status":"`+status+`"`, 1)
+			data = strings.Replace(data, `"reason":""`, `"reason":"producer reason"`, 1)
+			applyTicks(metrics, []byte(data), now, 0)
+			for _, key := range tickKeys {
+				expectMetric(t, metrics, key, status, nil)
+				if metrics[key].Reason != "producer reason" {
+					t.Fatal("producer reason lost")
+				}
+			}
+		})
+	}
+}
+
+func TestTickSnapshotMissingFields(t *testing.T) {
+	now := time.Now().UTC()
+	for _, path := range []string{"schemaVersion", "tick", "tick.status", "tick.source", "tick.scope", "tick.windowSeconds", "tick.sampleCount", "tick.lastSampleAgeSeconds", "tick.observedAtUnixMs", "tick.rateHz", "tick.executionMs", "tick.executionMs.p50", "tick.executionMs.p95", "tick.executionMs.p99"} {
+		for _, null := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/null=%t", path, null), func(t *testing.T) {
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(tickFixture(now)), &payload); err != nil {
+					t.Fatal(err)
+				}
+				parts := strings.Split(path, ".")
+				object := payload
+				for _, part := range parts[:len(parts)-1] {
+					object = object[part].(map[string]any)
+				}
+				key := parts[len(parts)-1]
+				if null {
+					object[key] = nil
+				} else {
+					delete(object, key)
+				}
+				data, err := json.Marshal(payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				metrics := emptyMetrics()
+				applyTicks(metrics, data, now, 0)
+				for _, key := range tickKeys {
+					expectMetric(t, metrics, key, "error", nil)
+				}
+			})
+		}
+	}
+}
+
+func TestTickDistributionBounds(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, tc := range []struct {
+		count, window, rate, p50, p95, p99 float64
+		status                             string
+	}{
+		{1, 1, 1, 1, 2, 3, "error"},
+		{1, 1, 1, 3, 3, 3, "available"},
+		{2, 1, 2, 1, 2, 3, "error"},
+		{2, 1, 2, 1, 3, 3, "available"},
+		{30, 0.5, 60, 1, 2, 3, "error"},
+		{8193, 10, 819.3, 1, 2, 3, "error"},
+	} {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(tickFixture(now)), &payload); err != nil {
+			t.Fatal(err)
+		}
+		tick := payload["tick"].(map[string]any)
+		tick["sampleCount"], tick["windowSeconds"], tick["rateHz"] = tc.count, tc.window, tc.rate
+		tick["executionMs"] = map[string]float64{"p50": tc.p50, "p95": tc.p95, "p99": tc.p99}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metrics := emptyMetrics()
+		applyTicks(metrics, data, now, 0)
+		if metrics["tickRate"].Status != tc.status {
+			t.Fatalf("%+v: %+v", tc, metrics["tickRate"])
+		}
+	}
+}
+
+func TestTickTimestampAndTransport(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, tc := range []struct {
+		name        string
+		producerNow time.Time
+		transport   time.Duration
+		status      string
+	}{
+		{"transport delay", now.Add(-time.Second), time.Second, "available"},
+		{"future timestamp", now.Add(time.Second), 0, "error"},
+		{"old ready replay", now.Add(-time.Minute), time.Millisecond, "stale"},
+		{"incoherent age", now.Add(-time.Second), time.Millisecond, "error"},
+		{"unbounded transport", now, tickTransportLimit + time.Millisecond, "stale"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := emptyMetrics()
+			applyTicks(metrics, []byte(tickFixture(tc.producerNow)), now, tc.transport)
+			for _, key := range tickKeys {
+				var value *float64
+				if tc.status == "available" {
+					value = metrics[key].Value
+					if value == nil {
+						t.Fatal("missing delayed reading")
+					}
+				}
+				expectMetric(t, metrics, key, tc.status, value)
+				if !metrics[key].ObservedAt.Equal(tc.producerNow.Add(-250 * time.Millisecond)) {
+					t.Fatal("producer observation was retimestamped")
+				}
+			}
+		})
+	}
+}
+
+func TestTickSourceFailureIsIndependent(t *testing.T) {
+	for _, payload := range []string{"404", "null", "{}", "not JSON"} {
+		t.Run(payload, func(t *testing.T) {
+			k, runner, server := collectorFixture()
+			runner.override = func(call string) ([]byte, error, bool) {
+				if strings.Contains(call, "/api/metrics") {
+					if payload == "404" {
+						return nil, errors.New("curl: (22) The requested URL returned error: 404"), true
+					}
+					return []byte(payload), nil, true
+				}
+				return nil, nil, false
+			}
+			got := k.collectObservation(context.Background(), server, nil)
+			status := "error"
+			if payload == "404" {
+				status = "unsupported"
+			}
+			for _, key := range tickKeys {
+				expectMetric(t, got.metrics, key, status, nil)
+			}
+			expectMetric(t, got.metrics, "players", "available", number(2))
+			expectMetric(t, got.metrics, "cpuCores", "available", number(.125))
+			expectMetric(t, got.metrics, "diskPercent", "available", number(25))
+		})
+	}
+	k, runner, server := collectorFixture()
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "/api/health") || strings.Contains(call, "/api/players") {
+			return nil, errors.New("other API unavailable"), true
+		}
+		return nil, nil, false
+	}
+	got := k.collectObservation(context.Background(), server, nil)
+	expectMetric(t, got.metrics, "tickRate", "available", number(30))
+	if _, err := k.podGameAPI(context.Background(), podTarget{}, "metrics;bad"); err == nil {
+		t.Fatal("endpoint allowlist accepted an arbitrary command")
 	}
 }

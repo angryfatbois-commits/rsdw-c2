@@ -76,6 +76,24 @@ assert.match(html, /0\.00535 cores/);
 assert.match(html, /CPU cores over the selected period\. Latest value 0\.00535/);
 assert.match(html, />0\.00615<\/text>/);
 
+for (const [key, value] of Object.entries({tickRate:29.7,tickP50Ms:0.4,tickP95Ms:1.2,tickP99Ms:3.6,tickWindowSeconds:10,tickSampleCount:297})) {
+  state.telemetry.metrics[key] = {value,status:'available',unit:key.endsWith('Ms')?'milliseconds':'',source:'game API /api/metrics',observedAt:'2026-09-16T12:00:30Z'};
+}
+state.telemetry.samples = [{timestamp:'2026-09-16T12:00:30Z',tickRate:29.7,tickP50Ms:0.4,tickP95Ms:1.2,tickP99Ms:3.6,tickWindowSeconds:10,tickSampleCount:297}];
+html = telemetry();
+assert.match(html, /29\.7 TPS/);
+assert.match(html, /1\.2 ms/);
+assert.match(html, /3\.6 ms/);
+assert.match(html, /UDomGameEngine::Tick/);
+assert.match(html, /data-testid="chart-data-tickP95Ms"/);
+assert.match(html, /p99 tick duration \(ms\), latest value 3\.6/);
+assert.equal(context.ui.telemetryRows().find((row) => row.metric === 'tickP95Ms').value, 1.2);
+state.telemetry.metrics.tickP95Ms = {value:null,status:'unsupported',reason:'Game build has no verified tick hook'};
+state.telemetry.samples = [{timestamp:'2026-09-16T12:00:45Z',tickP95Ms:null,tickP99Ms:null}];
+html = telemetry();
+assert.match(html, /Game build has no verified tick hook/);
+assert.equal(context.ui.telemetryRows().find((row) => row.metric === 'tickP95Ms').value, '');
+
 state.events = [
   {id:'one', serverId:'world', category:'update', severity:'success', message:'Image updated', details:'<script>bad()</script>'},
   {id:'two', serverId:'other', category:'system', severity:'warning', message:'Other world restarted'},

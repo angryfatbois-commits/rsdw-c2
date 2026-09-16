@@ -1,0 +1,322 @@
+{
+  "container": "rsdw-tick-measured",
+  "scope": "offline empty-world actual server",
+  "unauthenticatedStatus": 401,
+  "nativeCounterRateHz": 29.870303622997074,
+  "nativeCounterDelta": 1822,
+  "elapsedSeconds": 60.99703648801369,
+  "health": {
+    "status": "healthy",
+    "version": "0.1.1",
+    "uptimeSeconds": 140.4,
+    "engineReady": true
+  },
+  "players": {
+    "count": 0,
+    "players": []
+  },
+  "burstRequests": 30,
+  "burstElapsedSeconds": 1.5411618810030632,
+  "burstNativeFrames": 46,
+  "observations": [
+    {
+      "elapsedSeconds": 0.06389034500170965,
+      "nativeFrameCounter": 2190,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 9.990727551,
+          "sampleCount": 298,
+          "lastSampleAgeSeconds": 0.024219824,
+          "observedAtUnixMs": 1789586234754,
+          "rateHz": 29.8276575433,
+          "executionMs": {
+            "p50": 0.554718,
+            "p95": 0.852355,
+            "p99": 0.950568
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 5.139447537003434,
+      "nativeFrameCounter": 2342,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.001893171,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.019492499,
+          "observedAtUnixMs": 1789586239834,
+          "rateHz": 29.8943404902,
+          "executionMs": {
+            "p50": 0.467424,
+            "p95": 0.749933,
+            "p99": 0.92989
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 10.208472949001589,
+      "nativeFrameCounter": 2494,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.000303857,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.001563726,
+          "observedAtUnixMs": 1789586244922,
+          "rateHz": 29.8990914952,
+          "executionMs": {
+            "p50": 0.446585,
+            "p95": 0.877121,
+            "p99": 1.088366
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 15.276405426004203,
+      "nativeFrameCounter": 2645,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.020597996,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.002807132,
+          "observedAtUnixMs": 1789586249989,
+          "rateHz": 29.8385385901,
+          "executionMs": {
+            "p50": 0.542084,
+            "p95": 0.917376,
+            "p99": 1.228678
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 20.348131060003652,
+      "nativeFrameCounter": 2796,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 9.983799549,
+          "sampleCount": 298,
+          "lastSampleAgeSeconds": 0.023728765,
+          "observedAtUnixMs": 1789586255039,
+          "rateHz": 29.8483556824,
+          "executionMs": {
+            "p50": 0.532206,
+            "p95": 0.868305,
+            "p99": 0.966619
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 25.45285777701065,
+      "nativeFrameCounter": 2949,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.00436694,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.006883228,
+          "observedAtUnixMs": 1789586260161,
+          "rateHz": 29.8869485489,
+          "executionMs": {
+            "p50": 0.43329,
+            "p95": 0.744092,
+            "p99": 0.891368
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 30.536202990013408,
+      "nativeFrameCounter": 3100,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 9.982774281,
+          "sampleCount": 298,
+          "lastSampleAgeSeconds": 0.028581774,
+          "observedAtUnixMs": 1789586265222,
+          "rateHz": 29.8514212194,
+          "executionMs": {
+            "p50": 0.492731,
+            "p95": 0.810596,
+            "p99": 0.918469
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 35.61638294100703,
+      "nativeFrameCounter": 3252,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 9.989280213,
+          "sampleCount": 298,
+          "lastSampleAgeSeconds": 0.012500688,
+          "observedAtUnixMs": 1789586270319,
+          "rateHz": 29.8319792463,
+          "executionMs": {
+            "p50": 0.549127,
+            "p95": 0.849189,
+            "p99": 0.941171
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 40.69822554300481,
+      "nativeFrameCounter": 3404,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.017978055,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.00601862,
+          "observedAtUnixMs": 1789586275407,
+          "rateHz": 29.8463420821,
+          "executionMs": {
+            "p50": 0.551763,
+            "p95": 0.843047,
+            "p99": 0.957001
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 45.76851116301259,
+      "nativeFrameCounter": 3555,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.012346698,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.01825252,
+          "observedAtUnixMs": 1789586280465,
+          "rateHz": 29.8631288966,
+          "executionMs": {
+            "p50": 0.543818,
+            "p95": 0.851503,
+            "p99": 0.97267
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 50.85512458100857,
+      "nativeFrameCounter": 3707,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.013533569,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.015284827,
+          "observedAtUnixMs": 1789586285555,
+          "rateHz": 29.8595893188,
+          "executionMs": {
+            "p50": 0.526275,
+            "p95": 0.903039,
+            "p99": 1.004219
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 55.92630963301053,
+      "nativeFrameCounter": 3859,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.002226594,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.006475345,
+          "observedAtUnixMs": 1789586290634,
+          "rateHz": 29.893343966,
+          "executionMs": {
+            "p50": 0.42233,
+            "p95": 0.813462,
+            "p99": 0.985434
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 60.99702325400722,
+      "nativeFrameCounter": 4010,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 10.002022994,
+          "sampleCount": 299,
+          "lastSampleAgeSeconds": 0.021789446,
+          "observedAtUnixMs": 1789586295690,
+          "rateHz": 29.8939524714,
+          "executionMs": {
+            "p50": 0.45972,
+            "p95": 0.729415,
+            "p99": 0.888823
+          }
+        }
+      }
+    }
+  ]
+}

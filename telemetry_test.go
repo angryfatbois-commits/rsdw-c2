@@ -28,6 +28,52 @@ func fixtureApp(t *testing.T) (*App, *telemetryRunner, Server) {
 	return app, runner, server
 }
 
+func TestActualGameTickCapture(t *testing.T) {
+	data, err := os.ReadFile("verification/tick-live-observations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var capture struct {
+		Observations []struct {
+			Payload json.RawMessage `json:"payload"`
+		} `json:"observations"`
+	}
+	if err := json.Unmarshal(data, &capture); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.Observations) != 13 {
+		t.Fatalf("got %d captured windows", len(capture.Observations))
+	}
+	for _, observation := range capture.Observations {
+		var source struct {
+			Tick struct {
+				ObservedAt int64   `json:"observedAtUnixMs"`
+				Age        float64 `json:"lastSampleAgeSeconds"`
+			} `json:"tick"`
+		}
+		if err := json.Unmarshal(observation.Payload, &source); err != nil {
+			t.Fatal(err)
+		}
+		at := time.UnixMilli(source.Tick.ObservedAt)
+		received := at.Add(time.Duration(source.Tick.Age * float64(time.Second))).Add(10 * time.Millisecond)
+		metrics := emptyMetrics()
+		applyTicks(metrics, observation.Payload, received, 20*time.Millisecond)
+		for _, key := range tickKeys {
+			if metrics[key].Status != "available" || metrics[key].Value == nil {
+				t.Fatalf("%s: %+v", key, metrics[key])
+			}
+			if !metrics[key].ObservedAt.Equal(at) {
+				t.Fatalf("%s lost producer timestamp", key)
+			}
+		}
+	}
+	metrics := emptyMetrics()
+	applyTicks(metrics, capture.Observations[12].Payload, time.UnixMilli(1789586295722), 50*time.Millisecond)
+	rate, p95 := 29.8939524714, 0.729415
+	expectMetric(t, metrics, "tickRate", "available", &rate)
+	expectMetric(t, metrics, "tickP95Ms", "available", &p95)
+}
+
 func TestServerJSONOmitsLegacyMetricsOnlyWhenMetricsPresent(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		server := Server{ID: "world", Players: 9, ServerPassword: "private-password", AdminPassword: "private-admin"}
@@ -59,7 +105,7 @@ func TestServerJSONOmitsLegacyMetricsOnlyWhenMetricsPresent(t *testing.T) {
 			}
 			expectMetric(t, decoded.Metrics, "cpuCores", "available", number(0))
 			expectMetric(t, decoded.Metrics, "players", "unavailable", nil)
-			expectMetric(t, decoded.Metrics, "tickRate", "unsupported", nil)
+			expectMetric(t, decoded.Metrics, "tickRate", "unavailable", nil)
 		}
 	}
 }
@@ -119,8 +165,8 @@ func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			expectMetric(t, telemetry.Metrics, "players", "available", number(2))
-			expectMetric(t, telemetry.Metrics, "tickRate", "unsupported", nil)
-			if len(telemetry.Metrics) != 15 || len(telemetry.Samples) != 2 || !reflect.DeepEqual(telemetry.Metrics, telemetry.Server.Metrics) {
+			expectMetric(t, telemetry.Metrics, "tickRate", "available", number(30))
+			if len(telemetry.Metrics) != 20 || len(telemetry.Samples) != 2 || !reflect.DeepEqual(telemetry.Metrics, telemetry.Server.Metrics) {
 				t.Fatalf("wire contract %s", body)
 			}
 			for _, sample := range telemetry.Samples {
@@ -129,7 +175,7 @@ func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
 						t.Fatalf("missing nullable key %s", item.key)
 					}
 				}
-				if string(sample["tickRate"]) != "null" || sample["observedAt"] == nil || sample["status"] == nil {
+				if string(sample["tickRate"]) != "30" || sample["observedAt"] == nil || sample["status"] == nil {
 					t.Fatalf("sample contract %+v", sample)
 				}
 			}
@@ -144,7 +190,7 @@ func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
 			if err := json.Unmarshal(payload["servers"], &servers); err != nil {
 				t.Fatal(err)
 			}
-			if len(servers) != 1 || len(servers[0].Metrics) != 15 {
+			if len(servers) != 1 || len(servers[0].Metrics) != 20 {
 				t.Fatalf("bootstrap contract %s", body)
 			}
 		}
@@ -322,5 +368,69 @@ func TestCollectorBoundsWorkersAndStops(t *testing.T) {
 	}
 	if runner.max.Load() > 4 || runner.active.Load() != 0 {
 		t.Fatalf("workers max=%d active=%d", runner.max.Load(), runner.active.Load())
+	}
+}
+
+func TestTickHistoryPreservesProducerTimestampAndGaps(t *testing.T) {
+	app, runner, server := fixtureApp(t)
+	producerNow := time.Now().UTC().Truncate(time.Millisecond)
+	data := tickFixture(producerNow)
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "/api/metrics") {
+			return []byte(data), nil, true
+		}
+		return nil, nil, false
+	}
+	app.collectTelemetry(context.Background())
+	first := app.telemetryFor(server, "1h")
+	wants := map[string]float64{"tickRate": 30, "tickP50Ms": 1, "tickP95Ms": 4, "tickP99Ms": 8, "tickWindowSeconds": 10, "tickSampleCount": 300}
+	observed := producerNow.Add(-250 * time.Millisecond)
+	for key, want := range wants {
+		expectMetric(t, first.Metrics, key, "available", number(want))
+		if !first.Metrics[key].ObservedAt.Equal(observed) {
+			t.Fatal("receipt time replaced producer time")
+		}
+	}
+	data = strings.Replace(data, `"status":"ready"`, `"status":"unsupported"`, 1)
+	app.collectTelemetry(context.Background())
+	got := app.telemetryFor(server, "1h")
+	if len(got.Samples) != 2 {
+		t.Fatalf("history length=%d", len(got.Samples))
+	}
+	for key, want := range wants {
+		expectMetric(t, got.Metrics, key, "unsupported", nil)
+		old := got.Samples[0][key].(*float64)
+		gap := got.Samples[1][key].(*float64)
+		if old == nil || *old != want || gap != nil {
+			t.Fatalf("%s lost history or fabricated gap", key)
+		}
+		if !got.Samples[0]["observedAt"].(map[string]*time.Time)[key].Equal(observed) {
+			t.Fatal("history retimestamped producer observation")
+		}
+	}
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTickCacheUsesExistingFreshnessWithoutRenewingSource(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	collected := now.Add(-15 * time.Second)
+	metrics := emptyMetrics()
+	applyTicks(metrics, []byte(tickFixture(collected)), collected, 0)
+	app, _, server := fixtureApp(t)
+	app.observations().history[server.ID] = []observation{{at: collected, metrics: metrics}}
+	got := app.telemetryFor(server, "1h")
+	for _, key := range tickKeys {
+		if got.Metrics[key].Status != "available" || got.Metrics[key].Value == nil {
+			t.Fatalf("15-second cache expired: %+v", got.Metrics[key])
+		}
+		if !got.Metrics[key].ObservedAt.Equal(collected.Add(-250 * time.Millisecond)) {
+			t.Fatal("cached source observation renewed")
+		}
+		expectMetric(t, freshMetrics(metrics, collected.Add(time.Minute)), key, "stale", nil)
+		if got.Samples[0][key].(*float64) == nil {
+			t.Fatal("valid historic tick sample erased")
+		}
 	}
 }

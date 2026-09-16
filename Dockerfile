@@ -4,6 +4,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 COPY *.go ./
 COPY web ./web
+COPY verification/tick-live-observations.json ./verification/tick-live-observations.json
 RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/rsdw-c2 .
 
 FROM alpine:3.22

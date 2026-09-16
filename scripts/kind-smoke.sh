@@ -72,7 +72,7 @@ kill "$forward_pid"
 forward_pid=
 "${kube[@]}" -n rsdw-system set env deployment/rsdw-c2-rsdw-c2 RSDW_CHART=/tmp/fixture-chart RSDW_IMAGE_REPOSITORY=rsdw-c2-fixture
 "${kube[@]}" -n rsdw-system rollout status deployment/rsdw-c2-rsdw-c2 --timeout=120s
-pod=$("${kube[@]}" -n rsdw-system get pod -l app.kubernetes.io/name=rsdw-c2 -o jsonpath='{.items[0].metadata.name}')
+pod=$("${kube[@]}" -n rsdw-system get pod -l app.kubernetes.io/name=rsdw-c2 -o json | jq -er '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | select(any(.status.conditions[]; .type == "Ready" and .status == "True"))] | if length == 1 then .[0].metadata.name else error("Expected one ready C2 pod") end')
 timeout 30s "${kube[@]}" -n rsdw-system cp verification/fixture-chart "$pod:/tmp/fixture-chart"
 timeout 30s "${kube[@]}" -n rsdw-system exec "$pod" -- env KUBECONFIG=/tmp/rsdw-c2-kubeconfig kubectl --request-timeout=10s auth can-i create pods/exec | grep -q yes
 sa=system:serviceaccount:rsdw-system:rsdw-c2-rsdw-c2
