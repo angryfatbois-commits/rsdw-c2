@@ -49,16 +49,16 @@ Names are trimmed and must be a single line of 1 to 48 bytes. Invalid input retu
 
 ## Deploy the console
 
-Build and publish the image, then create the required admin token Secret.
+Choose a published version from [GitHub Releases](https://github.com/petzkod5/rsdw-c2/releases), then create the required admin token Secret.
 
 ```sh
-docker build -t ghcr.io/petzkod5/rsdw-c2:0.1.0 .
+VERSION=1.0.0 # Replace with the published version, without the v prefix.
 kubectl create namespace rsdw-system
 kubectl -n rsdw-system create secret generic rsdw-c2-admin \
   --from-literal=token="$(openssl rand -hex 32)"
-helm upgrade --install rsdw-c2 charts/rsdw-c2 \
+helm upgrade --install rsdw-c2 oci://ghcr.io/petzkod5/charts/rsdw-c2 \
+  --version "$VERSION" \
   --namespace rsdw-system \
-  --set image.tag=0.1.0 \
   --set auth.adminTokenSecret.name=rsdw-c2-admin
 ```
 
@@ -94,6 +94,50 @@ If an authentication proxy sits in front of the Ingress in token mode, configure
 
 For identity-provider sign in with admin and viewer roles, follow [Configure OIDC sign in](docs/oidc.md). OIDC mode requires HTTPS, an existing client Secret, and explicit role assignments. Its callback is `/api/auth/callback`. Viewers can read dashboard and telemetry data; admins can also read operational data and manage servers. OIDC mode does not accept the shared admin token or forwarded identity headers.
 
+To upgrade, set `VERSION` to the next published version and rerun `helm upgrade --install` with the same Secret name. The packaged chart defaults to its matching image version. Do not override `image.tag` unless you intend to run a different image.
+
+To inspect a release before installation, pull and render its package.
+
+```sh
+helm pull oci://ghcr.io/petzkod5/charts/rsdw-c2 --version "$VERSION"
+helm template rsdw-c2 "rsdw-c2-$VERSION.tgz" \
+  --namespace rsdw-system \
+  --set auth.adminTokenSecret.name=rsdw-c2-admin
+```
+
+If the GHCR packages are private, authenticate with `helm registry login ghcr.io` and configure image pull credentials in the cluster. Repository maintainers can make both packages public in their GitHub package settings.
+
+## Release versions and publication
+
+The [CI workflow](.github/workflows/ci.yml) runs on pull requests and every push to `main`. Configure branch protection to require its `Verify` check. That job runs `bash scripts/verify.sh`, then offline tests of the workflow and publication guards. The image build runs after `Verify` for `linux/amd64`, including on pull requests, with publishing disabled.
+
+CI uses Go `1.26.0` from `go.mod`, Node.js `24.10.0`, Python `3.13.7`, and Helm `4.2.2` on Ubuntu `24.04`. The image includes Helm `4.2.2` and kubectl `1.36.2`. The release dependencies are pinned in `package-lock.json`, and Actions are pinned to commit SHAs.
+
+After both checks pass for the same commit on `main`, semantic-release reads the full Git history and tags. It owns all release versions and creates exact `vX.Y.Z` tags. Do not create release tags manually. Supported Conventional Commit effects are:
+
+| Commit | Release |
+| --- | --- |
+| `feat: ...` or `feat(chart): ...` | Minor |
+| `fix: ...` or `perf: ...`, with any scope | Patch |
+| A conventional revert with its original commit hash in the body | Patch |
+| Any type with `!` or a `BREAKING CHANGE:` footer | Major |
+| `docs`, `test`, `ci`, `build`, `chore`, `refactor`, or `style` without a breaking-change footer | None |
+
+Use `!` or a `BREAKING CHANGE:` footer for breaking changes. With squash merges, put the intended Conventional Commit in the squash commit title and preserve the footer in its body. Without prior release tags, semantic-release starts at `1.0.0` when it finds release-worthy commits. A run with no release-worthy commits creates no tag or release and changes no tracked files. There are no version-bump commits or separate chart versions.
+
+Publication runs in this order within the same gated workflow:
+
+1. semantic-release creates `vX.Y.Z` and the GitHub release. Generated GitHub release notes are the project's changelog.
+2. The publisher packages and checks the chart locally, then publishes `ghcr.io/petzkod5/rsdw-c2:X.Y.Z` only if that image does not already exist. It pulls the image, checks its source revision and architecture, runs the bundled Helm and kubectl, and starts the console with `RSDW_ADMIN_TOKEN` to check `/api/auth`. The run logs the immutable `ghcr.io/petzkod5/rsdw-c2@sha256:...` reference. There is no mutable `latest` tag.
+3. After that exact image passes, the publisher pushes `oci://ghcr.io/petzkod5/charts/rsdw-c2` at version `X.Y.Z`. Packaging sets `version` and `appVersion` to `X.Y.Z`; the chart's existing default selects the same image tag. Source chart files stay unchanged.
+4. The publisher pulls the OCI chart into a fresh directory and compares its contents with the locally packaged chart. It checks metadata, the default image, readiness, the required admin Secret reference, rejection without that reference, and a client-only Helm install dry run. This checks installation rendering without deploying to a cluster.
+
+Only the release job has `contents: write` and `packages: write`. It uses `GITHUB_TOKEN`; issue and pull-request writes are disabled. The workflow does not rely on a tag-triggered workflow, since tags created with `GITHUB_TOKEN` do not trigger another Actions run. See [GitHub's workflow trigger rules](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow).
+
+If publication fails, rerun the failed Actions run for the same commit. A tag already at that commit supplies the original version. A missing GitHub release is recovered from that existing tag with GitHub-generated notes. An existing image must match the commit revision, and an existing chart must have identical extracted contents. Retries never repush existing versions; authentication, network, and content conflicts stop the run. The workflow serializes runs on `main` and does not cancel an active publisher. A newer push does not repair an older incomplete release; rerun the older failed run explicitly.
+
+Before the first release, ensure Actions can write repository contents and both GHCR packages, including access to any packages that already exist. A collision with a pre-existing version fails without replacing it. A GitHub release can appear before its artifacts finish publishing, so wait for its Actions run to succeed before installing it.
+
 ## Configure the server chart
 
 The console uses these defaults.
@@ -118,6 +162,20 @@ bash scripts/verify.sh
 The checks cover Go tests, signed-token OIDC flows and rejection cases, the built service, the demo API, UI capability and stale-response tests, CSV tests, and positive and negative chart renders. Each run uses fresh state and automatically assigned ports. Run `go test -race ./...` for race checks. The [local OIDC browser fixture](docs/oidc.md#run-the-local-browser-fixture) supports independent browser testing without a cluster.
 
 With Playwright and Chromium available, run `node tests/users-browser.cjs` after `bash scripts/verify.sh` for the authenticated Saved IDs browser flow. Set `NODE_PATH` if Playwright is installed outside the project, and `RSDW_TEST_CHROMIUM` to use a specific Chromium executable. The test uses temporary state and demo mode without a Kubernetes cluster.
+
+The workflow has additional offline regression tests for its own publication logic. These use fake registry commands and real local Helm packaging. They do not create Git tags, contact GHCR, or publish anything.
+
+```sh
+npm ci --ignore-scripts
+node --test .github/release.test.mjs
+actionlint .github/workflows/ci.yml
+```
+
+`scripts/verify.sh` remains the application verification contract. The workflow tests supplement it; they do not replace or duplicate the application checks. A Docker build is an optional local check and also runs as a separate CI job.
+
+```sh
+docker build --platform linux/amd64 -t rsdw-c2:local .
+```
 
 Run the disposable low-memory cluster check when Docker access is available.
 
