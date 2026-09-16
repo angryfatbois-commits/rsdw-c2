@@ -11,13 +11,29 @@ spec:
     metadata:
       labels:
         fixture: {{ .Release.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/name: rsdragonwilds
     spec:
       automountServiceAccountToken: false
       containers:
         - name: server
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: Never
-          command: [/bin/sh, -c, "echo lifecycle-fixture-ready; exec sleep 86400"]
+          command: [/bin/sh, -c, "echo lifecycle-fixture-ready; exec httpd -f -p 8080 -h /fixture"]
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+          volumeMounts:
+            - name: fixture
+              mountPath: /fixture/api
+            - name: token
+              mountPath: /run/rsdwapi
+              readOnly: true
+            - name: data
+              mountPath: /home/steam/rsdw-dedicated
           env:
             - name: RSDW_ADDITIONAL_ARGS
               value: {{ .Values.server.env.RSDW_ADDITIONAL_ARGS | quote }}
@@ -28,3 +44,20 @@ spec:
             limits:
               memory: 32Mi
               cpu: 50m
+      volumes:
+        - name: fixture
+          configMap:
+            name: {{ .Release.Name }}-fixture
+        - name: token
+          secret:
+            secretName: {{ .Values.api.bearerTokenSecret.name }}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-fixture
+data:
+  health: '{"engineReady":true,"uptimeSeconds":120}'
+  players: '{"count":2,"players":[]}'

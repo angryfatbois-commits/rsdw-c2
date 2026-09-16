@@ -1,0 +1,764 @@
+{
+  "before": {
+    "status": "healthy",
+    "version": "0.1.1",
+    "uptimeSeconds": 233.0,
+    "engineReady": true
+  },
+  "after": {
+    "status": "healthy",
+    "version": "0.1.1",
+    "uptimeSeconds": 6.5,
+    "engineReady": true
+  },
+  "observations": [
+    {
+      "elapsedSeconds": 0.06992276100208983,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 0.2420567039953312,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 0.42754394900111947,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 0.7191295779921347,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 0.885927758004982,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 1.1194719049963169,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 1.316328101005638,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 1.4746988130063983,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 1.6550601979979547,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 1.8478322430019034,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 2.035197061006329,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 2.229699995004921,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 2.452324461992248,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 2.6429968680022284,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 2.8422278979996918,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 3.0382476689992473,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 3.323277773000882,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 3.4804127929965034,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 3.638031708993367,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 3.8328852179984096,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 4.023437879994162,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 4.222170977998758,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 4.426192881001043,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 4.646675830997992,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 4.8496045079955366,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 5.044362608998199,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 5.234726798997144,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "no-completed-ticks",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 5.407412443993962,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "need-one-second-and-anchor",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 5.57312945999729,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "need-one-second-and-anchor",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 5.752872248005588,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "need-one-second-and-anchor",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 5.922788430994842,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "need-one-second-and-anchor",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 6.108443410004838,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "need-one-second-and-anchor",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 6.284351484006038,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "warming",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "need-one-second-and-anchor",
+          "windowSeconds": null,
+          "sampleCount": null,
+          "lastSampleAgeSeconds": null,
+          "observedAtUnixMs": null,
+          "rateHz": null,
+          "executionMs": {
+            "p50": null,
+            "p95": null,
+            "p99": null
+          }
+        }
+      }
+    },
+    {
+      "elapsedSeconds": 6.454418859997531,
+      "payload": {
+        "schemaVersion": 1,
+        "tick": {
+          "status": "ready",
+          "source": "engine_tick_hook",
+          "scope": "UDomGameEngine::Tick",
+          "reason": "",
+          "windowSeconds": 1.162176813,
+          "sampleCount": 35,
+          "lastSampleAgeSeconds": 0.012378539,
+          "observedAtUnixMs": 1789586396304,
+          "rateHz": 30.1158994126,
+          "executionMs": {
+            "p50": 0.356046,
+            "p95": 5.477779,
+            "p99": 5.758634
+          }
+        }
+      }
+    }
+  ]
+}
