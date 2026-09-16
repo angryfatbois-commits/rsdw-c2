@@ -7,6 +7,7 @@ This matrix records the browser pass against the local demo server. Each listed 
 | Global | Dashboard, Telemetry, Events, Maintenance navigation | Each route rendered the selected page and preserved the server context. |
 | Global | Refresh data | Re-fetched the demo state and updated the visible timestamp. |
 | Global | Connection-loss refresh | After stopping the local server, refresh showed `Connection issue · data may be stale` and preserved the last known data. |
+| Global | Initial outage retry | A simulated bootstrap outage rendered `Unable to connect`; Try again re-issued the request and kept the failure state visible. |
 | Dashboard | Pause/resume live updates | Status changed between paused and connected states. |
 | Dashboard | All, Online, Needs attention filters | Selected chip changed and the server table filtered accordingly. |
 | Dashboard | Add server, cancel, confirm | Modal opened, cancel closed it, and demo confirmation created a second server and event. |
