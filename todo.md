@@ -23,7 +23,7 @@
 - [x] Implement the dashboard, telemetry, events, and maintenance flows.
 - [x] Add the control-plane Helm chart and RBAC.
 - [x] Verify in small units, then run browser and kind checks.
-- [ ] Review the diff, commit the audit trail, and push the repository.
+- [x] Review the diff, commit the audit trail, and push the repository.
 
 ## Feature throughput checkpoint
 
