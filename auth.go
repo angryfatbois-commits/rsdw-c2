@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -87,12 +88,14 @@ type oidcSettings struct {
 type loginTransaction struct {
 	Browser, Nonce, Verifier string
 	Expires                  time.Time
+	Consumed                 bool
 }
 
 type authSession struct {
 	Principal Principal
 	CSRF      string
 	Expires   time.Time
+	Browser   string
 }
 
 const (
@@ -346,11 +349,10 @@ func (a *Auth) routes(w http.ResponseWriter, r *http.Request) bool {
 				cookie, _ := r.Cookie(sessionCookie)
 				a.mu.Lock()
 				delete(a.sessions, cookie.Value)
-				if browser, err := r.Cookie(loginCookie); err == nil {
-					for key, tx := range a.pending {
-						if tx.Browser == browser.Value {
-							delete(a.pending, key)
-						}
+				browser, _ := r.Cookie(loginCookie)
+				for key, tx := range a.pending {
+					if tx.Browser == session.Browser || (browser != nil && tx.Browser == browser.Value) {
+						delete(a.pending, key)
 					}
 				}
 				a.mu.Unlock()
@@ -392,16 +394,19 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 		values[i] = value
 	}
 	state, browser, nonce := values[0], values[1], values[2]
-	transaction := loginTransaction{Browser: browser, Nonce: nonce, Verifier: oauth2.GenerateVerifier(), Expires: time.Now().Add(5 * time.Minute)}
 	a.mu.Lock()
 	a.prune(time.Now())
 	if previous, err := r.Cookie(loginCookie); err == nil {
+		if decoded, err := hex.DecodeString(previous.Value); err == nil && len(decoded) == 24 {
+			browser = previous.Value
+		}
 		for key, tx := range a.pending {
 			if tx.Browser == previous.Value {
 				delete(a.pending, key)
 			}
 		}
 	}
+	transaction := loginTransaction{Browser: browser, Nonce: nonce, Verifier: oauth2.GenerateVerifier(), Expires: time.Now().Add(5 * time.Minute)}
 	if len(a.pending) >= maxLogins {
 		a.mu.Unlock()
 		writeError(w, http.StatusServiceUnavailable, "sign in busy")
@@ -432,8 +437,9 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.prune(time.Now())
 	transaction, ok := a.pending[query.Get("state")]
-	if ok && subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(transaction.Browser)) == 1 {
-		delete(a.pending, query.Get("state"))
+	if ok && !transaction.Consumed && subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(transaction.Browser)) == 1 {
+		transaction.Consumed = true
+		a.pending[query.Get("state")] = transaction
 	} else {
 		ok = false
 	}
@@ -442,7 +448,11 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		fail()
 		return
 	}
-	authCookie(w, loginCookie, "", time.Unix(1, 0))
+	defer func() {
+		a.mu.Lock()
+		delete(a.pending, query.Get("state"))
+		a.mu.Unlock()
+	}()
 	if len(query["error"]) != 0 || query.Get("code") == "" {
 		fail()
 		return
@@ -516,7 +526,8 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	a.prune(time.Now())
-	if len(a.sessions) >= maxSessions {
+	current, active := a.pending[query.Get("state")]
+	if !active || !current.Consumed || current.Browser != transaction.Browser || len(a.sessions) >= maxSessions {
 		a.mu.Unlock()
 		fail()
 		return
@@ -524,8 +535,14 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	if old, err := r.Cookie(sessionCookie); err == nil {
 		delete(a.sessions, old.Value)
 	}
-	a.sessions[sessionID] = authSession{Principal: Principal{Subject: id.Subject, Role: role}, CSRF: csrf, Expires: expires}
+	for id, session := range a.sessions {
+		if session.Browser == transaction.Browser {
+			delete(a.sessions, id)
+		}
+	}
+	a.sessions[sessionID] = authSession{Principal: Principal{Subject: id.Subject, Role: role}, CSRF: csrf, Expires: expires, Browser: transaction.Browser}
 	a.mu.Unlock()
+	authCookie(w, loginCookie, "", time.Unix(1, 0))
 	authCookie(w, sessionCookie, sessionID, expires)
 	http.Redirect(w, r, a.settings.Origin+"/", http.StatusSeeOther)
 }

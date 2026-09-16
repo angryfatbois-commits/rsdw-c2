@@ -166,9 +166,13 @@ func authRequest(app *App, method, path string, cookie *http.Cookie, origin, csr
 	return w
 }
 
-func beginLogin(t *testing.T, app *App, issuer *testIssuer, role string) (string, *http.Cookie) {
+func beginLogin(t *testing.T, app *App, issuer *testIssuer, role string, cookies ...*http.Cookie) (string, *http.Cookie) {
 	t.Helper()
-	start := authRequest(app, "GET", "/api/auth/login", nil, "", "", "")
+	var browser *http.Cookie
+	if len(cookies) > 0 {
+		browser = cookies[0]
+	}
+	start := authRequest(app, "GET", "/api/auth/login", browser, "", "", "")
 	if start.Code != 302 {
 		t.Fatalf("login = %d %s", start.Code, start.Body.String())
 	}
@@ -189,9 +193,9 @@ func beginLogin(t *testing.T, app *App, issuer *testIssuer, role string) (string
 	return response.Header.Get("Location"), start.Result().Cookies()[0]
 }
 
-func loginAs(t *testing.T, app *App, issuer *testIssuer, role string) (*http.Cookie, string) {
+func loginAs(t *testing.T, app *App, issuer *testIssuer, role string, cookies ...*http.Cookie) (*http.Cookie, string) {
 	t.Helper()
-	callback, browser := beginLogin(t, app, issuer, role)
+	callback, browser := beginLogin(t, app, issuer, role, cookies...)
 	response := authRequest(app, "GET", callback, browser, "", "", "")
 	if response.Code != 303 || strings.Contains(response.Header().Get("Location"), "failed") {
 		t.Fatalf("callback = %d %s", response.Code, response.Header().Get("Location"))
@@ -601,6 +605,118 @@ func TestViewerFiniteMetrics(t *testing.T) {
 		if _, err := json.Marshal(view); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestReviewLogoutDuringCallback(t *testing.T) {
+	app, issuer := oidcTestApp(t)
+	callback, browser := beginLogin(t, app, issuer, "admin")
+	entered, release := make(chan struct{}), make(chan struct{})
+	issuer.mu.Lock()
+	issuer.claims = func(c map[string]any) {
+		if c["sub"] == "admin-subject" {
+			close(entered)
+			<-release
+		}
+	}
+	issuer.mu.Unlock()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		r := httptest.NewRequest("GET", callback, nil)
+		r.AddCookie(browser)
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		done <- w
+	}()
+	<-entered
+	admin, csrf := loginAs(t, app, issuer, "viewer")
+	r := httptest.NewRequest("POST", "/api/auth/logout", nil)
+	r.AddCookie(admin)
+	r.AddCookie(browser)
+	r.Header.Set("Origin", app.auth.settings.Origin)
+	r.Header.Set("X-CSRF-Token", csrf)
+	w := httptest.NewRecorder()
+	app.ServeHTTP(w, r)
+	close(release)
+	res := <-done
+	if w.Code != 204 {
+		t.Fatalf("logout = %d", w.Code)
+	}
+	if authRequest(app, "GET", "/api/bootstrap", admin, "", "", "").Code != 401 {
+		t.Fatal("old session was not revoked")
+	}
+	if strings.Contains(res.Header().Get("Location"), "failed") {
+		return
+	}
+	for _, cookie := range res.Result().Cookies() {
+		if cookie.Name == sessionCookie && cookie.Value != "" {
+			if got := authRequest(app, "GET", "/api/bootstrap", cookie, "", "", "").Code; got == http.StatusOK {
+				t.Fatal("callback minted a working admin session after successful logout")
+			}
+		}
+	}
+}
+
+func TestOIDCNewLoginSupersedesInFlightCallback(t *testing.T) {
+	for _, logout := range []bool{false, true} {
+		t.Run(fmt.Sprint("logout=", logout), func(t *testing.T) {
+			app, issuer := oidcTestApp(t)
+			other, _ := loginAs(t, app, issuer, "viewer")
+			callback, browser := beginLogin(t, app, issuer, "admin")
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			t.Cleanup(func() { once.Do(func() { close(release) }) })
+			issuer.mu.Lock()
+			issuer.claims = func(c map[string]any) {
+				if c["sub"] == "admin-subject" {
+					close(entered)
+					<-release
+				}
+			}
+			issuer.mu.Unlock()
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() { done <- authRequest(app, "GET", callback, browser, "", "", "") }()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("token exchange did not start")
+			}
+			if res := authRequest(app, "GET", callback, browser, "", "", ""); !strings.Contains(res.Header().Get("Location"), "failed") {
+				t.Fatal("in-flight callback replay accepted")
+			}
+			viewer, csrf := loginAs(t, app, issuer, "viewer", browser)
+			app.auth.mu.Lock()
+			lineage := app.auth.sessions[viewer.Value].Browser
+			app.auth.mu.Unlock()
+			if lineage != browser.Value {
+				t.Fatal("new login lost browser lineage")
+			}
+			if logout {
+				if res := authRequest(app, "POST", "/api/auth/logout", viewer, app.auth.settings.Origin, csrf, ""); res.Code != 204 {
+					t.Fatalf("logout = %d", res.Code)
+				}
+			}
+			once.Do(func() { close(release) })
+			res := <-done
+			if !strings.Contains(res.Header().Get("Location"), "failed") {
+				t.Fatal("superseded callback admitted a session")
+			}
+			for _, cookie := range res.Result().Cookies() {
+				if cookie.Name == sessionCookie && cookie.Value != "" {
+					t.Fatal("superseded callback wrote session cookie")
+				}
+			}
+			want := 200
+			if logout {
+				want = 401
+			}
+			if res := authRequest(app, "GET", "/api/bootstrap", viewer, "", "", ""); res.Code != want {
+				t.Fatalf("viewer status = %d", res.Code)
+			}
+			if res := authRequest(app, "GET", "/api/bootstrap", other, "", "", ""); res.Code != 200 {
+				t.Fatal("other browser was revoked")
+			}
+		})
 	}
 }
 
