@@ -59,6 +59,8 @@ button svg { pointer-events: none; }
 .brand-light { font-weight: 400; color: var(--color-muted-foreground); }
 .cluster-meta { margin-left: auto; border-left: 1px solid var(--color-border); padding-left: 32px; font-size: 14px; overflow-wrap: anywhere; }
 .environment { border-left: 1px solid var(--color-border); padding-left: 32px; font-size: 14px; color: var(--color-muted-foreground); white-space: nowrap; }
+.session-controls { display: flex; align-items: center; gap: 12px; font-size: 14px; white-space: nowrap; }
+.session-controls[hidden] { display: none; }
 .eyebrow { font-size: 12px; letter-spacing: 1px; color: var(--color-muted-foreground); }
 .shell { display: grid; grid-template-columns: 233px minmax(0,1fr); min-height: calc(100vh - 66px); }
 .sidebar { border-right: 1px solid var(--color-divider); padding-top: 27px; }
@@ -201,7 +203,8 @@ dialog.create-server-dialog { width: min(800px,calc(100% - 32px)); }
   .stats { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
 @media (max-width: 760px) {
-  .topbar { padding: 0 16px; gap: 12px; }
+  .topbar { padding: 8px 16px; gap: 12px; height: auto; min-height: 66px; flex-wrap: wrap; }
+  .session-controls { margin-left: auto; }
   .brand { font-size: 17px; gap: 8px; }
   .brand-mark { width: 30px; }
   .cluster-meta { display: none; }

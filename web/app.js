@@ -31,12 +31,15 @@ const state = {
   query: '', category: '', range: '60s', telemetry: null, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
   modalAction: '', modalServerId: '', modalBusy: false, request: null,
-  authRequired: false, loginBusy: false,
+  authRequired: false, loginBusy: false, authMode: '', identity: '', csrfToken: '', role: 'denied', capabilities: {}, epoch: 0, logoutCSRF: '', signInFailed: false,
 };
 const tokenKey = 'rsdw-admin-token';
 let searchTimer;
 let toastTimer;
 let modalOpener;
+let refreshSequence = 0;
+const can = (capability) => state.capabilities[capability] === true;
+const staleRequest = () => new DOMException('Session changed', 'AbortError');
 
 function number(value, suffix = '') {
   return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toLocaleString(undefined, Math.abs(Number(value)) < 1 ? {maximumSignificantDigits:3} : {maximumFractionDigits:1})}${suffix}`;
@@ -76,39 +79,113 @@ function notice(message) {
   toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6000);
 }
 async function api(path, options = {}) {
+  const epoch = state.epoch;
+  const identity = state.csrfToken;
   let token = '';
-  try { token = sessionStorage.getItem(tokenKey) || ''; } catch { /* Storage may be blocked by browser privacy settings. */ }
-  const response = await fetch(path, {credentials:'same-origin', ...options, headers:{'Accept':'application/json', ...(token ? {'Authorization':`Bearer ${token}`} : {}), ...(options.body ? {'Content-Type':'application/json'} : {}), ...options.headers}});
+  if (state.authMode !== 'oidc') {
+    try { token = sessionStorage.getItem(tokenKey) || ''; } catch {}
+  }
+  const response = await fetch(path, {credentials:'same-origin', ...options, headers:{'Accept':'application/json', ...(token ? {'Authorization':`Bearer ${token}`} : {}), ...(state.csrfToken ? {'X-CSRF-Token':state.csrfToken} : {}), ...(options.body ? {'Content-Type':'application/json'} : {}), ...options.headers}});
   const text = await response.text();
-  let data;
+  if (epoch !== state.epoch || options.signal?.aborted) throw staleRequest();
+  if (state.authMode === 'oidc' && path !== '/api/auth' && response.ok && identity && response.headers.get('X-RSDW-Session') && response.headers.get('X-RSDW-Session') !== identity) {
+    requireLogin();
+    throw staleRequest();
+  }
   if (response.status === 401 && path !== '/api/session') {
+    if (path === '/api/auth/logout') return {};
     requireLogin();
-    throw new Error('Admin sign in is required.');
+    throw new Error('Sign in is required.');
   }
+  let data;
   try { data = text ? JSON.parse(text) : {}; } catch { throw new Error('The server returned an unreadable response. Please try again.'); }
-  if (path !== '/api/session' && (data.auth?.required || (path === '/api/auth' && data.required)) && !token) {
-    requireLogin();
-    throw new Error('Admin sign in is required.');
-  }
-  if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : data.message || `Request failed (${response.status}). Please try again.`);
+  if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : `Request failed (${response.status}). Please try again.`);
   return data;
+}
+function clearProtectedState() {
+  state.epoch++;
+  state.request?.abort();
+  clearTimeout(searchTimer);
+  clearTimeout(toastTimer);
+  Object.assign(state, {servers:[], events:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalBusy:false, identity:'', csrfToken:'', capabilities:{}, role:'denied'});
+  $('#modal').close();
+  $('#modal-body').innerHTML = '';
+  $('#modal-error').textContent = '';
+  $('#error-banner').textContent = '';
+  $('#error-banner').hidden = true;
+  $('#toast').textContent = '';
+  $('#toast').hidden = true;
+  $('#server-filter').innerHTML = '<option value="">All servers</option>';
+  $('#navigation').innerHTML = '';
+  $('#cluster-name').textContent = 'Not signed in';
+  $('#updated-at').textContent = 'Waiting for sign in';
+  $('#session-controls').hidden = true;
+  $('#session-role').textContent = '';
+  $('#admin-token').value = '';
+  $('#environment').textContent = '';
+  $('#content').innerHTML = '';
 }
 function lockedState() {
   $('.page-controls').hidden = true;
   $('#content').setAttribute('aria-busy','false');
-  $('#content').innerHTML = `<section class="panel empty"><div class="empty-icon">${icon('server')}</div><h2>Admin access required</h2><p>Sign in with your admin token to view and manage this cluster.</p><button class="primary" data-action="login" data-testid="open-login">Sign in</button></section>`;
-  $('#connection-status').textContent = 'Waiting for admin sign in';
+  const message = state.authMode === 'oidc' ? 'Sign in with your identity provider to access this cluster.' : 'Sign in with your admin token to access this cluster.';
+  $('#content').innerHTML = `<section class="panel empty"><div class="empty-icon">${icon('server')}</div><h2>Sign in required</h2><p>${message}</p>${state.signInFailed ? '<p class="notice error" role="alert">Sign in failed or this identity has no assigned role. Contact your administrator or try another identity.</p>' : ''}<button class="primary" data-action="login" data-testid="open-login">Sign in</button></section>`;
+  $('#connection-status').textContent = 'Waiting for sign in';
   $('#connection-status').classList.remove('connected');
 }
-function requireLogin() {
+function requireLogin(openDialog = true) {
+  clearProtectedState();
   state.authRequired = true;
   try { sessionStorage.removeItem(tokenKey); } catch {}
   lockedState();
-  if (!$('#login-dialog').open) {
+  if (state.authMode === 'oidc') { $('#login-dialog').close(); return; }
+  if (openDialog && !$('#login-dialog').open) {
     $('#login-error').hidden = true;
     $('#admin-token').value = '';
     $('#login-dialog').showModal();
     $('#admin-token').focus();
+  }
+}
+function applyAuth(auth) {
+  const identity = auth.authenticated ? `${auth.mode}:${auth.subject}:${auth.role}:${auth.csrfToken}` : '';
+  if (state.identity !== identity) clearProtectedState();
+  state.authMode = auth.mode;
+  if (auth.mode === 'oidc') {
+    try { sessionStorage.removeItem(tokenKey); } catch {}
+    $('#login-dialog').close();
+  }
+  if (!auth.authenticated) { requireLogin(false); return false; }
+  Object.assign(state, {identity, csrfToken:auth.csrfToken || '', role:auth.role, capabilities:auth.capabilities || {}, authRequired:false});
+  $('.page-controls').hidden = false;
+  $('#session-controls').hidden = !auth.required;
+  $('#session-role').textContent = auth.role === 'admin' ? 'Admin' : 'Viewer';
+  if (!can(state.page)) state.page = 'dashboard';
+  return true;
+}
+async function discoverAuth() {
+  let auth = await api('/api/auth');
+  if (auth.mode === 'oidc' && state.authMode !== 'oidc') {
+    state.authMode = 'oidc';
+    try { sessionStorage.removeItem(tokenKey); } catch {}
+    auth = await api('/api/auth');
+  }
+  return auth;
+}
+async function logout() {
+  const csrf = state.csrfToken || state.logoutCSRF;
+  const oidc = state.authMode === 'oidc';
+  refreshSequence++;
+  requireLogin(false);
+  if (oidc) {
+    state.logoutCSRF = csrf;
+    try { await api('/api/auth/logout', {method:'POST', headers:{'X-CSRF-Token':csrf}}); state.logoutCSRF = ''; }
+    catch (error) {
+      if (error.name !== 'AbortError') {
+        $('#session-controls').hidden = false;
+        $('#session-role').textContent = 'Sign out not confirmed';
+        notice('Could not confirm server sign out. Retry sign out before leaving this browser.');
+      }
+    }
   }
 }
 function closeLogin() {
@@ -185,6 +262,7 @@ function telemetryRows() {
   })));
 }
 function emptyState() {
+  if (!can('create')) return '<section class="panel empty"><h2>No servers registered</h2><p>Servers will appear here after an administrator adds them.</p></section>';
   return `<section class="panel empty" data-testid="empty-state"><div class="empty-icon">${icon('server')}</div><h2>No servers registered</h2><p>Create a Dragonwilds server to view its health, logs, and activity.</p><button class="primary" data-action="add-server" data-testid="empty-add-server">${icon('plus')}Create your first server</button></section>`;
 }
 function eventTable(events, detailed = false) {
@@ -196,9 +274,9 @@ function dashboard() {
   const online = servers.filter((server) => server.status === 'online').length;
   const attention = servers.filter((server) => server.status === 'attention' || server.updateAvailable).length;
   const filtered = servers.filter((server) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? server.status === 'online' : server.status === 'attention' || server.updateAvailable));
-  const stats = `<div class="stats">${stat('Registered servers', servers.length, 'server')}${stat('Online', online, 'pulse', 'green')}${stat('Needs attention', attention, 'warning', 'amber')}${stat('Updates available', servers.filter((server) => server.updateAvailable).length, 'refresh')}</div>`;
+  const stats = `<div class="stats">${stat('Registered servers', servers.length, 'server')}${stat('Online', online, 'pulse', 'green')}${stat('Needs attention', attention, 'warning', 'amber')}${can('updateCheck') ? stat('Updates available', servers.filter((server) => server.updateAvailable).length, 'refresh') : stat('Reporting metrics', servers.filter((server) => server.metricsAvailable).length, 'pulse')}</div>`;
   if (!state.servers.length) return stats + emptyState();
-  return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div><button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button></div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => `<tr><td><strong>${escapeHTML(server.name)}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${metricText(server, 'players')} / ${number(server.maxPlayers)}</td><td>${metricText(server, 'tickRate', ' TPS')}</td><td>${metricText(server, 'cpuPercent', '%')}</td><td class="mono">${duration(metricValue(server, 'uptimeSeconds'))}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section><section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>`;
+  return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => `<tr><td><strong>${escapeHTML(server.name)}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${metricText(server, 'players')} / ${number(server.maxPlayers)}</td><td>${metricText(server, 'tickRate', ' TPS')}</td><td>${metricText(server, 'cpuPercent', '%')}</td><td class="mono">${duration(metricValue(server, 'uptimeSeconds'))}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section>${can('events') ? `<section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>` : ''}`;
 }
 function chart(key, label, secondaryKey = '', secondaryLabel = '') {
   const points = samples();
@@ -241,7 +319,7 @@ function telemetry() {
   server.metrics = state.telemetry?.metrics || server.metrics;
   const value = (key) => metricValue(server, key);
   const text = (key, suffix = '') => metricText(server, key, suffix);
-  return `<div class="toolbar"><strong>${escapeHTML(server.name)}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', text('tickRate', ' TPS'), 'pulse')}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(server.status)}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div></div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${tickDurations(server)}${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section><section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(server.name)}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>`;
+  return `<div class="toolbar"><strong>${escapeHTML(server.name)}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', text('tickRate', ' TPS'), 'pulse')}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(server.status)}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div></div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${tickDurations(server)}${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section>${can('logs') ? `<section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(server.name)}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>` : ''}`;
 }
 function tickDurations(server) {
   return `<section class="panel section-gap"><div class="panel-heading"><h2>Tick execution duration</h2></div><p class="inline-note">Elapsed time inside UDomGameEngine::Tick, including its world tick. Excludes work outside that call. Each point is a separate measurement window, not a percentile of the selected chart range.</p><div class="stats">${stat('p50 duration', metricText(server, 'tickP50Ms', ' ms'), 'clock')}${stat('p95 duration', metricText(server, 'tickP95Ms', ' ms'), 'clock')}${stat('p99 duration', metricText(server, 'tickP99Ms', ' ms'), 'clock')}${stat('Completed ticks', metricText(server, 'tickSampleCount'), 'pulse')}</div><p class="inline-note">Latest measurement window: ${metricText(server, 'tickWindowSeconds', ' seconds')}.</p>${chart('tickP95Ms', 'p95 tick duration (ms)', 'tickP99Ms', 'p99 tick duration (ms)')}</section>`;
@@ -252,12 +330,14 @@ function telemetryPanels() {
   return `<section class="panel"><div class="panel-heading"><h2>Health checks</h2></div>${checks.length ? `<dl class="detail-list">${checks.map((check) => `<div><dt>${escapeHTML(check.name)}</dt><dd>${status(String(check.status || 'unknown').toLowerCase())}<small class="check-time">${escapeHTML(date(check.at))}</small></dd></div>`).join('')}</dl>` : '<p class="no-results">No health checks reported yet.</p>'}</section>`;
 }
 function eventsPage() {
+  if (!can('events')) return dashboard();
   const selected = state.events.find((event) => event.id === state.selectedEventId);
   const warnings = state.events.filter((event) => event.severity === 'warning').length;
   const critical = state.events.filter((event) => event.severity === 'critical' || event.severity === 'error').length;
   return `<div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search events</span><input type="search" id="event-search" data-testid="event-search" placeholder="Search events…" value="${escapeHTML(state.query)}"></label><button data-action="export-events" data-testid="export-events">${icon('download')}Export CSV</button></div><div class="stats">${stat('Matching events',state.events.length,'events')}${stat('Warnings',warnings,'warning','amber')}${stat('Critical',critical,'pulse',critical?'red':'')}${stat('Last event',state.events[0] ? new Date(state.events[0].timestamp).toLocaleTimeString() : '—','clock')}</div><div class="split"><section class="panel"><div class="panel-heading"><h2>Event stream</h2></div><div class="toolbar chips" aria-label="Event category">${[['','All'],['system','System'],['player','Players'],['health','Health'],['update','Updates']].map(([value,label])=>`<button data-action="event-category" data-value="${value}" data-testid="category-${value || 'all'}" aria-pressed="${state.category===value}">${label}</button>`).join('')}</div>${eventTable(state.events,true)}</section><section class="panel"><div class="panel-heading"><h2>Event details</h2></div>${selected ? `<dl class="detail-list"><div><dt>Event</dt><dd>${escapeHTML(selected.message)}</dd></div><div><dt>Server</dt><dd>${escapeHTML(selected.serverName || selected.serverId || 'Cluster')}</dd></div><div><dt>Severity</dt><dd>${status(selected.severity || 'info')}</dd></div><div><dt>Time</dt><dd>${escapeHTML(date(selected.timestamp))}</dd></div></dl><pre class="event-json" tabindex="0" aria-label="Event details JSON">${escapeHTML(typeof selected.details === 'string' ? selected.details : JSON.stringify(selected.details || {},null,2))}</pre><button data-action="copy-event" data-testid="copy-event">Copy event JSON</button>` : '<p class="no-results">Select an event to inspect its details.</p>'}</section></div>`;
 }
 function maintenance() {
+  if (!can('maintenance')) return dashboard();
   const server = selectedServer();
   if (!server) return emptyState();
   const activity = state.events.filter((event) => event.serverId === server.id);
@@ -266,6 +346,7 @@ function maintenance() {
 }
 function render() {
   if (state.authRequired) { lockedState(); return; }
+  if (!can(state.page)) state.page = 'dashboard';
   const openCharts = Array.from(document.querySelectorAll('details[data-chart][open]'), (element) => element.dataset.chart);
   const focused = document.activeElement;
   const testId = focused?.getAttribute('data-testid');
@@ -274,7 +355,7 @@ function render() {
   document.title = `${title} · RSDW C2`;
   $('#page-title').textContent = title;
   $('#page-description').textContent = description;
-  $('#navigation').innerHTML = Object.entries(pages).map(([page,[label]])=>`<a href="#${page}" data-testid="nav-${page}" ${page===state.page?'aria-current="page"':''}>${icon(page)}${label}</a>`).join('');
+  $('#navigation').innerHTML = Object.entries(pages).filter(([page]) => can(page)).map(([page,[label]])=>`<a href="#${page}" data-testid="nav-${page}" ${page===state.page?'aria-current="page"':''}>${icon(page)}${label}</a>`).join('');
   const individual = state.page === 'telemetry' || state.page === 'maintenance';
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(server.name)}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
@@ -304,20 +385,27 @@ function connection(failed = !$('#error-banner').hidden) {
   $('#pause').setAttribute('aria-pressed',String(state.paused));
 }
 async function loadLogs(signal) {
+  if (!can('logs')) return;
+  const epoch = state.epoch;
   const server = selectedServer();
   if (!server) return;
   const result = await api(`/api/servers/${encodeURIComponent(server.id)}/logs?tail=100`, {signal});
+  if (epoch !== state.epoch || signal?.aborted || !can('logs')) throw staleRequest();
   const lines = typeof result === 'string' ? result : result.lines ?? result.logs ?? '';
   state.logs = Array.isArray(lines) ? lines.map((line) => typeof line === 'string' ? line : `${date(line.timestamp)} [${line.level || 'INFO'}] ${line.message || ''}`).join('\n') : String(lines);
 }
 async function refresh() {
-  if (state.authRequired) { lockedState(); return; }
-  state.request?.abort();
-  const controller = new AbortController();
-  state.request = controller;
+  const sequence = ++refreshSequence;
+  let controller;
   state.refreshing = true;
   $('#refresh').disabled = true;
   try {
+    const auth = await discoverAuth();
+    if (sequence !== refreshSequence) return;
+    if (!applyAuth(auth)) return;
+    state.request?.abort();
+    controller = new AbortController();
+    state.request = controller;
     const bootstrap = await api('/api/bootstrap',{signal:controller.signal});
     if (controller.signal.aborted) return;
     if (!Array.isArray(bootstrap.servers)) throw new Error('The server inventory response is missing. Please refresh to try again.');
@@ -328,12 +416,13 @@ async function refresh() {
     state.mode = bootstrap.mode;
     $('#environment').textContent = bootstrap.mode === 'demo' ? 'Demo mode' : 'Kubernetes';
     const eventParams = new URLSearchParams({query:state.page === 'events' ? state.query : '', category:state.page === 'events' ? state.category : '', serverId:state.serverId});
-    const eventsPromise = api(`/api/events?${eventParams}`,{signal:controller.signal}).then((result) => { state.events = eventArray(result); });
+    const epoch = state.epoch;
+    const eventsPromise = can('events') ? api(`/api/events?${eventParams}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.events = eventArray(result); }) : Promise.resolve();
     const server = selectedServer();
     const requests = [eventsPromise];
     if (state.page === 'telemetry' && server) {
-      requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(state.range)}`,{signal:controller.signal}).then((result) => { state.telemetry = result; }));
-      requests.push(loadLogs(controller.signal));
+      requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(state.range)}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.telemetry = result; }));
+      if (can('logs')) requests.push(loadLogs(controller.signal));
     }
     const results = await Promise.allSettled(requests);
     if (controller.signal.aborted) return;
@@ -344,7 +433,7 @@ async function refresh() {
     render();
     connection();
   } catch (error) {
-    if (controller.signal.aborted) return;
+    if (controller?.signal.aborted || error.name === 'AbortError' || sequence !== refreshSequence) return;
     if (state.authRequired) { lockedState(); return; }
     $('#error-banner').textContent = error.message;
     $('#error-banner').hidden = false;
@@ -353,10 +442,11 @@ async function refresh() {
     $('#content').setAttribute('aria-busy','false');
     connection(true);
   } finally {
-    if (state.request === controller) { state.refreshing = false; $('#refresh').disabled = false; }
+    if (sequence === refreshSequence) { state.refreshing = false; $('#refresh').disabled = false; }
   }
 }
 function openModal(action) {
+  if (!can(action === 'add-server' ? 'create' : action)) return;
   $('#modal').classList.toggle('create-server-dialog', action === 'add-server');
   modalOpener = document.activeElement;
   state.modalAction = action;
@@ -391,7 +481,8 @@ function closeModal() {
 }
 async function submitModal(event) {
   event.preventDefault();
-  if (state.modalBusy || !$('#modal-form').reportValidity()) return;
+  if (!can(state.modalAction === 'add-server' ? 'create' : state.modalAction) || state.modalBusy || !$('#modal-form').reportValidity()) return;
+  const epoch = state.epoch;
   const values = Object.fromEntries(new FormData($('#modal-form')));
   const action = state.modalAction;
   const body = action === 'add-server' ? {...values, maxPlayers:Number(values.maxPlayers), memoryLimitMiB:Number(values.memoryLimitMiB), cpuLimitMillis:Number(values.cpuLimitMillis), gamePort:Number(values.gamePort), storageGiB:Number(values.storageGiB), debugLevel:Number(values.debugLevel), validateGameFiles:values.validateGameFiles === 'true', autoStopOnUpdate:values.autoStopOnUpdate === 'true'} : action === 'update' ? {imageTag:values.imageTag} : {};
@@ -403,11 +494,13 @@ async function submitModal(event) {
   $('#modal').querySelectorAll('[data-action="close-modal"]').forEach((button) => { button.disabled = true; });
   try {
     await api(path,{method:'POST',body:JSON.stringify(body)});
+    if (epoch !== state.epoch) return;
     state.modalBusy = false;
     closeModal();
     notice(action === 'add-server' ? 'Server deployment requested.' : action === 'restart' ? 'Server restart requested.' : 'Image update requested.');
     await refresh();
   } catch (error) {
+    if (epoch !== state.epoch || error.name === 'AbortError') return;
     $('#modal-error').textContent = error.message;
     $('#modal-error').hidden = false;
     $('#modal-error').focus();
@@ -438,9 +531,12 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
+  const permission = {'add-server':'create', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs'}[action];
+  if (permission && !can(permission)) return;
   try {
     switch (action) {
-      case 'login': requireLogin(); break;
+      case 'login': if (state.authMode === 'oidc') location.assign('/api/auth/login'); else requireLogin(); break;
+      case 'logout': await logout(); break;
       case 'close-login': closeLogin(); break;
       case 'add-server': case 'restart': case 'update': openModal(action); break;
       case 'close-modal': closeModal(); break;
@@ -466,14 +562,14 @@ async function handleAction(event) {
         notice(available ? 'An image update is available.' : 'Update check complete. No image change reported.'); break;
       }
     }
-  } catch (error) { notice(error.message || 'The action could not be completed.'); }
+  } catch (error) { if (error.name !== 'AbortError') notice(error.message || 'The action could not be completed.'); }
   finally { if (button.isConnected) button.disabled = false; }
 }
 function navigate() {
   window.scrollTo(0, 0);
   const page = location.hash.slice(1).split('?')[0];
-  state.page = pages[page] ? page : 'dashboard';
-  $('#navigation').innerHTML = Object.entries(pages).map(([name,[label]])=>`<a href="#${name}" data-testid="nav-${name}" ${name===state.page?'aria-current="page"':''}>${icon(name)}${label}</a>`).join('');
+  state.page = pages[page] && (!state.identity || can(page)) ? page : 'dashboard';
+  $('#navigation').innerHTML = Object.entries(pages).filter(([name]) => can(name)).map(([name,[label]])=>`<a href="#${name}" data-testid="nav-${name}" ${name===state.page?'aria-current="page"':''}>${icon(name)}${label}</a>`).join('');
   $('#page-title').textContent = pages[state.page][0];
   $('#page-description').textContent = pages[state.page][1];
   state.telemetry = null;
@@ -510,4 +606,8 @@ setInterval(() => {
   if (state.paused || state.authRequired || state.refreshing || document.hidden || $('#modal').open || $('#login-dialog').open || ['INPUT','SELECT'].includes(document.activeElement.tagName)) return;
   refresh();
 },10000);
+if (new URLSearchParams(location.search).get('signin') === 'failed') {
+  state.signInFailed = true;
+  history.replaceState(null, '', location.pathname + location.hash);
+}
 navigate();
