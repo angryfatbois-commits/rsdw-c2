@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"math"
 	"math/big"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -720,16 +722,155 @@ func TestOIDCNewLoginSupersedesInFlightCallback(t *testing.T) {
 	}
 }
 
+func fixtureHTTPApp(app *App) http.Handler {
+	names := map[string]string{sessionCookie: "rsdw-fixture-session", loginCookie: "rsdw-fixture-login"}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request := r.Clone(r.Context())
+		request.Header.Del("Cookie")
+		for _, cookie := range r.Cookies() {
+			for production, fixture := range names {
+				if cookie.Name == fixture {
+					cookie.Name = production
+				}
+			}
+			request.AddCookie(cookie)
+		}
+		response := httptest.NewRecorder()
+		app.ServeHTTP(response, request)
+		for key, values := range response.Header() {
+			for _, value := range values {
+				if key == "Set-Cookie" {
+					if cookie, err := http.ParseSetCookie(value); err == nil {
+						if name, ok := names[cookie.Name]; ok {
+							cookie.Name, cookie.Secure = name, false
+							value = cookie.String()
+						}
+					}
+				}
+				w.Header().Add(key, value)
+			}
+		}
+		w.WriteHeader(response.Code)
+		_, _ = w.Write(response.Body.Bytes())
+	})
+}
+
+func newHTTPBrowserFixture(t *testing.T, app *App, issuer *testIssuer) (*httptest.Server, *httptest.Server) {
+	t.Helper()
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/authorize" && r.URL.Path != "/expire" {
+			http.NotFound(w, r)
+			return
+		}
+		issuer.serveHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	server := httptest.NewServer(fixtureHTTPApp(app))
+	t.Cleanup(server.Close)
+	app.auth.settings.Origin = server.URL
+	app.auth.oauth.RedirectURL = server.URL + "/api/auth/callback"
+	app.auth.oauth.Endpoint.AuthURL = front.URL + "/authorize"
+	return server, front
+}
+
+func TestOIDCHTTPBrowserAdapter(t *testing.T) {
+	app, issuer := oidcTestApp(t)
+	server, front := newHTTPBrowserFixture(t, app, issuer)
+	if !strings.HasPrefix(app.auth.settings.Issuer, "https://") || !strings.HasPrefix(app.auth.oauth.Endpoint.TokenURL, "https://") {
+		t.Fatal("fixture changed backchannel TLS")
+	}
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
+	response, err := client.Get(server.URL + "/api/auth/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if !strings.HasPrefix(response.Request.URL.String(), front.URL+"/authorize") {
+		t.Fatal("login did not use HTTP issuer front")
+	}
+	authorize := *response.Request.URL
+	query := authorize.Query()
+	query.Set("role", "viewer")
+	authorize.RawQuery = query.Encode()
+	response, err = client.Get(authorize.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if !strings.Contains(string(body), "DRAGONWILDS") {
+		t.Fatalf("embedded UI was not served: %s", body)
+	}
+	response, err = client.Get(server.URL + "/api/auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auth struct {
+		Role string `json:"role"`
+		CSRF string `json:"csrfToken"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&auth); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if auth.Role != "viewer" || auth.CSRF == "" {
+		t.Fatal("adapter failed to authenticate viewer")
+	}
+	response, err = client.Get(server.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 403 {
+		t.Fatal("HTTP fixture bypassed role policy")
+	}
+	request, _ := http.NewRequest("POST", server.URL+"/api/auth/logout", nil)
+	request.Header.Set("Origin", server.URL)
+	request.Header.Set("X-CSRF-Token", auth.CSRF)
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 204 {
+		t.Fatal("HTTP fixture logout failed")
+	}
+	for _, cookie := range response.Cookies() {
+		if strings.HasPrefix(cookie.Name, "__Host-") || cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+			t.Fatalf("unexpected fixture cookie: %+v", cookie)
+		}
+	}
+	response, err = client.Get(server.URL + "/api/bootstrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 401 {
+		t.Fatal("HTTP fixture remained authenticated")
+	}
+}
+
 func TestOIDCBrowserFixture(t *testing.T) {
 	if os.Getenv("RSDW_OIDC_BROWSER_TEST") != "1" {
 		t.Skip("set RSDW_OIDC_BROWSER_TEST=1 for the local browser fixture")
 	}
 	app, issuer := oidcTestApp(t)
-	server := httptest.NewTLSServer(app)
-	defer server.Close()
-	app.auth.settings.Origin = server.URL
-	app.auth.oauth.RedirectURL = server.URL + "/api/auth/callback"
 	issuer.expire = func() { app.auth.mu.Lock(); defer app.auth.mu.Unlock(); clear(app.auth.sessions) }
+	var server *httptest.Server
+	issuerURL := issuer.server.URL
+	if os.Getenv("RSDW_OIDC_BROWSER_HTTP") == "1" {
+		var front *httptest.Server
+		server, front = newHTTPBrowserFixture(t, app, issuer)
+		issuerURL = front.URL
+		fmt.Println("HTTP loopback fixture: browser cookies are test-only translations. Production Secure cookies are verified by TLS unit tests, not this browser mode.")
+	} else {
+		server = httptest.NewTLSServer(app)
+		t.Cleanup(server.Close)
+		app.auth.settings.Origin = server.URL
+		app.auth.oauth.RedirectURL = server.URL + "/api/auth/callback"
+		fmt.Println("TLS fixture: accept the test issuer certificate before opening the console.")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	cache := app.observations()
@@ -748,7 +889,7 @@ func TestOIDCBrowserFixture(t *testing.T) {
 		cache.mu.Unlock()
 	}
 	populate()
-	fmt.Printf("\nConsole: %s\nTest issuer (accept local TLS certificate first): %s/expire\nExpiration control: %s/expire\nChoose Admin, Viewer, or Denied during sign in. Ctrl-C stops the fixture.\n", server.URL, issuer.server.URL, issuer.server.URL)
+	fmt.Printf("\nConsole: %s\nTest issuer: %s/expire\nExpiration control: %s/expire\nChoose Admin, Viewer, or Denied during sign in. Ctrl-C stops the fixture.\n", server.URL, issuerURL, issuerURL)
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
