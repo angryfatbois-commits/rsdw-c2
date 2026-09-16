@@ -67,7 +67,7 @@ Run the deterministic checks.
 bash scripts/verify.sh
 ```
 
-The checks cover Go tests, the built service, the demo API, the embedded UI, and the control-plane chart. The verifier uses `helm template` for the game chart path. It does not download or start the game image.
+The checks cover Go tests, the built service, the demo API, UI rendering and CSV tests, and the control-plane chart. Each run uses fresh state and an automatically assigned port.
 
 Run the disposable low-memory cluster check when Docker access is available.
 
@@ -76,5 +76,9 @@ bash scripts/kind-smoke.sh
 ```
 
 The script creates a disposable admin Secret inside the test cluster, deletes only the kind cluster that it creates, and exits with status 2 with `INCONCLUSIVE` when the Docker socket is unavailable.
+
+The kind test uses a private kubeconfig. It verifies authentication, empty inventory, and create, logs, restart, and update operations against a small Helm fixture. It does not download or start the game image. The Max players field passes the chart's documented Unreal override; the game build determines whether that override is enforced.
+
+See the [mockup refinement validation record](verification/mockup-refinement.md) for browser results and test limits. Remaining live-game telemetry and rollout-state gaps are tracked in [issue #1](https://github.com/petzkod5/rsdw-c2/issues/1).
 
 The architecture and first-draft limits are in [ARCHITECTURE.md](ARCHITECTURE.md).

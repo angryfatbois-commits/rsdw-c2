@@ -7,6 +7,9 @@ metadata:
     {{- include "rsdwc2.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
     resources: ["namespaces", "pods", "pods/log", "services", "secrets", "persistentvolumeclaims", "configmaps", "events"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
   - apiGroups: ["apps"]

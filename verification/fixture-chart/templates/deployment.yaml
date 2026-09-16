@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-rsdragonwilds
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      fixture: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        fixture: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: Never
+          command: [/bin/sh, -c, "echo lifecycle-fixture-ready; exec sleep 86400"]
+          env:
+            - name: RSDW_ADDITIONAL_ARGS
+              value: {{ .Values.server.env.RSDW_ADDITIONAL_ARGS | quote }}
+          resources:
+            requests:
+              memory: 8Mi
+              cpu: 1m
+            limits:
+              memory: 32Mi
+              cpu: 50m
