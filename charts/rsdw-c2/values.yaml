@@ -14,9 +14,24 @@ cluster:
   region: eu-central
 
 auth:
+  mode: token
   adminTokenSecret:
     name: ""
     key: token
+  oidc:
+    issuer: ""
+    publicOrigin: ""
+    clientID: ""
+    clientSecret:
+      name: ""
+      key: client-secret
+    scopes: [openid, profile]
+    groupsClaim: groups
+    rolePolicy:
+      adminSubjects: []
+      viewerSubjects: []
+      adminGroups: []
+      viewerGroups: []
 
 state:
   persistence:
