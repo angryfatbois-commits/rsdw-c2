@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "replicaCount", "service", "cluster", "auth", "state", "rbac", "resources", "podSecurityContext", "containerSecurityContext", "nodeSelector", "tolerations", "affinity"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "replicaCount": {"type": "integer", "minimum": 1, "maximum": 1},
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "port"],
+      "properties": {
+        "type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer"]},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "region"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "region": {"type": "string", "minLength": 1}}
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adminTokenSecret"],
+      "properties": {
+        "adminTokenSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "key"],
+          "properties": {"name": {"type": "string"}, "key": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["persistence"],
+      "properties": {
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "size"],
+          "properties": {"enabled": {"type": "boolean"}, "size": {"type": "string", "minLength": 1}, "storageClass": {"type": ["string", "null"]}}
+        }
+      }
+    },
+    "rbac": {"type": "object", "additionalProperties": false, "required": ["create"], "properties": {"create": {"type": "boolean"}}},
+    "resources": {"type": "object"},
+    "podSecurityContext": {"type": "object"},
+    "containerSecurityContext": {"type": "object"},
+    "nodeSelector": {"type": "object"},
+    "tolerations": {"type": "array"},
+    "affinity": {"type": "object"}
+  }
+}

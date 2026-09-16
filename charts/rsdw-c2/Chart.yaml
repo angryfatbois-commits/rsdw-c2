@@ -1,0 +1,12 @@
+apiVersion: v2
+name: rsdw-c2
+description: RuneScape Dragonwilds Kubernetes command and control console
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/petzkod5/rsdw-c2
+sources:
+  - https://github.com/petzkod5/rsdw-c2
+keywords: [dragonwilds, runescape, kubernetes, operations]
+annotations:
+  artifacthub.io/license: MIT

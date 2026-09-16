@@ -1,0 +1,51 @@
+image:
+  repository: ghcr.io/petzkod5/rsdw-c2
+  tag: ""
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+cluster:
+  name: local-cluster
+  region: eu-central
+
+auth:
+  adminTokenSecret:
+    name: ""
+    key: token
+
+state:
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: null
+
+rbac:
+  create: true
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

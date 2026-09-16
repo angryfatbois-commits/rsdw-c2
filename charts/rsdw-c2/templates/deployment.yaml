@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+{{- if not .Values.auth.adminTokenSecret.name }}
+{{- fail "auth.adminTokenSecret.name is required; create the Secret before installing RSDW C2" }}
+{{- end }}
+metadata:
+  name: {{ include "rsdwc2.fullname" . }}
+  labels:
+    {{- include "rsdwc2.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "rsdwc2.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rsdwc2.labels" . | nindent 8 }}
+    spec:
+      {{- if .Values.rbac.create }}
+      serviceAccountName: {{ include "rsdwc2.fullname" . }}
+      {{- end }}
+      automountServiceAccountToken: {{ .Values.rbac.create }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: rsdw-c2
+          image: {{ include "rsdwc2.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: RSDW_LISTEN_ADDR
+              value: ":8080"
+            - name: RSDW_CLUSTER_NAME
+              value: {{ .Values.cluster.name | quote }}
+            - name: RSDW_CLUSTER_REGION
+              value: {{ .Values.cluster.region | quote }}
+            - name: RSDW_STATE_FILE
+              value: /var/lib/rsdw-c2/state.json
+            - name: RSDW_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.adminTokenSecret.name }}
+                  key: {{ .Values.auth.adminTokenSecret.key }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/rsdw-c2
+          readinessProbe:
+            httpGet:
+              path: /api/auth
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/auth
+              port: http
+            periodSeconds: 20
+      volumes:
+        - name: state
+          {{- if .Values.state.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "rsdwc2.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

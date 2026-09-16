@@ -1,0 +1,16 @@
+{{- if .Values.state.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rsdwc2.fullname" . }}
+  labels:
+    {{- include "rsdwc2.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if ne .Values.state.persistence.storageClass nil }}
+  storageClassName: {{ .Values.state.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.state.persistence.size }}
+{{- end }}

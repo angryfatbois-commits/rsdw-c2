@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>RSDW C2 · Dragonwilds Control</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="#dashboard" aria-label="Dragonwilds Control dashboard">
+      <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="m20 3 15 9v17l-15 9L5 29V12Z" stroke="currentColor" stroke-width="2"/><path d="m12 13 8 5 8-5-3 14-5 5-5-5Z" fill="currentColor"/><path d="m17 22 3 2 3-2" stroke="#0f172a" stroke-width="2"/></svg>
+      <span>DRAGONWILDS <span class="brand-light">CONTROL</span><small>COMMAND &amp; CONTROL / RSDW C2</small></span>
+    </a>
+    <div class="cluster-meta"><span class="eyebrow">CONNECTED CLUSTER</span><span id="cluster-name">Connecting…</span></div>
+    <span class="environment" id="environment">Kubernetes</span>
+  </header>
+  <div class="shell">
+    <aside class="sidebar">
+      <span class="eyebrow nav-label">WORKSPACE</span>
+      <nav aria-label="Primary navigation" id="navigation"></nav>
+      <div class="sidebar-note"><span class="eyebrow">YOUR WORLDS. ONE PLACE.</span><p>Deploy, observe, and manage your Dragonwilds servers.</p><span class="version">RSDW C2 / v0.1</span></div>
+    </aside>
+    <main id="main" tabindex="-1">
+      <div class="page-heading"><div><div class="eyebrow">FLEET OPERATIONS</div><h1 id="page-title">Dashboard</h1><p id="page-description">Monitor every server from one place.</p></div><div class="page-controls"><label class="sr-only" for="server-filter">Server</label><select id="server-filter" data-testid="server-filter"><option value="">All servers</option></select><button id="refresh" data-testid="refresh" class="icon-button" aria-label="Refresh data"></button><button id="pause" data-testid="pause-updates" class="subtle">Pause updates</button></div></div>
+      <div class="connection-line"><span id="connection-status" role="status">Connecting to your cluster…</span><span id="updated-at">Waiting for first update</span></div>
+      <div id="error-banner" class="notice error" role="alert" hidden></div>
+      <div id="content" aria-busy="true"><section class="panel empty"><h2>Connecting to your cluster</h2><p>Loading server inventory and recent activity…</p></section></div>
+      <footer>Runescape Dragonwilds Command &amp; Control <span>Cluster operations console</span></footer>
+    </main>
+  </div>
+  <dialog id="modal" aria-labelledby="modal-title"><form id="modal-form"><div class="modal-heading"><h2 id="modal-title"></h2><button class="icon-button" type="button" data-action="close-modal" data-testid="close-modal" aria-label="Close dialog">×</button></div><div id="modal-body"></div><p id="modal-error" class="notice error" role="alert" tabindex="-1" hidden></p><div class="modal-actions"><button type="button" data-action="close-modal" data-testid="cancel-modal">Cancel</button><button class="primary" type="submit" id="modal-submit" data-testid="confirm-modal">Confirm</button></div></form></dialog>
+  <div id="toast" role="status" hidden></div>
+  <dialog id="login-dialog" aria-labelledby="login-title" aria-describedby="login-description">
+    <form id="login-form">
+      <div class="modal-heading"><h2 id="login-title">Admin sign in</h2><button class="icon-button" type="button" data-action="close-login" data-testid="close-login" aria-label="Close sign in">×</button></div>
+      <p id="login-description">Enter your admin token to access this cluster. It stays in this browser tab for the current session.</p>
+      <label class="field login-token" for="admin-token">Admin token<input id="admin-token" name="token" type="password" autocomplete="current-password" required data-testid="admin-token" aria-describedby="login-error"></label>
+      <p id="login-error" class="notice error" role="alert" tabindex="-1" hidden></p>
+      <div class="modal-actions"><button type="button" data-action="close-login" data-testid="cancel-login">Cancel</button><button type="submit" class="primary" id="login-submit" data-testid="login-submit">Sign in</button></div>
+    </form>
+  </dialog>
+  <noscript><p class="notice error">Enable JavaScript to view and manage your servers.</p></noscript>
+</body>
+</html>
