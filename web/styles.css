@@ -232,8 +232,8 @@ dialog::backdrop { background: #000b; }
 @media (max-width: 420px) {
   .brand { font-size: 15px; }
   .environment { font-size: 10px; padding-left: 8px; }
-  .stat { gap: 8px; }
-  .stat-value { font-size: 24px; }
+  .stat { gap: 8px; flex-direction: column; align-items: flex-start; }
+  .stat-value { font-size: 24px; overflow-wrap: normal; }
   .detail-list > div { flex-wrap: wrap; gap: 4px 16px; }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -1,0 +1,4 @@
+apiVersion: v2
+name: rsdragonwilds
+version: 0.1.1
+description: Lightweight lifecycle test fixture; not a game server

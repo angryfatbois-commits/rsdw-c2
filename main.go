@@ -11,7 +11,9 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -232,6 +234,11 @@ func (shellRunner) Run(ctx context.Context, name string, args ...string) ([]byte
 	cmd := exec.CommandContext(ctx, name, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "--from-literal=") {
+				return nil, fmt.Errorf("%s: %w (Secret command details omitted)", name, err)
+			}
+		}
 		return output, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return output, nil
@@ -347,7 +354,7 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 			return fmt.Errorf("create API token Secret: %w", err)
 		}
 	}
-	args := []string{"upgrade", "--install", server.Release, k.chart, "--namespace", server.Namespace, "--create-namespace", "--set-string", "server.env.RSDW_OWNER_ID=" + server.OwnerID, "--set-string", "server.env.RSDW_SERVER_NAME=" + server.Name, "--set-string", "server.env.RSDW_WORLD_NAME=" + server.Name, "--set-string", "image.repository=" + k.imageRepository, "--set-string", "image.tag=" + imageTag(server.DesiredImage), "--set-string", "api.bearerTokenSecret.name=" + secret}
+	args := []string{"upgrade", "--install", server.Release, k.chart, "--namespace", server.Namespace, "--create-namespace", "--set-literal", "server.env.RSDW_OWNER_ID=" + server.OwnerID, "--set-literal", "server.env.RSDW_SERVER_NAME=" + server.Name, "--set-literal", "server.env.RSDW_WORLD_NAME=" + server.Name, "--set-literal", "server.env.RSDW_ADDITIONAL_ARGS=-ini:Game:[/Script/Engine.GameSession]:MaxPlayers=" + strconv.Itoa(server.MaxPlayers), "--set-string", "image.repository=" + k.imageRepository, "--set-string", "image.tag=" + imageTag(server.DesiredImage), "--set-string", "api.bearerTokenSecret.name=" + secret}
 	if k.chartVersion != "" {
 		args = append(args, "--version", k.chartVersion)
 	}
@@ -437,7 +444,11 @@ func (k *kubeOrchestrator) CheckUpdate(ctx context.Context, server Server) (Serv
 	if err != nil {
 		return server, err
 	}
-	if latest, err := k.latestImageTag(ctx); err == nil && latest != "" && (refreshed.DesiredImage == "" || refreshed.DesiredImage == refreshed.CurrentImage) {
+	latest, err := k.latestImageTag(ctx)
+	if err != nil {
+		return server, fmt.Errorf("check image update: %w", err)
+	}
+	if latest != "" && (refreshed.DesiredImage == "" || refreshed.DesiredImage == refreshed.CurrentImage) {
 		latestVersion, latestOK := semverTag(latest)
 		currentVersion, currentOK := semverTag(imageTag(refreshed.CurrentImage))
 		if !currentOK || (latestOK && newerVersion(latestVersion, currentVersion)) {
@@ -460,6 +471,38 @@ func (k *kubeOrchestrator) latestImageTag(ctx context.Context) (string, error) {
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return "", err
+	}
+	if response.StatusCode == http.StatusUnauthorized && parts[0] == "ghcr.io" {
+		response.Body.Close()
+		query := url.Values{"service": {"ghcr.io"}, "scope": {"repository:" + parts[1] + ":pull"}}
+		tokenRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ghcr.io/token?"+query.Encode(), nil)
+		if err != nil {
+			return "", err
+		}
+		tokenResponse, err := http.DefaultClient.Do(tokenRequest)
+		if err != nil {
+			return "", fmt.Errorf("registry authentication: %w", err)
+		}
+		defer tokenResponse.Body.Close()
+		if tokenResponse.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("registry authentication returned %s", tokenResponse.Status)
+		}
+		var credentials struct {
+			Token       string `json:"token"`
+			AccessToken string `json:"access_token"`
+		}
+		if err := json.NewDecoder(io.LimitReader(tokenResponse.Body, 1<<20)).Decode(&credentials); err != nil {
+			return "", errors.New("invalid registry authentication response")
+		}
+		token := defaultValue(credentials.Token, credentials.AccessToken)
+		if token == "" {
+			return "", errors.New("registry authentication returned an empty token")
+		}
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err = http.DefaultClient.Do(request)
+		if err != nil {
+			return "", err
+		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -995,6 +1038,10 @@ func main() {
 	app := &App{store: store, orchestrator: orchestrator, demo: demo, authToken: authToken}
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
-	log.Printf("rsdw-c2 listening on %s demo=%t", addr, demo)
-	log.Fatal(server.ListenAndServe())
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("rsdw-c2 listening on %s demo=%t", listener.Addr(), demo)
+	log.Fatal(server.Serve(listener))
 }

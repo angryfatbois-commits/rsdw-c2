@@ -395,6 +395,7 @@ async function handleAction(event) {
   finally { if (button.isConnected) button.disabled = false; }
 }
 function navigate() {
+  window.scrollTo(0, 0);
   const page = location.hash.slice(1).split('?')[0];
   state.page = pages[page] ? page : 'dashboard';
   $('#navigation').innerHTML = Object.entries(pages).map(([name,[label]])=>`<a href="#${name}" data-testid="nav-${name}" ${name===state.page?'aria-current="page"':''}>${icon(name)}${label}</a>`).join('');

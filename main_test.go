@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,128 @@ import (
 	"strings"
 	"testing"
 )
+
+type registryTransport func(*http.Request) (*http.Response, error)
+
+func (f registryTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestCheckUpdateRegistryBehavior(t *testing.T) {
+	for _, tc := range []struct {
+		name, tokenBody, tagsBody           string
+		tokenStatus, tagsStatus, wantStatus int
+	}{
+		{"authenticated", `{"token":"registry-secret"}`, `{"tags":["1.2.3","1.2.4"]}`, 200, 200, 200},
+		{"access token", `{"access_token":"registry-secret"}`, `{"tags":["1.2.3","1.2.4"]}`, 200, 200, 200},
+		{"token denied", `{}`, `{}`, 403, 200, 502},
+		{"empty token", `{}`, `{}`, 200, 200, 502},
+		{"invalid token JSON", `{`, `{}`, 200, 200, 502},
+		{"registry failure", `{"token":"registry-secret"}`, `{}`, 200, 503, 502},
+		{"retry denied", `{"token":"registry-secret"}`, `{}`, 200, 401, 502},
+		{"invalid tags JSON", `{"token":"registry-secret"}`, `{`, 200, 200, 502},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/token":
+					if r.URL.Query().Get("service") != "ghcr.io" || r.URL.Query().Get("scope") != "repository:example/server:pull" {
+						t.Errorf("unexpected token query: %s", r.URL.RawQuery)
+					}
+					w.WriteHeader(tc.tokenStatus)
+					fmt.Fprint(w, tc.tokenBody)
+				case "/v2/example/server/tags/list":
+					if r.Header.Get("Authorization") != "Bearer registry-secret" {
+						w.Header().Set("WWW-Authenticate", `Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:example/server:pull"`)
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					w.WriteHeader(tc.tagsStatus)
+					fmt.Fprint(w, tc.tagsBody)
+				default:
+					t.Errorf("unexpected registry path %s", r.URL.Path)
+					w.WriteHeader(404)
+				}
+			}))
+			defer registry.Close()
+			original := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: registryTransport(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Host != "ghcr.io" {
+					return nil, fmt.Errorf("unexpected host %s", r.URL.Host)
+				}
+				clone := r.Clone(r.Context())
+				clone.URL.Host = strings.TrimPrefix(registry.URL, "https://")
+				return registry.Client().Transport.RoundTrip(clone)
+			})}
+			t.Cleanup(func() { http.DefaultClient = original })
+			app := newTestApp(t, false)
+			app.orchestrator = &kubeOrchestrator{runner: &metricsRunner{}, kubectl: "kubectl", imageRepository: "ghcr.io/example/server"}
+			server := Server{ID: "world", Release: "world", CurrentImage: "example/server:1.2.3", DesiredImage: "example/server:1.2.3"}
+			if err := app.store.Update(func(s *State) error { s.Servers[server.ID] = server; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			res := requestJSON(t, app, http.MethodPost, "/api/servers/world/actions/check-update", "")
+			if res.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", res.Code, tc.wantStatus, res.Body.String())
+			}
+			state := app.store.Snapshot()
+			if tc.wantStatus == 200 {
+				var got Server
+				if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if !got.UpdateAvailable || got.DesiredImage != "ghcr.io/example/server:1.2.4" || len(state.Events) != 1 {
+					t.Fatalf("update result = %+v, events = %d", got, len(state.Events))
+				}
+			} else if state.Servers[server.ID] != server || len(state.Events) != 0 {
+				t.Fatalf("failed check changed state: %+v", state)
+			}
+		})
+	}
+}
+
+func TestShellRunnerSecretFailure(t *testing.T) {
+	output, err := (shellRunner{}).Run(context.Background(), "sh", "-c", `printf '%s' "$1" >&2; exit 1`, "sh", "--from-literal=token=test-secret-value")
+	if err == nil {
+		t.Fatal("expected command failure")
+	}
+	if strings.Contains(err.Error(), "test-secret-value") || strings.Contains(string(output), "test-secret-value") {
+		t.Fatal("command failure exposed the Secret token")
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("missing failure reason: %v", err)
+	}
+}
+
+type secretFailureRunner struct{ token string }
+
+func (r *secretFailureRunner) Run(ctx context.Context, _ string, args ...string) ([]byte, error) {
+	if len(args) > 1 && args[0] == "get" && args[1] == "namespace" {
+		return nil, nil
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--from-literal=token=") {
+			r.token = strings.TrimPrefix(arg, "--from-literal=token=")
+			return (shellRunner{}).Run(ctx, "sh", "-c", `printf '%s' "$1" >&2; exit 1`, "sh", arg)
+		}
+	}
+	return nil, errors.New("not found")
+}
+
+func TestCreateSecretFailureDoesNotLeakToken(t *testing.T) {
+	app := newTestApp(t, false)
+	runner := &secretFailureRunner{}
+	app.orchestrator = &kubeOrchestrator{runner: runner, kubectl: "kubectl"}
+	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"World","ownerId":"owner","maxPlayers":4}`)
+	if res.Code != http.StatusBadGateway || !strings.Contains(res.Body.String(), "create API token Secret") {
+		t.Fatalf("create response = %d: %s", res.Code, res.Body.String())
+	}
+	if runner.token == "" || strings.Contains(res.Body.String(), runner.token) {
+		t.Fatal("Secret creation was not attempted or its token leaked")
+	}
+	state := app.store.Snapshot()
+	if len(state.Servers) != 0 || len(state.Events) != 0 {
+		t.Fatalf("failed creation recorded success: %+v", state)
+	}
+}
 
 func newTestApp(t *testing.T, demo bool) *App {
 	t.Helper()
@@ -247,7 +370,7 @@ func TestTelemetryDoesNotFabricateKubernetesSamples(t *testing.T) {
 func TestKubeOrchestratorUsesChartContract(t *testing.T) {
 	runner := &recordingRunner{}
 	orchestrator := &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "oci://example/chart", chartVersion: "0.1.1", imageRepository: "example/server"}
-	server := Server{Release: "night-shift", Namespace: "dragonwilds", Name: "Night Shift", OwnerID: "eos-1", DesiredImage: "example/server:1.2.3"}
+	server := Server{Release: "night-shift", Namespace: "dragonwilds", Name: "Night Shift", OwnerID: "eos-1", DesiredImage: "example/server:1.2.3", MaxPlayers: 12}
 	if err := orchestrator.Deploy(context.Background(), server); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +379,8 @@ func TestKubeOrchestratorUsesChartContract(t *testing.T) {
 		"kubectl create namespace dragonwilds",
 		"kubectl -n dragonwilds create secret generic night-shift-api",
 		"helm upgrade --install night-shift oci://example/chart",
-		"--set-string server.env.RSDW_OWNER_ID=eos-1",
+		"--set-literal server.env.RSDW_OWNER_ID=eos-1",
+		"--set-literal server.env.RSDW_ADDITIONAL_ARGS=-ini:Game:[/Script/Engine.GameSession]:MaxPlayers=12",
 		"--set-string image.tag=1.2.3",
 		"--set-string api.bearerTokenSecret.name=night-shift-api",
 		"--version 0.1.1",
