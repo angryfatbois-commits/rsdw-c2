@@ -38,7 +38,18 @@ The HTTP handlers parse requests, call a domain operation, and encode JSON or th
 
 ## API contract
 
+`Auth` owns authentication, OIDC transactions, and opaque sessions. A typed principal has a denied zero value, viewer, or admin role. Token mode grants the admin role for a matching bearer token. OIDC mode requires an exact subject or group assignment from a verified ID token and rejects bearer credentials. Demo data does not bypass OIDC.
+
+The HTTP boundary authorizes requests before handlers parse bodies or call the orchestrator. Viewers may only GET bootstrap and a server's telemetry. Unknown routes are denied for viewers. Dedicated viewer response types select display metadata and numeric metrics; they omit operational data and replace collector errors with fixed availability messages. Admin operations include check-update because it changes stored state.
+
+OIDC login uses authorization code flow, S256 PKCE, browser-bound single-use state, and nonce verification. Sessions expire absolutely and remain in bounded process memory. Logout revokes the session. Cookie-authenticated writes require an exact public Origin and a session CSRF token. The UI uses server capabilities, clears protected state when identity changes, and rejects late responses from older sessions. See [OIDC setup and session behavior](docs/oidc.md).
+
 ```text
+GET  /api/auth
+POST /api/session                 (token mode)
+GET  /api/auth/login              (OIDC mode)
+GET  /api/auth/callback           (OIDC mode)
+POST /api/auth/logout             (OIDC mode)
 GET  /api/bootstrap
 GET  /api/servers/:id/logs?tail=100
 GET  /api/servers/:id/telemetry?range=60s

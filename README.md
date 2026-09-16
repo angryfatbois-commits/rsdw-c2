@@ -44,7 +44,9 @@ The Service is a `ClusterIP`. Use a port-forward or put it behind your existing 
 kubectl -n rsdw-system port-forward service/rsdw-c2-rsdw-c2 8080:8080
 ```
 
-The ServiceAccount can create and update the resources that the Dragonwilds chart uses. The chart refuses to install without the admin token Secret. Install the console in a cluster or namespace reserved for these servers. Review the rendered `ClusterRole` before using it in a shared cluster.
+The ServiceAccount can create and update the resources that the Dragonwilds chart uses. Token mode requires the admin token Secret. Install the console in a cluster or namespace reserved for these servers. Review the rendered `ClusterRole` before using it in a shared cluster.
+
+For identity-provider sign in with admin and viewer roles, follow [Configure OIDC sign in](docs/oidc.md). OIDC mode requires HTTPS, an existing client Secret, and explicit role assignments. Its callback is `/api/auth/callback`. Viewers can read dashboard and telemetry data; admins can also read operational data and manage servers. OIDC mode does not accept the shared admin token or forwarded identity headers.
 
 ## Configure the server chart
 
@@ -67,7 +69,7 @@ Run the deterministic checks.
 bash scripts/verify.sh
 ```
 
-The checks cover Go tests, the built service, the demo API, UI rendering and CSV tests, and the control-plane chart. Each run uses fresh state and an automatically assigned port.
+The checks cover Go tests, signed-token OIDC flows and rejection cases, the built service, the demo API, UI capability and stale-response tests, CSV tests, and positive and negative chart renders. Each run uses fresh state and automatically assigned ports. Run `go test -race ./...` for race checks. The [local OIDC browser fixture](docs/oidc.md#run-the-local-browser-fixture) supports independent browser testing without a cluster.
 
 Run the disposable low-memory cluster check when Docker access is available.
 
