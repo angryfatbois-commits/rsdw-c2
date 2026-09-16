@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -83,7 +84,7 @@ func TestCheckUpdateRegistryBehavior(t *testing.T) {
 				if !got.UpdateAvailable || got.DesiredImage != "ghcr.io/example/server:1.2.4" || len(state.Events) != 1 {
 					t.Fatalf("update result = %+v, events = %d", got, len(state.Events))
 				}
-			} else if state.Servers[server.ID] != server || len(state.Events) != 0 {
+			} else if !reflect.DeepEqual(state.Servers[server.ID], server) || len(state.Events) != 0 {
 				t.Fatalf("failed check changed state: %+v", state)
 			}
 		})
@@ -179,6 +180,11 @@ func TestStoreRoundTrip(t *testing.T) {
 }
 
 func TestValidateCreate(t *testing.T) {
+	for _, limits := range []struct{ memory, cpu int }{{-1, 1000}, {255, 1000}, {65537, 1000}, {2048, -1}, {2048, 99}, {2048, 64001}} {
+		if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "owner", MaxPlayers: 4, MemoryLimitMiB: limits.memory, CPULimitMillis: limits.cpu}, false); err == nil {
+			t.Fatalf("invalid resource limits accepted: %+v", limits)
+		}
+	}
 	if err := validateCreate(CreateServerRequest{Name: "World", MaxPlayers: 12}, false); err == nil {
 		t.Fatal("missing owner ID accepted")
 	}
@@ -187,6 +193,59 @@ func TestValidateCreate(t *testing.T) {
 	}
 	if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "eos", MaxPlayers: 12, ImageTag: "v1.2.3"}, false); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
+	}
+}
+
+func TestCreatePersistsResourceLimits(t *testing.T) {
+	app := newTestApp(t, false)
+	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Resource test","ownerId":"owner","maxPlayers":6,"memoryLimitMiB":1536,"cpuLimitMillis":750}`)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", res.Code, res.Body.String())
+	}
+	reloaded, err := NewStore(app.store.path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := reloaded.Snapshot().Servers["resource-test"]
+	if server.MemoryLimitMiB != 1536 || server.CPULimitMillis != 750 || server.MaxPlayers != 6 {
+		t.Fatalf("limits not persisted: %+v", server)
+	}
+}
+
+func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
+	app := newTestApp(t, false)
+	runner := &recordingRunner{}
+	app.orchestrator = &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "chart", imageRepository: "example/server"}
+	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Public name","worldName":"Separate world","ownerId":"owner-123","maxPlayers":6,"memoryLimitMiB":1536,"cpuLimitMillis":750,"gamePort":7780,"storageGiB":2,"serviceType":"NodePort","adminIds":"admin-1,admin-2","debugLevel":3,"autoStopOnUpdate":true,"validateGameFiles":true,"additionalArgs":"-log","serverPassword":"private-join","adminPassword":"private-admin"}`)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", res.Code, res.Body.String())
+	}
+	persisted, err := os.ReadFile(app.store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"private-join", "private-admin"} {
+		if strings.Contains(res.Body.String(), secret) || strings.Contains(string(persisted), secret) {
+			t.Fatal("password exposed outside Secret command")
+		}
+	}
+	server := app.store.Snapshot().Servers["public-name"]
+	if server.WorldName != "Separate world" || server.GamePort != 7780 || server.PasswordSecret != "public-name-settings" || server.ServerPassword != "" || server.AdminPassword != "" {
+		t.Fatalf("settings not preserved or credentials retained: %+v", server)
+	}
+	var helmCall string
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, "helm ") {
+			helmCall = call
+		}
+	}
+	for _, want := range []string{"RSDW_WORLD_NAME=Separate world", "RSDW_ADMINS=admin-1,admin-2", "RSDW_ADDITIONAL_ARGS=-log -ini:Game:[/Script/Engine.GameSession]:MaxPlayers=6", "RSDW_AUTO_STOP_ON_UPDATE=true", "DEBUG=3", "STEAMAPPVALIDATE=1", "server.port=7780,service.port=7780,persistence.size=2Gi,service.type=NodePort", "resources.limits.memory=1536Mi", "resources.limits.cpu=750m", "valueFrom.secretKeyRef.name=public-name-settings"} {
+		if !strings.Contains(helmCall, want) {
+			t.Fatalf("missing chart setting %q", want)
+		}
+	}
+	if strings.Contains(helmCall, "private-join") || strings.Contains(helmCall, "private-admin") {
+		t.Fatal("password passed as a Helm value")
 	}
 }
 
@@ -204,7 +263,7 @@ func TestDemoAPIExercisesMutations(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &server); err != nil {
 		t.Fatal(err)
 	}
-	if server.ID != "night-shift" || server.Status != StatusOnline {
+	if server.ID != "night-shift" || server.Status != StatusStarting || server.MemoryLimitMiB != 2048 || server.CPULimitMillis != 1000 {
 		t.Fatalf("created server = %+v", server)
 	}
 	for _, action := range []struct {
@@ -319,7 +378,25 @@ func (r *metricsRunner) Run(_ context.Context, name string, args ...string) ([]b
 	r.calls = append(r.calls, call)
 	switch {
 	case strings.Contains(call, "get deployment"):
-		return []byte(`{"spec":{"template":{"spec":{"containers":[{"name":"server","image":"example/server:1.2.3"}]}}},"status":{"availableReplicas":1,"replicas":1}}`), nil
+		namespace := ""
+		release := "world"
+		if strings.Contains(call, "night-shift") {
+			namespace = "dragonwilds"
+			release = "night-shift"
+		}
+		return []byte(fmt.Sprintf(`{"metadata":{"name":%q,"namespace":%q,"uid":"deployment"},"spec":{"replicas":1}}`, deploymentName(release), namespace)), nil
+	case strings.Contains(call, "get replicasets"):
+		namespace := ""
+		if strings.Contains(call, "-n dragonwilds") {
+			namespace = "dragonwilds"
+		}
+		return []byte(fmt.Sprintf(`{"items":[{"metadata":{"namespace":%q,"uid":"rs","ownerReferences":[{"kind":"Deployment","uid":"deployment","controller":true}]}}]}`, namespace)), nil
+	case strings.Contains(call, "get pods"):
+		namespace := ""
+		if strings.Contains(call, "-n dragonwilds") {
+			namespace = "dragonwilds"
+		}
+		return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":"world-pod","namespace":%q,"uid":"pod","ownerReferences":[{"kind":"ReplicaSet","uid":"rs","controller":true}]},"spec":{"containers":[{"name":"server","image":"example/server:1.2.3"}]},"status":{"phase":"Running","containerStatuses":[{"name":"server","containerID":"container","ready":true,"state":{"running":{"startedAt":"2026-01-01T00:00:00Z"}}}]}}]}`, namespace)), nil
 	case strings.Contains(call, "api/health"):
 		return []byte(`{"engineReady":true,"uptimeSeconds":123.5}`), nil
 	case strings.Contains(call, "api/players"):
@@ -329,7 +406,7 @@ func (r *metricsRunner) Run(_ context.Context, name string, args ...string) ([]b
 	}
 }
 
-func TestKubeOrchestratorRefreshReadsGameMetrics(t *testing.T) {
+func TestKubeOrchestratorRefreshOnlyDiscoversImage(t *testing.T) {
 	runner := &metricsRunner{}
 	orchestrator := &kubeOrchestrator{runner: runner, kubectl: "kubectl", gameAPIPort: "8080"}
 	server := Server{Release: "night-shift", Namespace: "dragonwilds", DesiredImage: "example/server:1.2.3"}
@@ -337,11 +414,53 @@ func TestKubeOrchestratorRefreshReadsGameMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refreshed.Status != StatusOnline || refreshed.Players != 4 || refreshed.UptimeSeconds != 123 {
+	if refreshed.Status != StatusOnline || refreshed.CurrentImage != "example/server:1.2.3" || refreshed.MetricsAvailable {
 		t.Fatalf("refreshed server = %+v", refreshed)
 	}
-	if !strings.Contains(strings.Join(runner.calls, "\n"), `-H "Authorization: Bearer $(cat /run/rsdwapi/token)"`) {
-		t.Fatalf("game API calls did not read the pod token: %v", runner.calls)
+	for _, call := range runner.calls {
+		if strings.Contains(call, "exec ") {
+			t.Fatalf("image discovery executed a game API command: %s", call)
+		}
+	}
+	for key, reading := range refreshed.Metrics {
+		if reading.Value != nil {
+			t.Fatalf("image discovery returned metric %s: %+v", key, reading)
+		}
+	}
+}
+
+func TestCheckUpdateRejectsMissingObservedImage(t *testing.T) {
+	k, runner, server := collectorFixture()
+	server.CurrentImage = "example/server:old"
+	server.DesiredImage = ""
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "get pods") {
+			return []byte(`{"items":[` + strings.ReplaceAll(fixturePod(), `"image":"example/server:1"`, `"image":""`) + `]}`), nil, true
+		}
+		return nil, nil, false
+	}
+	registryCalls := 0
+	original := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: registryTransport(func(*http.Request) (*http.Response, error) {
+		registryCalls++
+		return nil, errors.New("unexpected registry lookup")
+	})}
+	t.Cleanup(func() { http.DefaultClient = original })
+	k.imageRepository = "ghcr.io/example/server"
+	for _, check := range []struct {
+		name string
+		run  func(context.Context, Server) (Server, error)
+	}{{"Refresh", k.Refresh}, {"CheckUpdate", k.CheckUpdate}} {
+		got, err := check.run(context.Background(), server)
+		if err == nil || err.Error() != "observed server image is unavailable" {
+			t.Errorf("%s error = %v, want unavailable observed image", check.name, err)
+		}
+		if !reflect.DeepEqual(got, server) {
+			t.Errorf("%s changed server without an observed image", check.name)
+		}
+	}
+	if registryCalls != 0 {
+		t.Fatalf("missing observed image triggered %d registry lookups", registryCalls)
 	}
 }
 
@@ -358,12 +477,12 @@ func TestSemverTagOrdering(t *testing.T) {
 
 func TestTelemetryDoesNotFabricateKubernetesSamples(t *testing.T) {
 	server := Server{Status: StatusOnline, Players: 4, UptimeSeconds: 123}
-	telemetry := telemetryFor(server, "60s", false)
+	telemetry := newTestApp(t, false).telemetryFor(server, "60s")
 	if telemetry.MetricsAvailable || len(telemetry.Samples) != 0 {
 		t.Fatalf("kubernetes telemetry = %+v, want no synthetic samples", telemetry)
 	}
-	if got := telemetry.HealthChecks[0].Status; got != "online" {
-		t.Fatalf("health status = %q, want online", got)
+	if len(telemetry.HealthChecks) != 0 {
+		t.Fatalf("unperformed health checks = %+v", telemetry.HealthChecks)
 	}
 }
 
@@ -384,6 +503,8 @@ func TestKubeOrchestratorUsesChartContract(t *testing.T) {
 		"--set-string image.tag=1.2.3",
 		"--set-string api.bearerTokenSecret.name=night-shift-api",
 		"--version 0.1.1",
+		"--set-string resources.limits.memory=2048Mi",
+		"--set-string resources.limits.cpu=1000m",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("deployment command missing %q in:\n%s", expected, joined)

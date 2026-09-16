@@ -1,0 +1,9 @@
+ts	phase	decision	why	evidence	result
+2026-09-16T18:00:56Z	shutdown	Stopped the live kind node and port forward without deletion	Preserve user world data and free laptop RAM	/tmp/rsdw-c2-live.kubeconfig	VERIFIED
+2026-09-16T18:07:29Z	design	Selected app-owned bounded history over Prometheus after two proposals and cross-review	Avoid another daemon; retain per-source timestamps and partial failure states	verification/telemetry-design.md	VERIFIED
+2026-09-16T18:11:29Z	ui	Added independent metric states and timestamped charts with data tables	Missing tick data must not hide working resource metrics or become zero	web/app.test.cjs	VERIFIED
+2026-09-16T18:13:25Z	review	Fixed all four chart findings from independent UI review	Preserve time windows, separate series timestamps, outbound markers and open data tables	web/app.test.cjs	VERIFIED
+2026-09-16T18:15:04Z	shutdown	Stopped the leftover local demo listener as well	User requested the entire application stopped to save resources	verification/live-kind-settings.md	VERIFIED
+2026-09-16T18:25:06Z	review	Corrected evidence scope and recorded review findings	Earlier artifact references did not directly prove shutdown or browser behavior	verification/telemetry-review.md	VERIFIED
+2026-09-16T18:40:22Z	verification	Verified Kubernetes metric collection and browser data flow	Real source values must reach charts and exports without invented ticks	verification/telemetry-verification.md	VERIFIED
+2026-09-16T18:41:41Z	cleanup	Removed disposable test clusters and verified live kind remains stopped	Leave no running app or game containers after testing; retain user worlds	verification/telemetry-verification.md	VERIFIED

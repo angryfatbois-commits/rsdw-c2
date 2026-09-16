@@ -1,8 +1,8 @@
 FROM golang:1.26-alpine AS build
 
 WORKDIR /src
-COPY go.mod ./
-COPY main.go main_test.go ./
+COPY go.mod go.sum ./
+COPY *.go ./
 COPY web ./web
 RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/rsdw-c2 .
 

@@ -6,6 +6,9 @@ metadata:
   labels:
     {{- include "rsdwc2.labels" . | nindent 4 }}
 rules:
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]

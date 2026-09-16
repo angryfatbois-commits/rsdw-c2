@@ -41,29 +41,54 @@ const (
 )
 
 type Server struct {
-	ID                    string  `json:"id"`
-	Name                  string  `json:"name"`
-	Namespace             string  `json:"namespace"`
-	Release               string  `json:"release"`
-	Region                string  `json:"region"`
-	OwnerID               string  `json:"ownerId"`
-	CurrentImage          string  `json:"currentImage"`
-	DesiredImage          string  `json:"desiredImage"`
-	Status                Status  `json:"status"`
-	Players               int     `json:"players"`
-	MaxPlayers            int     `json:"maxPlayers"`
-	TickRate              float64 `json:"tickRate"`
-	CPUPercent            float64 `json:"cpuPercent"`
-	MemoryUsedBytes       int64   `json:"memoryUsedBytes"`
-	MemoryLimitBytes      int64   `json:"memoryLimitBytes"`
-	DiskPercent           float64 `json:"diskPercent"`
-	NetworkBytesPerSecond int64   `json:"networkBytesPerSecond"`
-	UptimeSeconds         int64   `json:"uptimeSeconds"`
-	MetricsAvailable      bool    `json:"metricsAvailable"`
-	LastRestart           string  `json:"lastRestart"`
-	LastSeen              string  `json:"lastSeen"`
-	UpdateAvailable       bool    `json:"updateAvailable"`
-	Endpoint              string  `json:"endpoint"`
+	ServerSettings
+	Metrics               map[string]MetricReading `json:"metrics"`
+	PasswordSecret        string                   `json:"passwordSecret,omitempty"`
+	ServerPassword        string                   `json:"-"`
+	AdminPassword         string                   `json:"-"`
+	ID                    string                   `json:"id"`
+	Name                  string                   `json:"name"`
+	Namespace             string                   `json:"namespace"`
+	Release               string                   `json:"release"`
+	Region                string                   `json:"region"`
+	OwnerID               string                   `json:"ownerId"`
+	CurrentImage          string                   `json:"currentImage"`
+	DesiredImage          string                   `json:"desiredImage"`
+	Status                Status                   `json:"status"`
+	Players               int                      `json:"players"`
+	MaxPlayers            int                      `json:"maxPlayers"`
+	MemoryLimitMiB        int                      `json:"memoryLimitMiB"`
+	CPULimitMillis        int                      `json:"cpuLimitMillis"`
+	TickRate              float64                  `json:"tickRate"`
+	CPUPercent            float64                  `json:"cpuPercent"`
+	MemoryUsedBytes       int64                    `json:"memoryUsedBytes"`
+	MemoryLimitBytes      int64                    `json:"memoryLimitBytes"`
+	DiskPercent           float64                  `json:"diskPercent"`
+	NetworkBytesPerSecond int64                    `json:"networkBytesPerSecond"`
+	UptimeSeconds         int64                    `json:"uptimeSeconds"`
+	MetricsAvailable      bool                     `json:"metricsAvailable"`
+	LastRestart           string                   `json:"lastRestart"`
+	LastSeen              string                   `json:"lastSeen"`
+	UpdateAvailable       bool                     `json:"updateAvailable"`
+	Endpoint              string                   `json:"endpoint"`
+}
+
+func (s Server) MarshalJSON() ([]byte, error) {
+	type serverJSON Server
+	if s.Metrics == nil {
+		return json.Marshal(serverJSON(s))
+	}
+	return json.Marshal(struct {
+		serverJSON
+		Players               *int     `json:"players,omitempty"`
+		UptimeSeconds         *int64   `json:"uptimeSeconds,omitempty"`
+		TickRate              *float64 `json:"tickRate,omitempty"`
+		CPUPercent            *float64 `json:"cpuPercent,omitempty"`
+		MemoryUsedBytes       *int64   `json:"memoryUsedBytes,omitempty"`
+		MemoryLimitBytes      *int64   `json:"memoryLimitBytes,omitempty"`
+		DiskPercent           *float64 `json:"diskPercent,omitempty"`
+		NetworkBytesPerSecond *int64   `json:"networkBytesPerSecond,omitempty"`
+	}{serverJSON: serverJSON(s)})
 }
 
 type Event struct {
@@ -83,12 +108,29 @@ type State struct {
 }
 
 type CreateServerRequest struct {
-	Name       string `json:"name"`
-	Namespace  string `json:"namespace"`
-	Region     string `json:"region"`
-	OwnerID    string `json:"ownerId"`
-	ImageTag   string `json:"imageTag"`
-	MaxPlayers int    `json:"maxPlayers"`
+	ServerSettings
+	ServerPassword string `json:"serverPassword"`
+	AdminPassword  string `json:"adminPassword"`
+	Name           string `json:"name"`
+	Namespace      string `json:"namespace"`
+	Region         string `json:"region"`
+	OwnerID        string `json:"ownerId"`
+	ImageTag       string `json:"imageTag"`
+	MaxPlayers     int    `json:"maxPlayers"`
+	MemoryLimitMiB int    `json:"memoryLimitMiB"`
+	CPULimitMillis int    `json:"cpuLimitMillis"`
+}
+
+type ServerSettings struct {
+	WorldName         string `json:"worldName"`
+	GamePort          int    `json:"gamePort"`
+	StorageGiB        int    `json:"storageGiB"`
+	ServiceType       string `json:"serviceType"`
+	AdminIDs          string `json:"adminIds"`
+	AdditionalArgs    string `json:"additionalArgs"`
+	DebugLevel        int    `json:"debugLevel"`
+	AutoStopOnUpdate  bool   `json:"autoStopOnUpdate"`
+	ValidateGameFiles bool   `json:"validateGameFiles"`
 }
 
 type UpdateServerRequest struct {
@@ -96,20 +138,15 @@ type UpdateServerRequest struct {
 }
 
 type Telemetry struct {
-	Server            Server             `json:"server"`
-	MetricsAvailable  bool               `json:"metricsAvailable"`
-	Samples           []MetricSample     `json:"samples"`
-	HealthChecks      []HealthCheck      `json:"healthChecks"`
-	MetricDefinitions []MetricDefinition `json:"metricDefinitions"`
+	Server            Server                   `json:"server"`
+	Metrics           map[string]MetricReading `json:"metrics"`
+	MetricsAvailable  bool                     `json:"metricsAvailable"`
+	Samples           []MetricSample           `json:"samples"`
+	HealthChecks      []HealthCheck            `json:"healthChecks"`
+	MetricDefinitions []MetricDefinition       `json:"metricDefinitions"`
 }
 
-type MetricSample struct {
-	Timestamp   time.Time `json:"timestamp"`
-	TickRate    float64   `json:"tickRate"`
-	Players     int       `json:"players"`
-	InboundBPS  int64     `json:"inboundBytesPerSecond"`
-	OutboundBPS int64     `json:"outboundBytesPerSecond"`
-}
+type MetricSample map[string]any
 
 type HealthCheck struct {
 	Name   string    `json:"name"`
@@ -339,12 +376,33 @@ current-context: in-cluster
 }
 
 func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
+	if server.GamePort == 0 {
+		server.GamePort = 7777
+	}
+	if server.StorageGiB == 0 {
+		server.StorageGiB = 40
+	}
+	server.WorldName = defaultValue(server.WorldName, server.Name)
+	server.ServiceType = defaultValue(server.ServiceType, "LoadBalancer")
+	if server.MemoryLimitMiB == 0 {
+		server.MemoryLimitMiB = 2048
+	}
+	if server.CPULimitMillis == 0 {
+		server.CPULimitMillis = 1000
+	}
 	if _, err := k.runner.Run(ctx, k.kubectl, "get", "namespace", server.Namespace); err != nil {
 		if _, err := k.runner.Run(ctx, k.kubectl, "create", "namespace", server.Namespace); err != nil {
 			return fmt.Errorf("create namespace: %w", err)
 		}
 	}
 	secret := server.Release + "-api"
+	if server.PasswordSecret != "" && (server.ServerPassword != "" || server.AdminPassword != "") {
+		if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "get", "secret", server.PasswordSecret); err != nil {
+			if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "create", "secret", "generic", server.PasswordSecret, "--from-literal=serverPassword="+server.ServerPassword, "--from-literal=adminPassword="+server.AdminPassword); err != nil {
+				return errors.New("could not create server password Secret")
+			}
+		}
+	}
 	if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "get", "secret", secret); err != nil {
 		token, tokenErr := randomToken()
 		if tokenErr != nil {
@@ -354,9 +412,26 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 			return fmt.Errorf("create API token Secret: %w", err)
 		}
 	}
-	args := []string{"upgrade", "--install", server.Release, k.chart, "--namespace", server.Namespace, "--create-namespace", "--set-literal", "server.env.RSDW_OWNER_ID=" + server.OwnerID, "--set-literal", "server.env.RSDW_SERVER_NAME=" + server.Name, "--set-literal", "server.env.RSDW_WORLD_NAME=" + server.Name, "--set-literal", "server.env.RSDW_ADDITIONAL_ARGS=-ini:Game:[/Script/Engine.GameSession]:MaxPlayers=" + strconv.Itoa(server.MaxPlayers), "--set-string", "image.repository=" + k.imageRepository, "--set-string", "image.tag=" + imageTag(server.DesiredImage), "--set-string", "api.bearerTokenSecret.name=" + secret}
+	args := []string{"upgrade", "--install", server.Release, k.chart, "--namespace", server.Namespace, "--create-namespace", "--set-literal", "server.env.RSDW_OWNER_ID=" + server.OwnerID, "--set-literal", "server.env.RSDW_SERVER_NAME=" + server.Name, "--set-string", "image.repository=" + k.imageRepository, "--set-string", "image.tag=" + imageTag(server.DesiredImage), "--set-string", "api.bearerTokenSecret.name=" + secret}
 	if k.chartVersion != "" {
 		args = append(args, "--version", k.chartVersion)
+	}
+	args = append(args, "--set-string", fmt.Sprintf("resources.limits.memory=%dMi", server.MemoryLimitMiB), "--set-string", fmt.Sprintf("resources.limits.cpu=%dm", server.CPULimitMillis), "--set-string", "resources.requests.memory=256Mi", "--set-string", "resources.requests.cpu=100m")
+	for _, setting := range []string{
+		"server.env.RSDW_WORLD_NAME=" + server.WorldName,
+		"server.env.RSDW_ADMINS=" + server.AdminIDs,
+		"server.env.RSDW_ADDITIONAL_ARGS=" + strings.TrimSpace(server.AdditionalArgs+" -ini:Game:[/Script/Engine.GameSession]:MaxPlayers="+strconv.Itoa(server.MaxPlayers)),
+		"server.env.RSDW_AUTO_STOP_ON_UPDATE=" + strconv.FormatBool(server.AutoStopOnUpdate),
+		"server.env.DEBUG=" + strconv.Itoa(server.DebugLevel),
+		"server.env.STEAMAPPVALIDATE=" + map[bool]string{false: "0", true: "1"}[server.ValidateGameFiles],
+	} {
+		args = append(args, "--set-literal", setting)
+	}
+	args = append(args, "--set", fmt.Sprintf("server.port=%d,service.port=%d,persistence.size=%dGi,service.type=%s", server.GamePort, server.GamePort, server.StorageGiB, server.ServiceType))
+	if server.PasswordSecret != "" {
+		for i, entry := range []struct{ name, key string }{{"RSDW_PASSWORD", "serverPassword"}, {"RSDW_ADMIN_PASSWORD", "adminPassword"}} {
+			args = append(args, "--set-string", fmt.Sprintf("server.extraEnv[%d].name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.key=%s", i, entry.name, i, server.PasswordSecret, i, entry.key))
+		}
 	}
 	if _, err := k.runner.Run(ctx, k.helm, args...); err != nil {
 		return fmt.Errorf("helm deploy: %w", err)
@@ -378,65 +453,15 @@ func (k *kubeOrchestrator) Logs(ctx context.Context, server Server, tail int) ([
 }
 
 func (k *kubeOrchestrator) Refresh(ctx context.Context, server Server) (Server, error) {
-	output, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "get", "deployment", deploymentName(server.Release), "-o", "json")
+	target, status, err := k.resolvePod(ctx, server)
 	if err != nil {
 		return server, err
 	}
-	var deployment struct {
-		Spec struct {
-			Template struct {
-				Spec struct {
-					Containers []struct {
-						Name  string `json:"name"`
-						Image string `json:"image"`
-					} `json:"containers"`
-				} `json:"spec"`
-			} `json:"template"`
-		} `json:"spec"`
-		Status struct {
-			AvailableReplicas int `json:"availableReplicas"`
-			ReadyReplicas     int `json:"readyReplicas"`
-			Replicas          int `json:"replicas"`
-		} `json:"status"`
+	if target.container.Image == "" {
+		return server, errors.New("observed server image is unavailable")
 	}
-	if err := json.Unmarshal(output, &deployment); err != nil {
-		return server, fmt.Errorf("decode deployment: %w", err)
-	}
-	server.LastSeen = time.Now().UTC().Format(time.RFC3339)
-	server.Status = StatusStarting
-	if deployment.Status.AvailableReplicas > 0 {
-		server.Status = StatusOnline
-	} else if deployment.Status.Replicas == 0 {
-		server.Status = StatusStopped
-	}
-	for _, container := range deployment.Spec.Template.Spec.Containers {
-		if container.Name == "server" {
-			server.CurrentImage = container.Image
-			break
-		}
-	}
-	server.UpdateAvailable = server.CurrentImage != "" && server.DesiredImage != "" && server.CurrentImage != server.DesiredImage
-	if health, err := k.gameAPI(ctx, server, "health"); err == nil {
-		var result struct {
-			EngineReady   bool    `json:"engineReady"`
-			UptimeSeconds float64 `json:"uptimeSeconds"`
-		}
-		if err := json.Unmarshal(health, &result); err == nil {
-			server.UptimeSeconds = int64(result.UptimeSeconds)
-			if !result.EngineReady && server.Status == StatusOnline {
-				server.Status = StatusAttention
-			}
-		}
-	}
-	if players, err := k.gameAPI(ctx, server, "players"); err == nil {
-		var result struct {
-			Count int `json:"count"`
-		}
-		if err := json.Unmarshal(players, &result); err == nil {
-			server.Players = result.Count
-		}
-	}
-	return server, nil
+	observed := observation{at: time.Now().UTC(), metrics: emptyMetrics(), status: status, image: target.container.Image}
+	return joinObservation(server, observed, time.Now().UTC()), nil
 }
 
 func (k *kubeOrchestrator) CheckUpdate(ctx context.Context, server Server) (Server, error) {
@@ -551,18 +576,14 @@ func newerVersion(candidate, current [3]int) bool {
 	return false
 }
 
-func (k *kubeOrchestrator) gameAPI(ctx context.Context, server Server, endpoint string) ([]byte, error) {
-	port := defaultValue(k.gameAPIPort, "8080")
-	script := fmt.Sprintf("curl -fsS --max-time 3 -H \"Authorization: Bearer $(cat /run/rsdwapi/token)\" http://127.0.0.1:%s/api/%s", port, endpoint)
-	return k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "exec", "deployment/"+deploymentName(server.Release), "-c", "server", "--", "bash", "-ec", script)
-}
-
 type App struct {
-	store        *Store
-	orchestrator Orchestrator
-	demo         bool
-	authToken    string
-	imageRepo    string
+	store         *Store
+	orchestrator  Orchestrator
+	demo          bool
+	authToken     string
+	imageRepo     string
+	telemetryOnce sync.Once
+	telemetry     *telemetryStore
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -621,13 +642,10 @@ func (a *App) api(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
-	refreshCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	a.refreshServers(refreshCtx)
 	snapshot := a.store.Snapshot()
 	servers := make([]Server, 0, len(snapshot.Servers))
 	for _, server := range snapshot.Servers {
-		servers = append(servers, server)
+		servers = append(servers, a.telemetryFor(server, "60s").Server)
 	}
 	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
 	mode := "kubernetes"
@@ -640,32 +658,17 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *App) refreshServers(ctx context.Context) {
-	snapshot := a.store.Snapshot()
-	var wg sync.WaitGroup
-	for _, server := range snapshot.Servers {
-		server := server
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			refreshed, err := a.orchestrator.Refresh(ctx, server)
-			if err != nil {
-				return
-			}
-			_ = a.store.Update(func(state *State) error {
-				state.Servers[server.ID] = refreshed
-				return nil
-			})
-		}()
-	}
-	wg.Wait()
-}
-
 func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var request CreateServerRequest
 	if err := decodeJSON(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if request.MemoryLimitMiB == 0 {
+		request.MemoryLimitMiB = 2048
+	}
+	if request.CPULimitMillis == 0 {
+		request.CPULimitMillis = 1000
 	}
 	if err := validateCreate(request, a.demo); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -678,6 +681,24 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	server := Server{ID: release, Name: strings.TrimSpace(request.Name), Namespace: defaultValue(request.Namespace, "dragonwilds"), Release: release, Region: defaultValue(request.Region, "eu-central"), OwnerID: request.OwnerID, CurrentImage: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server") + ":" + defaultValue(request.ImageTag, envOr("RSDW_DEFAULT_IMAGE_TAG", "0.1.1")), MaxPlayers: request.MaxPlayers, Status: StatusStarting, LastRestart: time.Now().UTC().Format(time.RFC3339), LastSeen: time.Now().UTC().Format(time.RFC3339), Endpoint: release + ".dragonwilds.local:7777"}
 	server.DesiredImage = server.CurrentImage
+	server.MemoryLimitMiB = request.MemoryLimitMiB
+	server.CPULimitMillis = request.CPULimitMillis
+	server.ServerSettings = request.ServerSettings
+	server.WorldName = defaultValue(server.WorldName, server.Name)
+	if server.GamePort == 0 {
+		server.GamePort = 7777
+	}
+	if server.StorageGiB == 0 {
+		server.StorageGiB = 40
+	}
+	server.ServiceType = defaultValue(server.ServiceType, "LoadBalancer")
+	server.ServerPassword, server.AdminPassword = request.ServerPassword, request.AdminPassword
+	if request.ServerPassword != "" || request.AdminPassword != "" {
+		server.PasswordSecret = release + "-settings"
+	}
+	if !a.demo {
+		server.Endpoint = ""
+	}
 	if snapshot := a.store.Snapshot(); snapshot.Servers[server.ID].ID != "" {
 		writeError(w, http.StatusConflict, "a server with this name already exists")
 		return
@@ -688,7 +709,10 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	server.Status = StatusOnline
+	if a.demo {
+		server.Status = StatusOnline
+	}
+	server.ServerPassword, server.AdminPassword = "", ""
 	if err := a.store.Update(func(state *State) error {
 		state.Servers[server.ID] = server
 		appendEvent(state, server, "system", "success", "Server created", "Helm release accepted")
@@ -748,7 +772,7 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[1] == "telemetry" && r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, telemetryFor(server, r.URL.Query().Get("range"), a.demo))
+		writeJSON(w, http.StatusOK, a.telemetryFor(server, r.URL.Query().Get("range")))
 		return
 	}
 	if len(parts) == 3 && parts[1] == "actions" && r.Method == http.MethodPost {
@@ -832,7 +856,14 @@ func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server S
 		refreshed = server
 	}
 	if err := a.store.Update(func(state *State) error {
-		state.Servers[server.ID] = refreshed
+		current := state.Servers[server.ID]
+		if current.DesiredImage == server.DesiredImage {
+			current.DesiredImage = refreshed.DesiredImage
+		}
+		current.UpdateAvailable = refreshed.CurrentImage != "" && current.DesiredImage != refreshed.CurrentImage
+		state.Servers[server.ID] = current
+		refreshed.DesiredImage = current.DesiredImage
+		refreshed.UpdateAvailable = current.UpdateAvailable
 		appendEvent(state, refreshed, "update", severityFor(refreshed.UpdateAvailable), "Update check complete", updateDetails(refreshed))
 		return nil
 	}); err != nil {
@@ -840,31 +871,6 @@ func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server S
 		return
 	}
 	writeJSON(w, http.StatusOK, refreshed)
-}
-
-func telemetryFor(server Server, requestedRange string, synthetic bool) Telemetry {
-	seconds := 60
-	if requestedRange == "5m" {
-		seconds = 300
-	} else if requestedRange == "1h" {
-		seconds = 3600
-	}
-	now := time.Now().UTC()
-	definitions := []MetricDefinition{{Metric: "tick_rate", Description: "Server tick rate in ticks per second."}, {Metric: "active_players", Description: "Number of connected players."}, {Metric: "cpu_percent", Description: "Process CPU usage as a percentage."}, {Metric: "memory_used_bytes", Description: "Process memory usage in bytes."}, {Metric: "network_bytes_per_second", Description: "Combined inbound and outbound network traffic."}}
-	checks := []HealthCheck{{Name: "Process", Status: string(server.Status), At: now}, {Name: "Port", Status: string(server.Status), At: now}, {Name: "World save", Status: string(server.Status), At: now}}
-	if !synthetic {
-		return Telemetry{Server: server, MetricsAvailable: server.MetricsAvailable, Samples: []MetricSample{}, HealthChecks: checks, MetricDefinitions: definitions}
-	}
-	samples := make([]MetricSample, 0, 30)
-	for i := 29; i >= 0; i-- {
-		phase := float64(i) / 3
-		playerPenalty := 0
-		if i%4 == 0 {
-			playerPenalty = 1
-		}
-		samples = append(samples, MetricSample{Timestamp: now.Add(-time.Duration(i*seconds/30) * time.Second), TickRate: server.TickRate + (phase-float64(int(phase)))*0.8 - 0.4, Players: max(0, server.Players-playerPenalty), InboundBPS: server.NetworkBytesPerSecond + int64(i%5)*120_000, OutboundBPS: server.NetworkBytesPerSecond/2 + int64(i%3)*80_000})
-	}
-	return Telemetry{Server: server, MetricsAvailable: true, Samples: samples, HealthChecks: checks, MetricDefinitions: definitions}
 }
 
 func appendEvent(state *State, server Server, category, severity, message, details string) {
@@ -901,6 +907,29 @@ func parseLogs(raw string) []LogLine {
 }
 
 func validateCreate(request CreateServerRequest, demo bool) error {
+	if request.GamePort != 0 && (request.GamePort < 1024 || request.GamePort > 65535) {
+		return errors.New("gamePort must be between 1024 and 65535")
+	}
+	if request.StorageGiB != 0 && (request.StorageGiB < 1 || request.StorageGiB > 2048) {
+		return errors.New("storageGiB must be between 1 and 2048")
+	}
+	if request.ServiceType != "" && request.ServiceType != "ClusterIP" && request.ServiceType != "NodePort" && request.ServiceType != "LoadBalancer" {
+		return errors.New("serviceType must be ClusterIP, NodePort, or LoadBalancer")
+	}
+	if request.DebugLevel < 0 || request.DebugLevel > 3 {
+		return errors.New("debugLevel must be between 0 and 3")
+	}
+	for field, value := range map[string]string{"worldName": request.WorldName, "adminIds": request.AdminIDs, "additionalArgs": request.AdditionalArgs, "serverPassword": request.ServerPassword, "adminPassword": request.AdminPassword} {
+		if len(value) > 2048 || strings.ContainsAny(value, "\x00\r\n") {
+			return fmt.Errorf("%s must be a single line of at most 2048 characters", field)
+		}
+	}
+	if request.MemoryLimitMiB != 0 && (request.MemoryLimitMiB < 256 || request.MemoryLimitMiB > 65536) {
+		return errors.New("memoryLimitMiB must be between 256 and 65536")
+	}
+	if request.CPULimitMillis != 0 && (request.CPULimitMillis < 100 || request.CPULimitMillis > 64000) {
+		return errors.New("cpuLimitMillis must be between 100 and 64000")
+	}
 	if strings.TrimSpace(request.Name) == "" || len(request.Name) > 48 {
 		return errors.New("name is required and must be 48 characters or fewer")
 	}
@@ -1036,6 +1065,7 @@ func main() {
 		orchestrator = demoOrchestrator{}
 	}
 	app := &App{store: store, orchestrator: orchestrator, demo: demo, authToken: authToken}
+	go app.runCollector(context.Background(), 15*time.Second)
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	listener, err := net.Listen("tcp", addr)

@@ -84,6 +84,7 @@ main { padding: 24px 30px 30px; min-width: 0; width: 100%; }
 .stat { display: flex; gap: 24px; align-items: center; min-height: 106px; padding: 20px 28px; }
 .stat svg { width: 32px; height: 32px; color: var(--color-muted-foreground); }
 .stat-value { font-size: 32px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stat-value.stat-text { font-size: 18px; overflow-wrap: normal; }
 .stat-label { font-size: 16px; color: var(--color-muted-foreground); margin-top: 5px; }
 .green { color: var(--color-foreground); }
 .amber { color: var(--warning); }
@@ -164,6 +165,10 @@ td:last-child.actions { text-align: right; }
 footer { font-size: 14px; color: var(--color-muted-foreground); margin-top: 24px; }
 dialog { width: min(520px,calc(100% - 32px)); max-height: calc(100dvh - 32px); border: 1px solid var(--color-border); border-radius: 4px; padding: 28px; background: var(--color-card); color: var(--color-foreground); box-shadow: 0 20px 80px #0008; }
 dialog::backdrop { background: #000b; }
+dialog.create-server-dialog { width: min(800px,calc(100% - 32px)); }
+.chart-data { margin-top: 12px; }
+.chart-data summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--color-foreground); }
+.chart-data .table-wrap { max-height: 280px; overflow: auto; }
 .modal-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .modal-heading h2 { font-size: 24px; }
 .modal-heading .icon-button { font-size: 24px; }

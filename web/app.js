@@ -39,7 +39,7 @@ let toastTimer;
 let modalOpener;
 
 function number(value, suffix = '') {
-  return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toLocaleString(undefined, {maximumFractionDigits:1})}${suffix}`;
+  return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toLocaleString(undefined, Math.abs(Number(value)) < 1 ? {maximumSignificantDigits:3} : {maximumFractionDigits:1})}${suffix}`;
 }
 function bytes(value) {
   if (value == null || !Number.isFinite(Number(value))) return '—';
@@ -65,7 +65,7 @@ function status(value = 'unknown') {
   return `<span class="status ${known.includes(value) ? value : 'unknown'}">${escapeHTML(value.charAt(0).toUpperCase() + value.slice(1))}</span>`;
 }
 function stat(label, value, name, tone = '') {
-  return `<section class="panel stat">${icon(name)}<div><div class="stat-value ${tone}">${escapeHTML(value)}</div><div class="stat-label">${escapeHTML(label)}</div></div></section>`;
+  return `<section class="panel stat">${icon(name)}<div><div class="stat-value ${tone} ${String(value).length > 10 ? 'stat-text' : ''}">${escapeHTML(value)}</div><div class="stat-label">${escapeHTML(label)}</div></div></section>`;
 }
 function selectedServer() { return state.servers.find((server) => server.id === state.serverId) || state.servers[0]; }
 function scopedServers() { return state.servers.filter((server) => !state.serverId || server.id === state.serverId); }
@@ -102,7 +102,7 @@ function lockedState() {
 }
 function requireLogin() {
   state.authRequired = true;
-  try { sessionStorage.removeItem(tokenKey); } catch { /* Sign in reports blocked storage on submission. */ }
+  try { sessionStorage.removeItem(tokenKey); } catch {}
   lockedState();
   if (!$('#login-dialog').open) {
     $('#login-error').hidden = true;
@@ -150,6 +150,38 @@ function samples() {
   const data = state.telemetry;
   return Array.isArray(data) ? data : data?.samples || data?.points || [];
 }
+const metricLabels = {
+  players: 'API-reported players', uptimeSeconds: 'API uptime', engineReady: 'Engine ready',
+  cpuCores: 'CPU cores', cpuPercent: 'CPU limit used', cpuLimitCores: 'CPU limit',
+  memoryUsedBytes: 'Memory working set', memoryLimitBytes: 'Memory limit',
+  diskUsedBytes: 'Data filesystem used', diskCapacityBytes: 'Data filesystem capacity', diskPercent: 'Data filesystem usage',
+  inboundBytesPerSecond: 'Pod inbound', outboundBytesPerSecond: 'Pod outbound', networkBytesPerSecond: 'Pod traffic', tickRate: 'Tick rate',
+};
+function metricValue(server, key) {
+  const reading = server.metrics?.[key];
+  if (reading) return reading.status === 'available' && typeof reading.value === 'number' && Number.isFinite(reading.value) ? reading.value : null;
+  return state.mode === 'demo' ? server[key] ?? null : null;
+}
+function metricText(server, key, suffix = '') {
+  const value = metricValue(server, key);
+  if (value != null) return number(value, suffix);
+  const reading = server.metrics?.[key];
+  return ({unsupported:'Unsupported', stale:'Stale', error:'Collection failed', warming_up:'Collecting', unavailable:'Unavailable'})[reading?.status] || 'Awaiting sample';
+}
+function metricSources(server) {
+  const metrics = server.metrics || {};
+  return `<section class="panel section-gap"><div class="panel-heading"><h2>Metric sources</h2></div><p class="inline-note">Collection is scheduled every 15 seconds, even with no browser open. Slow sources can lengthen the interval. History covers up to one hour and resets when the dashboard service restarts.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Status</th><th>Source</th><th>Observed</th><th>Details</th></tr></thead><tbody>${Object.entries(metrics).map(([key, reading]) => `<tr><td>${escapeHTML(metricLabels[key] || key)}</td><td>${escapeHTML(reading.status)}</td><td>${escapeHTML(reading.source || 'Not configured')}</td><td>${escapeHTML(date(reading.observedAt))}</td><td>${escapeHTML(reading.reason || reading.unit || '')}</td></tr>`).join('')}</tbody></table></div></section>`;
+}
+function telemetryRows() {
+  const metrics = state.telemetry?.metrics || state.telemetry?.server?.metrics || {};
+  return samples().flatMap((sample) => Object.keys(metricLabels).map((key) => ({
+    timestamp: sample.timestamp, metric: key, value: sample[key] ?? '',
+    observedAt: sample.observedAt?.[key] || '',
+    status: sample.status?.[key] || (sample[key] == null ? 'unavailable' : 'available'),
+    reason: sample.reason?.[key] || '',
+    unit: metrics[key]?.unit || '', source: metrics[key]?.source || '',
+  })));
+}
 function emptyState() {
   return `<section class="panel empty" data-testid="empty-state"><div class="empty-icon">${icon('server')}</div><h2>No servers registered</h2><p>Create a Dragonwilds server to view its health, logs, and activity.</p><button class="primary" data-action="add-server" data-testid="empty-add-server">${icon('plus')}Create your first server</button></section>`;
 }
@@ -164,18 +196,38 @@ function dashboard() {
   const filtered = servers.filter((server) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? server.status === 'online' : server.status === 'attention' || server.updateAvailable));
   const stats = `<div class="stats">${stat('Registered servers', servers.length, 'server')}${stat('Online', online, 'pulse', 'green')}${stat('Needs attention', attention, 'warning', 'amber')}${stat('Updates available', servers.filter((server) => server.updateAvailable).length, 'refresh')}</div>`;
   if (!state.servers.length) return stats + emptyState();
-  return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div><button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button></div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => `<tr><td><strong>${escapeHTML(server.name)}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${number(server.players)} / ${number(server.maxPlayers)}</td><td>${server.metricsAvailable ? number(server.tickRate, ' TPS') : '—'}</td><td>${server.metricsAvailable ? number(server.cpuPercent, '%') : '—'}</td><td class="mono">${duration(server.uptimeSeconds)}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section><section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>`;
+  return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div><button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button></div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => `<tr><td><strong>${escapeHTML(server.name)}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${metricText(server, 'players')} / ${number(server.maxPlayers)}</td><td>${metricText(server, 'tickRate', ' TPS')}</td><td>${metricText(server, 'cpuPercent', '%')}</td><td class="mono">${duration(metricValue(server, 'uptimeSeconds'))}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section><section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>`;
 }
 function chart(key, label, secondaryKey = '', secondaryLabel = '') {
   const points = samples();
-  const valid = points.map((point, index) => ({value:point[key], index})).filter((point) => point.value != null && Number.isFinite(Number(point.value)));
-  if (!valid.length) return `<p class="no-results">${escapeHTML(label)} samples are not available yet.</p>`;
-  const secondary = points.filter((point) => secondaryKey && point[secondaryKey] != null && Number.isFinite(Number(point[secondaryKey])));
-  const ceiling = Math.max(1, ...valid.map((point) => Number(point.value)), ...secondary.map((point) => Number(point[secondaryKey]))) * 1.15;
-  const position = (point) => `${(point.index / Math.max(1, points.length - 1) * 660 + 35).toFixed(2)},${(170 - Number(point.value) / ceiling * 150).toFixed(2)}`;
-  const path = points.map((point, index) => point[key] == null || !Number.isFinite(Number(point[key])) ? '' : `${index === 0 || points[index - 1][key] == null ? 'M' : 'L'}${position({value:point[key], index})}`).join(' ');
-  const secondaryPath = points.map((point, index) => !secondaryKey || point[secondaryKey] == null || !Number.isFinite(Number(point[secondaryKey])) ? '' : `${index === 0 || points[index - 1][secondaryKey] == null ? 'M' : 'L'}${position({value:point[secondaryKey], index})}`).join(' ');
-  return `<div class="chart-legends"><div class="chart-legend">${escapeHTML(label)}</div>${secondary.length ? `<div class="chart-legend secondary">${escapeHTML(secondaryLabel)}</div>` : ''}</div><svg class="chart" viewBox="0 0 710 190" role="img" aria-label="${escapeHTML(label)} over the selected period. Latest value ${escapeHTML(number(valid.at(-1).value))}.${secondary.length ? ` ${escapeHTML(secondaryLabel)}, latest value ${escapeHTML(number(secondary.at(-1)[secondaryKey]))}.` : ''}">${[20,70,120,170].map((y) => `<path d="M35 ${y}H695" class="chart-grid" stroke-width="1"/>`).join('')}<text x="0" y="14">${number(ceiling)}</text><text x="12" y="173">0</text><path d="${path}" fill="none" class="chart-line" stroke-width="2"/>${secondary.length ? `<path d="${secondaryPath}" fill="none" class="chart-line secondary" stroke-width="2"/>` : ''}${valid.map((point) => `<circle cx="${position(point).split(',')[0]}" cy="${position(point).split(',')[1]}" r="2" class="chart-point"/>`).join('')}</svg><div class="chart-labels"><span>${escapeHTML(date(points[0]?.timestamp || points[0]?.time))}</span><span>${escapeHTML(date(points.at(-1)?.timestamp || points.at(-1)?.time))}</span></div>`;
+  const timeOf = (point, field) => Date.parse(point.observedAt?.[field] || point.timestamp);
+  const end = Math.max(...points.map((point) => Date.parse(point.timestamp)).filter(Number.isFinite));
+  const start = end - ({'60s':60, '5m':300, '1h':3600}[state.range] || 60) * 1000;
+  const present = (point, field) => typeof point[field] === 'number' && Number.isFinite(point[field]) && timeOf(point, field) >= start && timeOf(point, field) <= end;
+  const primary = points.filter((point) => present(point, key));
+  const secondary = points.filter((point) => secondaryKey && present(point, secondaryKey));
+  if (!primary.length && !secondary.length) {
+    const reading = state.telemetry?.metrics?.[key] || state.telemetry?.server?.metrics?.[key];
+    return `<p class="no-results">${escapeHTML(reading?.reason || `${label} samples are not available yet.`)}</p>`;
+  }
+  const ceiling = Math.max(key === 'cpuCores' ? 0.001 : 1, ...primary.map((point) => point[key]), ...secondary.map((point) => point[secondaryKey])) * 1.15;
+  const position = (point, field) => `${(Math.max(0, Math.min(1, (timeOf(point, field) - start) / (end - start))) * 660 + 35).toFixed(2)},${(170 - point[field] / ceiling * 150).toFixed(2)}`;
+  const path = (field) => {
+    let previous = null;
+    return points.map((point) => {
+      if (!present(point, field)) { previous = null; return ''; }
+      const at = timeOf(point, field);
+      if (previous === at) return '';
+      const command = previous == null || at - previous > 45000 || at < previous ? 'M' : 'L';
+      previous = at;
+      return `${command}${position(point, field)}`;
+    }).join(' ');
+  };
+  const legend = `<div class="chart-legends"><div class="chart-legend">${escapeHTML(label)}</div>${secondaryKey ? `<div class="chart-legend secondary">${escapeHTML(secondaryLabel)}</div>` : ''}</div>`;
+  const summary = `${label} over the selected period. Latest value ${number(primary.at(-1)?.[key])}.${secondaryKey ? ` ${secondaryLabel}, latest value ${number(secondary.at(-1)?.[secondaryKey])}.` : ''}`;
+  const graph = `<svg class="chart" viewBox="0 0 710 190" role="img" aria-label="${escapeHTML(summary)}">${[20,70,120,170].map((y) => `<path d="M35 ${y}H695" class="chart-grid" stroke-width="1"/>`).join('')}<text x="0" y="14">${number(ceiling)}</text><text x="12" y="173">0</text><path d="${path(key)}" fill="none" class="chart-line" stroke-width="2"/>${secondaryKey ? `<path d="${path(secondaryKey)}" fill="none" class="chart-line secondary" stroke-width="2"/>` : ''}${primary.map((point) => `<circle cx="${position(point, key).split(',')[0]}" cy="${position(point, key).split(',')[1]}" r="2" class="chart-point"/>`).join('')}${secondary.map((point) => `<circle cx="${position(point, secondaryKey).split(',')[0]}" cy="${position(point, secondaryKey).split(',')[1]}" r="2" class="chart-point secondary"/>`).join('')}</svg>`;
+  const table = `<details class="chart-data" data-chart="${escapeHTML(key)}"><summary data-testid="chart-data-${escapeHTML(key)}">View ${escapeHTML(label)} data</summary><div class="table-wrap"><table><thead><tr><th>Observed</th><th>Series</th><th>Value</th></tr></thead><tbody>${points.flatMap((point) => [[key,label],[secondaryKey,secondaryLabel]].filter(([field]) => field).map(([field,name]) => `<tr><td>${escapeHTML(date(point.observedAt?.[field] || point.timestamp))}</td><td>${escapeHTML(name)}</td><td>${present(point, field) ? number(point[field]) : '—'}</td></tr>`)).join('')}</tbody></table></div></details>`;
+  return `${legend}${graph}<div class="chart-labels"><span>${escapeHTML(date(start))}</span><span>${escapeHTML(date(end))}</span></div>${table}`;
 }
 function resource(label, value, percent) {
   return `<div class="resource"><div class="resource-header"><span>${label}</span><strong>${escapeHTML(value)}</strong></div>${percent == null ? '' : `<div class="metric-bar"><span style="width:${Math.min(100,Math.max(0,Number(percent) || 0))}%"></span></div>`}</div>`;
@@ -184,9 +236,10 @@ function telemetry() {
   const selected = selectedServer();
   if (!selected) return emptyState();
   const server = {...selected, ...(state.telemetry?.server || state.telemetry?.current || state.telemetry?.latest || {})};
-  const metricsAvailable = Boolean(server.metricsAvailable);
-  const unavailable = '—';
-  return `<div class="toolbar"><strong>${escapeHTML(server.name)}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('Active players', `${number(server.players)} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', metricsAvailable ? number(server.tickRate, ' TPS') : unavailable, 'pulse')}${stat('World uptime', duration(server.uptimeSeconds), 'clock')}${stat('CPU usage', metricsAvailable ? number(server.cpuPercent, '%') : unavailable, 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(server.status)}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div></div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU', metricsAvailable ? number(server.cpuPercent,'%') : unavailable, metricsAvailable ? server.cpuPercent : null)}${resource('Memory', metricsAvailable ? `${bytes(server.memoryUsedBytes)} / ${bytes(server.memoryLimitBytes)}` : unavailable, metricsAvailable && server.memoryLimitBytes && server.memoryUsedBytes != null ? server.memoryUsedBytes / server.memoryLimitBytes * 100 : null)}${resource('Disk', metricsAvailable ? number(server.diskPercent,'%') : unavailable, metricsAvailable ? server.diskPercent : null)}${resource('Network', metricsAvailable && server.networkBytesPerSecond != null ? `${bytes(server.networkBytesPerSecond)}/s` : unavailable,null)}</section>${telemetryPanels()}</div></div><section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section><section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(server.name)}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>`;
+  server.metrics = state.telemetry?.metrics || server.metrics;
+  const value = (key) => metricValue(server, key);
+  const text = (key, suffix = '') => metricText(server, key, suffix);
+  return `<div class="toolbar"><strong>${escapeHTML(server.name)}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', text('tickRate', ' TPS'), 'pulse')}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(server.status)}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div></div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section><section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(server.name)}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>`;
 }
 function filteredLogs() { return state.logs.split('\n').filter((line) => line.toLowerCase().includes(state.logQuery.toLowerCase())).join('\n'); }
 function telemetryPanels() {
@@ -204,10 +257,11 @@ function maintenance() {
   if (!server) return emptyState();
   const activity = state.events.filter((event) => event.serverId === server.id);
   const changes = activity.filter((event) => ['system', 'update'].includes(event.category));
-  return `<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(server.name)}</p></div>${status(server.status)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>World uptime</dt><dd>${duration(server.uptimeSeconds)}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Waiting for deployment')}</dd></div></dl><div class="action-grid"><div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div></div><p class="inline-note">Restart and update actions require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(server.status)}</dd></div><div><dt>Players connected</dt><dd>${number(server.players)} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
+  return `<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(server.name)}</p></div>${status(server.status)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Waiting for deployment')}</dd></div></dl><div class="action-grid"><div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div></div><p class="inline-note">Restart and update actions require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(server.status)}</dd></div><div><dt>Players connected</dt><dd>${metricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
 }
 function render() {
   if (state.authRequired) { lockedState(); return; }
+  const openCharts = Array.from(document.querySelectorAll('details[data-chart][open]'), (element) => element.dataset.chart);
   const focused = document.activeElement;
   const testId = focused?.getAttribute('data-testid');
   const selection = focused instanceof HTMLInputElement ? [focused.selectionStart, focused.selectionEnd] : null;
@@ -221,6 +275,14 @@ function render() {
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
   $('#server-filter').disabled = !state.servers.length;
   $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance})[state.page]();
+  for (const key of openCharts) {
+    const disclosure = document.querySelector(`details[data-chart="${CSS.escape(key)}"]`);
+    if (disclosure) disclosure.open = true;
+  }
+  if (state.page === 'maintenance' && selectedServer()) {
+    const server = selectedServer();
+    $('#content .lifecycle-details').insertAdjacentHTML('beforeend', `<div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div>`);
+  }
   $('#content').setAttribute('aria-busy','false');
   if (testId) {
     const identity = focused.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : '';
@@ -258,6 +320,7 @@ async function refresh() {
     state.loaded = true;
     if (state.serverId && !state.servers.some((server) => server.id === state.serverId)) state.serverId = '';
     $('#cluster-name').textContent = typeof bootstrap.cluster === 'string' ? bootstrap.cluster : bootstrap.cluster?.name || bootstrap.clusterName || 'Local cluster';
+    state.mode = bootstrap.mode;
     $('#environment').textContent = bootstrap.mode === 'demo' ? 'Demo mode' : 'Kubernetes';
     const eventParams = new URLSearchParams({query:state.page === 'events' ? state.query : '', category:state.page === 'events' ? state.category : '', serverId:state.serverId});
     const eventsPromise = api(`/api/events?${eventParams}`,{signal:controller.signal}).then((result) => { state.events = eventArray(result); });
@@ -289,6 +352,7 @@ async function refresh() {
   }
 }
 function openModal(action) {
+  $('#modal').classList.toggle('create-server-dialog', action === 'add-server');
   modalOpener = document.activeElement;
   state.modalAction = action;
   state.modalServerId = selectedServer()?.id || '';
@@ -299,12 +363,18 @@ function openModal(action) {
   if (action === 'add-server') {
     $('#modal-title').textContent = 'Create a server';
     $('#modal-submit').textContent = 'Deploy server';
-    $('#modal-body').innerHTML = '<p>A new Dragonwilds world, deployed to your Kubernetes cluster.</p><div class="form-grid"><label class="field full">Server name<input name="name" data-testid="server-name" required maxlength="48" placeholder="My Dragonwilds world" autocomplete="off" autofocus></label><label class="field">Namespace<input name="namespace" data-testid="server-namespace" required maxlength="63" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" value="dragonwilds" title="Lowercase letters, numbers, and hyphens; start and end with a letter or number"><small>Lowercase letters, numbers, and hyphens.</small></label><label class="field">Region<input name="region" data-testid="server-region" required maxlength="63" value="local"></label><label class="field full">Owner ID<input name="ownerId" data-testid="server-owner" required maxlength="128" autocomplete="off" placeholder="Your game account ID"><small>The account that owns this world.</small></label><label class="field">Image tag<input name="imageTag" data-testid="server-image" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value="latest" title="A valid container image tag"></label><label class="field">Max players<input name="maxPlayers" data-testid="server-max-players" type="number" min="1" max="64" value="4" required></label></div>';
+    $('#modal-body').innerHTML = '<p>A new Dragonwilds world, deployed to your Kubernetes cluster.</p><div class="form-grid"><label class="field full">Owner Name<input name="name" data-testid="server-name" required maxlength="48" placeholder="Owner display name" autocomplete="off" autofocus></label><label class="field">Namespace<input name="namespace" data-testid="server-namespace" required maxlength="63" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" value="dragonwilds" title="Lowercase letters, numbers, and hyphens; start and end with a letter or number"><small>Lowercase letters, numbers, and hyphens.</small></label><label class="field">Region<input name="region" data-testid="server-region" required maxlength="63" value="local"></label><label class="field full">Owner ID<input name="ownerId" data-testid="server-owner" required maxlength="128" autocomplete="off" placeholder="Your game account ID"><small>The account that owns this world.</small></label><label class="field">Image tag<input name="imageTag" data-testid="server-image" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value="latest" title="A valid container image tag"></label><label class="field">Max players<input name="maxPlayers" data-testid="server-max-players" type="number" min="1" max="64" value="4" required></label></div>';
   } else {
     const server = selectedServer();
     $('#modal-title').textContent = action === 'restart' ? 'Restart this server?' : 'Update server image';
     $('#modal-submit').textContent = action === 'restart' ? 'Confirm restart' : 'Confirm update';
     $('#modal-body').innerHTML = `<p><strong>${escapeHTML(server.name)}</strong> will ${action === 'restart' ? 'restart' : 'restart with the selected image'}. Active players will be disconnected. Wait for a quiet moment before continuing.</p>${action === 'update' ? '<label class="field">Container image tag<input name="imageTag" data-testid="update-image-tag" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="e.g. latest" title="A valid container image tag"><small>Enter the tag to deploy from the configured image repository.</small></label>' : ''}`;
+  }
+  if (action === 'add-server') {
+    $('#modal-body .form-grid').insertAdjacentHTML('beforeend', '<label class="field">Memory limit (MiB)<input name="memoryLimitMiB" data-testid="server-memory-limit" type="number" min="256" max="65536" value="2048" required><small>2048 MiB = 2 GiB. Exceeding this limit can restart the server.</small></label><label class="field">CPU limit (millicores)<input name="cpuLimitMillis" data-testid="server-cpu-limit" type="number" min="100" max="64000" value="1000" required><small>1000 millicores = 1 CPU core. CPU is throttled at this limit.</small></label><p class="field full inline-note">Kubernetes reserves 256 MiB and 100 millicores per game container. Limits are ceilings, not guaranteed capacity. The game may require more memory to start. Player-limit enforcement depends on the game build.</p>');
+    $('[data-testid="server-image"]').value = '0.1.1';
+    $('[data-testid="server-owner"]').parentElement.firstChild.textContent = 'Owner EOS player ID';
+    $('#modal-body .form-grid').insertAdjacentHTML('beforeend', `<label class="field full">Server Name<input name="worldName" data-testid="server-world-name" required maxlength="128" placeholder="My Dragonwilds server"><small>Stored separately from the owner name.</small></label><label class="field">Game UDP port<input name="gamePort" type="number" min="1024" max="65535" value="7777" required></label><label class="field">World storage (GiB)<input name="storageGiB" type="number" min="1" max="2048" value="40" required></label><label class="field full">Service exposure<select name="serviceType"><option value="NodePort">NodePort (local kind testing)</option><option value="ClusterIP">ClusterIP (cluster network only)</option><option value="LoadBalancer">LoadBalancer (requires a provider)</option></select></label><label class="field">Server password<input name="serverPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Empty allows passwordless joins.</small></label><label class="field">Admin password<input name="adminPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Stored in a Kubernetes Secret.</small></label><label class="field full">Administrator EOS IDs<input name="adminIds" maxlength="2048" placeholder="Comma-separated EOS player IDs"></label><label class="field">Logging<select name="debugLevel"><option value="0">Normal</option><option value="1">SteamCMD debug</option><option value="2">Game debug</option><option value="3">SteamCMD and game debug</option></select></label><label class="field">Validate game files<select name="validateGameFiles"><option value="false">No</option><option value="true">Yes (slower startup)</option></select></label><label class="field full">Stop on game update<select name="autoStopOnUpdate"><option value="false">Disabled</option><option value="true">Enabled (game-build dependent)</option></select></label><label class="field full">Additional startup arguments<input name="additionalArgs" maxlength="2048" placeholder="Optional Unreal startup arguments"><small>The player-count override is appended automatically. API authentication is configured automatically.</small></label>`);
   }
   $('#modal').showModal();
   if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
@@ -319,7 +389,7 @@ async function submitModal(event) {
   if (state.modalBusy || !$('#modal-form').reportValidity()) return;
   const values = Object.fromEntries(new FormData($('#modal-form')));
   const action = state.modalAction;
-  const body = action === 'add-server' ? {...values, maxPlayers:Number(values.maxPlayers)} : action === 'update' ? {imageTag:values.imageTag} : {};
+  const body = action === 'add-server' ? {...values, maxPlayers:Number(values.maxPlayers), memoryLimitMiB:Number(values.memoryLimitMiB), cpuLimitMillis:Number(values.cpuLimitMillis), gamePort:Number(values.gamePort), storageGiB:Number(values.storageGiB), debugLevel:Number(values.debugLevel), validateGameFiles:values.validateGameFiles === 'true', autoStopOnUpdate:values.autoStopOnUpdate === 'true'} : action === 'update' ? {imageTag:values.imageTag} : {};
   const path = action === 'add-server' ? '/api/servers' : `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/${action}`;
   state.modalBusy = true;
   $('#modal-form').setAttribute('aria-busy','true');
@@ -380,7 +450,7 @@ async function handleAction(event) {
         await navigator.clipboard.writeText(JSON.stringify(selected,null,2)); notice('Event JSON copied.'); break;
       }
       case 'export-events': exportCSV('rsdw-events.csv',state.events,['timestamp','serverName','category','severity','message','details']); break;
-      case 'export-telemetry': exportCSV('rsdw-telemetry.csv',samples(),['timestamp','players','tickRate','inboundBytesPerSecond','outboundBytesPerSecond']); break;
+      case 'export-telemetry': exportCSV('rsdw-telemetry.csv',telemetryRows(),['timestamp','metric','value','observedAt','status','reason','unit','source']); break;
       case 'export-logs': download('rsdw-server.log',filteredLogs(),'text/plain;charset=utf-8'); notice('Log download ready.'); break;
       case 'refresh-logs': button.disabled = true; await loadLogs(); render(); notice('Server logs refreshed.'); break;
       case 'check-update': {
@@ -428,7 +498,7 @@ document.addEventListener('input',(event) => {
     $('#log-output').textContent = filteredLogs() || 'No log lines match this view.';
   }
 });
-document.addEventListener('change',(event) => { if (event.target.id === 'telemetry-range') { state.range = event.target.value; refresh(); } });
+document.addEventListener('change',(event) => { if (event.target.id === 'telemetry-range') { state.range = event.target.value; state.telemetry = null; refresh(); } });
 window.addEventListener('hashchange',navigate);
 document.addEventListener('visibilitychange',() => { if (!document.hidden && !state.paused && !$('#modal').open) refresh(); });
 setInterval(() => {
