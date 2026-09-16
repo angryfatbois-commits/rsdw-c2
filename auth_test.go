@@ -610,6 +610,30 @@ func TestViewerFiniteMetrics(t *testing.T) {
 	}
 }
 
+func TestOIDCCanonicalPublicOrigin(t *testing.T) {
+	app, issuer := oidcTestApp(t)
+	for _, tc := range []struct{ configured, canonical string }{
+		{"https://CONSOLE.Example:443", "https://console.example"},
+		{"https://CONSOLE.Example:8443", "https://console.example:8443"},
+		{"https://[::1]:443", "https://[::1]"},
+	} {
+		settings := app.auth.settings
+		settings.Origin = tc.configured
+		auth, err := newOIDCAuth(context.Background(), settings, issuer.server.Client().Transport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if auth.settings.Origin != tc.canonical || auth.oauth.RedirectURL != tc.canonical+"/api/auth/callback" {
+			t.Fatal("origin was not canonicalized")
+		}
+		app.auth = auth
+		cookie, csrf := loginAs(t, app, issuer, "viewer")
+		if res := authRequest(app, "POST", "/api/auth/logout", cookie, tc.canonical, csrf, ""); res.Code != 204 {
+			t.Fatal("browser's normalized Origin was denied")
+		}
+	}
+}
+
 func TestReviewLogoutDuringCallback(t *testing.T) {
 	app, issuer := oidcTestApp(t)
 	callback, browser := beginLogin(t, app, issuer, "admin")

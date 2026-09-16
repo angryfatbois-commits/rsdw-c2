@@ -168,6 +168,12 @@ func newOIDCAuth(ctx context.Context, settings oidcSettings, transport http.Roun
 	if !issuerURL(settings.Issuer, false) || !issuerURL(settings.Origin, true) || strings.TrimSpace(settings.ClientID) == "" || settings.ClientSecret == "" || settings.GroupsClaim == "" {
 		return nil, errors.New("OIDC requires an HTTPS issuer, HTTPS public origin without a path, client ID, client secret and groups claim")
 	}
+	origin, _ := url.Parse(settings.Origin)
+	origin.Host = strings.ToLower(origin.Host)
+	if origin.Port() == "443" {
+		origin.Host = strings.TrimSuffix(origin.Host, ":443")
+	}
+	settings.Origin = origin.String()
 	count := 0
 	for _, entries := range [][]string{settings.Policy.AdminSubjects, settings.Policy.ViewerSubjects, settings.Policy.AdminGroups, settings.Policy.ViewerGroups} {
 		for _, entry := range entries {
