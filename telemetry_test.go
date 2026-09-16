@@ -112,7 +112,7 @@ func TestServerJSONOmitsLegacyMetricsOnlyWhenMetricsPresent(t *testing.T) {
 
 func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
 	app, runner, server := fixtureApp(t)
-	app.authToken = "admin-token"
+	app.auth = &Auth{token: "admin-token"}
 	before, err := os.ReadFile(app.store.path)
 	if err != nil {
 		t.Fatal(err)
