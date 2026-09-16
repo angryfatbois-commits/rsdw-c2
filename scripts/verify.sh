@@ -21,13 +21,55 @@ NODE
 go build -o .tmp/rsdw-c2 .
 helm lint charts/rsdw-c2 --set auth.adminTokenSecret.name=rsdw-c2-admin
 helm template rsdw-c2 charts/rsdw-c2 --namespace rsdw-system --set auth.adminTokenSecret.name=rsdw-c2-admin >/tmp/rsdw-c2-manifest.yaml
+helm template rsdw-c2 charts/rsdw-c2 --namespace rsdw-system \
+  --set auth.adminTokenSecret.name=rsdw-c2-admin \
+  --set ingress.enabled=true \
+  --set ingress.ingressClassName=nginx \
+  --set 'ingress.hosts[0]=c2.example.com' \
+  --set 'ingress.hosts[1]=admin.example.com' \
+  --set 'ingress.paths[0].path=/' \
+  --set 'ingress.paths[0].pathType=Prefix' \
+  --set 'ingress.paths[1].path=/api' \
+  --set 'ingress.paths[1].pathType=Prefix' \
+  --set-string 'ingress.annotations.example\.com/auth=enabled' \
+  --set 'ingress.tls[0].secretName=rsdw-c2-tls' \
+  --set 'ingress.tls[0].hosts[0]=c2.example.com' \
+  --show-only templates/ingress.yaml >/tmp/rsdw-c2-ingress.yaml
+helm template rsdw-c2 charts/rsdw-c2 --namespace rsdw-system \
+  --set auth.adminTokenSecret.name=rsdw-c2-admin \
+  --set ingress.enabled=true \
+  --set service.port=9090 >/tmp/rsdw-c2-port-manifest.yaml
 if helm template rsdw-c2 charts/rsdw-c2 >/dev/null 2>&1; then
   printf '%s\n' 'chart rendered without the required admin Secret' >&2
   exit 1
 fi
 grep -q 'kind: Deployment' /tmp/rsdw-c2-manifest.yaml
 grep -q 'kind: ClusterRole' /tmp/rsdw-c2-manifest.yaml
+grep -q 'type: ClusterIP' /tmp/rsdw-c2-manifest.yaml
 grep -q 'containerPort: 8080' /tmp/rsdw-c2-manifest.yaml
+if grep -q 'kind: Ingress' /tmp/rsdw-c2-manifest.yaml; then
+  printf '%s\n' 'chart rendered an Ingress while ingress.enabled=false' >&2
+  exit 1
+fi
+grep -q 'apiVersion: networking.k8s.io/v1' /tmp/rsdw-c2-ingress.yaml
+grep -q 'kind: Ingress' /tmp/rsdw-c2-ingress.yaml
+grep -q 'ingressClassName: "nginx"' /tmp/rsdw-c2-ingress.yaml
+grep -q 'example.com/auth: enabled' /tmp/rsdw-c2-ingress.yaml
+grep -q 'host: "c2.example.com"' /tmp/rsdw-c2-ingress.yaml
+grep -q 'host: "admin.example.com"' /tmp/rsdw-c2-ingress.yaml
+grep -q 'path: "/"' /tmp/rsdw-c2-ingress.yaml
+grep -q 'path: "/api"' /tmp/rsdw-c2-ingress.yaml
+[[ $(grep -c 'path: ' /tmp/rsdw-c2-ingress.yaml) -eq 4 ]]
+grep -q 'pathType: Prefix' /tmp/rsdw-c2-ingress.yaml
+grep -q 'name: rsdw-c2-rsdw-c2' /tmp/rsdw-c2-ingress.yaml
+grep -q 'name: http' /tmp/rsdw-c2-ingress.yaml
+grep -q 'secretName: rsdw-c2-tls' /tmp/rsdw-c2-ingress.yaml
+grep -q 'port: 9090' /tmp/rsdw-c2-port-manifest.yaml
+grep -q 'name: http' /tmp/rsdw-c2-port-manifest.yaml
+if grep -q 'number: 8080' /tmp/rsdw-c2-port-manifest.yaml; then
+  printf '%s\n' 'Ingress backend hard-coded port 8080' >&2
+  exit 1
+fi
 
 test_dir=$(mktemp -d -t rsdw-c2-verify.XXXXXX)
 RSDW_DEMO_DATA=true RSDW_STATE_FILE="$test_dir/state.json" RSDW_LISTEN_ADDR="127.0.0.1:0" .tmp/rsdw-c2 >"$test_dir/server.log" 2>&1 &

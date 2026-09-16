@@ -44,6 +44,28 @@ The Service is a `ClusterIP`. Use a port-forward or put it behind your existing 
 kubectl -n rsdw-system port-forward service/rsdw-c2-rsdw-c2 8080:8080
 ```
 
+To create an Ingress, add these values to a file and pass it to Helm with `-f`.
+
+```yaml
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  annotations: {}
+  hosts:
+    - c2.example.com
+  paths:
+    - path: /
+      pathType: Prefix
+  tls:
+    - secretName: rsdw-c2-tls
+      hosts:
+        - c2.example.com
+```
+
+The TLS Secret must contain `tls.crt` and `tls.key` in the release namespace. The UI uses root-relative asset and API URLs, so serve it at `/`. Subpath prefixes such as `/c2` are not supported.
+
+If an authentication proxy sits in front of the Ingress, configure it to forward the browser's `Authorization: Bearer <admin-token>` header unchanged. RSDW C2 validates that bearer token against the required admin token Secret.
+
 The ServiceAccount can create and update the resources that the Dragonwilds chart uses. The chart refuses to install without the admin token Secret. Install the console in a cluster or namespace reserved for these servers. Review the rendered `ClusterRole` before using it in a shared cluster.
 
 ## Configure the server chart
