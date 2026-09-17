@@ -33,8 +33,9 @@ jobs:
       - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
         with:
           version: v4.2.2
-      - run: bash scripts/verify.sh
       - run: npm ci --ignore-scripts
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: bash scripts/verify.sh
       - name: Check workflow and publication guards offline
         run: node --test .github/release.test.mjs
 

@@ -157,14 +157,16 @@ The source chart requires an EOS owner ID and an existing API-token Secret. RSDW
 Run the deterministic checks.
 
 ```sh
+npm ci --ignore-scripts
+npx --no-install playwright install chromium
 bash scripts/verify.sh
 ```
 
 The checks cover Go tests, signed-token OIDC flows and rejection cases, the built service, the demo API, UI capability and stale-response tests, CSV tests, and positive and negative chart renders. Each run uses fresh state and automatically assigned ports. Run `go test -race ./...` for race checks. The [local OIDC browser fixture](docs/oidc.md#run-the-local-browser-fixture) supports independent browser testing without a cluster.
 
-With Playwright and Chromium available, run `node tests/users-browser.cjs` after `bash scripts/verify.sh` for the authenticated Saved IDs browser flow. Set `NODE_PATH` if Playwright is installed outside the project, and `RSDW_TEST_CHROMIUM` to use a specific Chromium executable. The test uses temporary state and demo mode without a Kubernetes cluster.
+The required verification path runs the authenticated Saved IDs and Integrations browser flows in Chromium. CI installs Chromium and its system dependencies before verification. Set `RSDW_TEST_CHROMIUM` to use a specific Chromium executable locally. Both tests use temporary state and demo mode without a Kubernetes cluster.
 
-Admins can configure Discord bots in Integrations with Kubernetes Secret references, server associations, and event rules. See [Discord alerts](docs/integrations.md) for setup, event definitions, and delivery guarantees. Run `node tests/integrations-browser.cjs` for its demo configuration and delivery flow.
+Admins can configure Discord bots in Integrations with Kubernetes Secret references, server associations, and event rules. See [Discord alerts](docs/integrations.md) for setup, event definitions, and delivery guarantees. After building the application, run `node tests/users-browser.cjs` or `node tests/integrations-browser.cjs` to repeat one browser flow.
 
 The workflow has additional offline regression tests for its own publication logic. These use fake registry commands, real local Helm packaging, and the configured release-notes generator with a literal `feat(chart)` commit. They do not create Git tags, contact GHCR, or publish anything.
 

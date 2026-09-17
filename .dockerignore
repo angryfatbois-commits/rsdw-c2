@@ -8,3 +8,4 @@ scripts
 charts
 .tmp
 outputs
+node_modules

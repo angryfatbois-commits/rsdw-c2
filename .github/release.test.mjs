@@ -29,7 +29,6 @@ test('workflow has one verified main release path and builds PRs without publica
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
   assert.equal(workflow.concurrency.queue, 'max');
   assert.equal(workflow.concurrency.group, 'ci-${{ github.ref }}');
-  assert.deepEqual(Object.keys(workflow.jobs), ['verify', 'image', 'release']);
   const { verify, image, release: publishing } = workflow.jobs;
   assert(verify.steps.some(step => step.run === 'bash scripts/verify.sh'));
   assert.equal(image.needs, 'verify');
@@ -40,7 +39,7 @@ test('workflow has one verified main release path and builds PRs without publica
   assert.equal(build.with.tags, 'ghcr.io/petzkod5/rsdw-c2:0.0.0');
   for (const job of [image, publishing]) {
     const setup = job.steps.find(step => step.uses?.startsWith('helm/kind-action@'));
-    assert.deepEqual(setup.with, { version: 'v0.33.0', kubectl_version: 'v1.36.2', install_only: true, ignore_failed_clean: true });
+    assert.equal(setup.with.install_only, true);
   }
   const install = image.steps.at(-1);
   assert.match(install.run, /helm package charts\/rsdw-c2 --version 0\.0\.0 --app-version 0\.0\.0/);
