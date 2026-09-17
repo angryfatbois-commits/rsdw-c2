@@ -156,9 +156,9 @@ func oidcTestApp(t *testing.T) (*App, *testIssuer) {
 	return app, i
 }
 
-func authRequest(app *App, method, path string, cookie *http.Cookie, origin, csrf, body string) *httptest.ResponseRecorder {
+func authRequest(app *App, method, path string, cookies []*http.Cookie, origin, csrf, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
-	if cookie != nil {
+	for _, cookie := range cookies {
 		r.AddCookie(cookie)
 	}
 	r.Header.Set("Origin", origin)
@@ -168,9 +168,9 @@ func authRequest(app *App, method, path string, cookie *http.Cookie, origin, csr
 	return w
 }
 
-func beginLogin(t *testing.T, app *App, issuer *testIssuer, role string, cookies ...*http.Cookie) (string, *http.Cookie) {
+func beginLogin(t *testing.T, app *App, issuer *testIssuer, role string, cookies ...[]*http.Cookie) (string, []*http.Cookie) {
 	t.Helper()
-	var browser *http.Cookie
+	var browser []*http.Cookie
 	if len(cookies) > 0 {
 		browser = cookies[0]
 	}
@@ -192,10 +192,10 @@ func beginLogin(t *testing.T, app *App, issuer *testIssuer, role string, cookies
 	if response.StatusCode != 302 {
 		t.Fatalf("issuer = %d", response.StatusCode)
 	}
-	return response.Header.Get("Location"), start.Result().Cookies()[0]
+	return response.Header.Get("Location"), start.Result().Cookies()
 }
 
-func loginAs(t *testing.T, app *App, issuer *testIssuer, role string, cookies ...*http.Cookie) (*http.Cookie, string) {
+func loginAs(t *testing.T, app *App, issuer *testIssuer, role string, cookies ...[]*http.Cookie) ([]*http.Cookie, string) {
 	t.Helper()
 	callback, browser := beginLogin(t, app, issuer, role, cookies...)
 	response := authRequest(app, "GET", callback, browser, "", "", "")
@@ -207,7 +207,8 @@ func loginAs(t *testing.T, app *App, issuer *testIssuer, role string, cookies ..
 			if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Domain != "" || cookie.Path != "/" || cookie.MaxAge > 3600 {
 				t.Fatalf("unsafe cookie: %+v", cookie)
 			}
-			discovery := authRequest(app, "GET", "/api/auth", cookie, "", "", "")
+			cookies := append([]*http.Cookie{cookie}, browser...)
+			discovery := authRequest(app, "GET", "/api/auth", cookies, "", "", "")
 			var data struct {
 				CSRF string `json:"csrfToken"`
 				Role string `json:"role"`
@@ -215,7 +216,7 @@ func loginAs(t *testing.T, app *App, issuer *testIssuer, role string, cookies ..
 			if err := json.Unmarshal(discovery.Body.Bytes(), &data); err != nil || data.Role != role || data.CSRF == "" {
 				t.Fatalf("discovery: %s", discovery.Body.String())
 			}
-			return cookie, data.CSRF
+			return cookies, data.CSRF
 		}
 	}
 	t.Fatal("no session cookie")
@@ -274,7 +275,7 @@ func TestOIDCRejectsInvalidClaims(t *testing.T) {
 func TestOIDCStateReplayAndExpiry(t *testing.T) {
 	app, issuer := oidcTestApp(t)
 	callback, browser := beginLogin(t, app, issuer, "admin")
-	for _, cookie := range []*http.Cookie{nil, {Name: loginCookie, Value: "wrong"}} {
+	for _, cookie := range [][]*http.Cookie{nil, {{Name: loginCookie, Value: "wrong"}}} {
 		if res := authRequest(app, "GET", callback, cookie, "", "", ""); !strings.Contains(res.Header().Get("Location"), "failed") {
 			t.Fatal("browser binding bypass")
 		}
@@ -298,9 +299,9 @@ func TestOIDCStateReplayAndExpiry(t *testing.T) {
 	}
 	cookie, _ := loginAs(t, app, issuer, "admin")
 	app.auth.mu.Lock()
-	s := app.auth.sessions[cookie.Value]
+	s := app.auth.sessions[cookie[0].Value]
 	s.Expires = time.Now().Add(-time.Second)
-	app.auth.sessions[cookie.Value] = s
+	app.auth.sessions[cookie[0].Value] = s
 	app.auth.mu.Unlock()
 	if res := authRequest(app, "GET", "/api/bootstrap", cookie, "", "", ""); res.Code != 401 {
 		t.Fatal("expired session accepted")
@@ -368,7 +369,9 @@ func TestOIDCRoutePolicyAndZeroEffects(t *testing.T) {
 	}
 	for _, bearer := range []string{"Bearer fixture-secret", "Bearer old-admin"} {
 		r := httptest.NewRequest("GET", "/api/bootstrap", nil)
-		r.AddCookie(admin)
+		for _, cookie := range admin {
+			r.AddCookie(cookie)
+		}
 		r.Header.Set("Authorization", bearer)
 		r.Header.Set("X-Forwarded-User", "admin")
 		w := httptest.NewRecorder()
@@ -459,7 +462,7 @@ func TestOIDCAmbiguityAndAuthenticatedLogin(t *testing.T) {
 	}
 	for _, name := range []string{loginCookie, sessionCookie} {
 		r := httptest.NewRequest("GET", callback, nil)
-		r.AddCookie(browser)
+		r.AddCookie(browser[0])
 		r.AddCookie(&http.Cookie{Name: name, Value: "first"})
 		r.AddCookie(&http.Cookie{Name: name, Value: "second"})
 		w := httptest.NewRecorder()
@@ -475,8 +478,9 @@ func TestOIDCAmbiguityAndAuthenticatedLogin(t *testing.T) {
 		t.Fatal("authenticated login created transaction")
 	}
 	r := httptest.NewRequest("POST", "/api/auth/logout", nil)
-	r.AddCookie(admin)
-	r.AddCookie(browser)
+	for _, cookie := range admin {
+		r.AddCookie(cookie)
+	}
 	r.Header.Set("Origin", app.auth.settings.Origin)
 	r.Header.Set("X-CSRF-Token", csrf)
 	w := httptest.NewRecorder()
@@ -484,8 +488,8 @@ func TestOIDCAmbiguityAndAuthenticatedLogin(t *testing.T) {
 	if w.Code != 204 {
 		t.Fatal(w.Code)
 	}
-	if res := authRequest(app, "GET", callback, browser, "", "", ""); !strings.Contains(res.Header().Get("Location"), "failed") {
-		t.Fatal("callback resurrected logged-out session")
+	if res := authRequest(app, "GET", callback, nil, "", "", ""); !strings.Contains(res.Header().Get("Location"), "failed") {
+		t.Fatal("callback accepted without logged-out binding")
 	}
 }
 
@@ -500,7 +504,7 @@ func TestOIDCSessionLimits(t *testing.T) {
 	}
 	issuer.mu.Unlock()
 	cookie, _ := loginAs(t, app, issuer, "admin")
-	if got := app.auth.sessions[cookie.Value].Expires; !got.Equal(expiry) {
+	if got := app.auth.sessions[cookie[0].Value].Expires; !got.Equal(expiry) {
 		t.Fatalf("expiry = %s", got)
 	}
 	for range 3 {
@@ -508,7 +512,7 @@ func TestOIDCSessionLimits(t *testing.T) {
 			t.Fatal(res.Code)
 		}
 	}
-	if !app.auth.sessions[cookie.Value].Expires.Equal(expiry) {
+	if !app.auth.sessions[cookie[0].Value].Expires.Equal(expiry) {
 		t.Fatal("poll renewed session")
 	}
 	for index := len(app.auth.sessions); index < maxSessions; index++ {
@@ -518,7 +522,7 @@ func TestOIDCSessionLimits(t *testing.T) {
 	if res := authRequest(app, "GET", callback, browser, "", "", ""); !strings.Contains(res.Header().Get("Location"), "failed") {
 		t.Fatal("session capacity exceeded")
 	}
-	if _, ok := app.auth.sessions[cookie.Value]; !ok {
+	if _, ok := app.auth.sessions[cookie[0].Value]; !ok {
 		t.Fatal("active session evicted")
 	}
 	for index := range maxLogins {
@@ -656,7 +660,7 @@ func TestReviewLogoutDuringCallback(t *testing.T) {
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		r := httptest.NewRequest("GET", callback, nil)
-		r.AddCookie(browser)
+		r.AddCookie(browser[0])
 		w := httptest.NewRecorder()
 		app.ServeHTTP(w, r)
 		done <- w
@@ -664,8 +668,9 @@ func TestReviewLogoutDuringCallback(t *testing.T) {
 	<-entered
 	admin, csrf := loginAs(t, app, issuer, "viewer")
 	r := httptest.NewRequest("POST", "/api/auth/logout", nil)
-	r.AddCookie(admin)
-	r.AddCookie(browser)
+	for _, cookie := range admin {
+		r.AddCookie(cookie)
+	}
 	r.Header.Set("Origin", app.auth.settings.Origin)
 	r.Header.Set("X-CSRF-Token", csrf)
 	w := httptest.NewRecorder()
@@ -683,7 +688,7 @@ func TestReviewLogoutDuringCallback(t *testing.T) {
 	}
 	for _, cookie := range res.Result().Cookies() {
 		if cookie.Name == sessionCookie && cookie.Value != "" {
-			if got := authRequest(app, "GET", "/api/bootstrap", cookie, "", "", "").Code; got == http.StatusOK {
+			if got := authRequest(app, "GET", "/api/bootstrap", []*http.Cookie{cookie}, "", "", "").Code; got == http.StatusOK {
 				t.Fatal("callback minted a working admin session after successful logout")
 			}
 		}
@@ -719,10 +724,10 @@ func TestOIDCNewLoginSupersedesInFlightCallback(t *testing.T) {
 			}
 			viewer, csrf := loginAs(t, app, issuer, "viewer", browser)
 			app.auth.mu.Lock()
-			lineage := app.auth.sessions[viewer.Value].Browser
+			lineage := app.auth.sessions[viewer[0].Value].Browser
 			app.auth.mu.Unlock()
-			if lineage != browser.Value {
-				t.Fatal("new login lost browser lineage")
+			if lineage == browser[0].Value {
+				t.Fatal("new login reused browser binding")
 			}
 			if logout {
 				if res := authRequest(app, "POST", "/api/auth/logout", viewer, app.auth.settings.Origin, csrf, ""); res.Code != 204 {

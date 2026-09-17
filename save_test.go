@@ -448,7 +448,7 @@ func TestSaveUploadOIDCRolesAndCSRF(t *testing.T) {
 	runner := &saveRunner{t: t}
 	app.orchestrator = &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "chart"}
 	for _, tc := range []struct {
-		cookie       *http.Cookie
+		cookie       []*http.Cookie
 		origin, csrf string
 		status       int
 	}{
@@ -460,8 +460,8 @@ func TestSaveUploadOIDCRolesAndCSRF(t *testing.T) {
 	} {
 		req := validSaveRequest(t)
 		req.Header.Del("Authorization")
-		if tc.cookie != nil {
-			req.AddCookie(tc.cookie)
+		for _, cookie := range tc.cookie {
+			req.AddCookie(cookie)
 		}
 		req.Header.Set("Origin", tc.origin)
 		req.Header.Set("X-CSRF-Token", tc.csrf)

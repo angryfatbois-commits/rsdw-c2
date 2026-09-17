@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -273,13 +272,20 @@ func (a *Auth) authenticate(r *http.Request) (Principal, authSession) {
 		return Principal{}, authSession{}
 	}
 	cookie, err := r.Cookie(sessionCookie)
-	if err != nil {
+	if err != nil || len(r.CookiesNamed(sessionCookie)) != 1 {
+		return Principal{}, authSession{}
+	}
+	browser, err := r.Cookie(loginCookie)
+	if err != nil || len(r.CookiesNamed(loginCookie)) != 1 {
 		return Principal{}, authSession{}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.prune(time.Now())
 	session := a.sessions[cookie.Value]
+	if session.Browser == "" || subtle.ConstantTimeCompare([]byte(browser.Value), []byte(session.Browser)) != 1 {
+		return Principal{}, authSession{}
+	}
 	return session.Principal, session
 }
 
@@ -419,9 +425,6 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.prune(time.Now())
 	if previous, err := r.Cookie(loginCookie); err == nil {
-		if decoded, err := hex.DecodeString(previous.Value); err == nil && len(decoded) == 24 {
-			browser = previous.Value
-		}
 		for key, tx := range a.pending {
 			if tx.Browser == previous.Value {
 				delete(a.pending, key)
@@ -436,7 +439,7 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	a.pending[state] = transaction
 	a.mu.Unlock()
-	authCookie(w, loginCookie, browser, transaction.Expires)
+	authCookie(w, loginCookie, browser, time.Now().Add(2*time.Hour))
 	http.Redirect(w, r, a.oauth.AuthCodeURL(state, oauth2.S256ChallengeOption(transaction.Verifier), oidc.Nonce(nonce)), http.StatusFound)
 }
 
@@ -564,7 +567,6 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	a.sessions[sessionID] = authSession{Principal: Principal{Subject: id.Subject, Role: role}, CSRF: csrf, Expires: expires, Browser: transaction.Browser}
 	a.mu.Unlock()
-	authCookie(w, loginCookie, "", time.Unix(1, 0))
 	authCookie(w, sessionCookie, sessionID, expires)
 	http.Redirect(w, r, a.settings.Origin+"/", http.StatusSeeOther)
 }

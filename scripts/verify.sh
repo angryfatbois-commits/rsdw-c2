@@ -23,6 +23,7 @@ NODE
 go build -o .tmp/rsdw-c2 .
 node tests/users-browser.cjs
 node tests/integrations-browser.cjs
+node tests/oidc-browser.cjs
 helm lint charts/rsdw-c2 --set auth.adminTokenSecret.name=rsdw-c2-admin
 helm template rsdw-c2 charts/rsdw-c2 --namespace rsdw-system --set auth.adminTokenSecret.name=rsdw-c2-admin >/tmp/rsdw-c2-manifest.yaml
 helm template rsdw-c2 charts/rsdw-c2 --namespace rsdw-system \
