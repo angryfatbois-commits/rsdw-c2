@@ -855,6 +855,23 @@ func TestKubeOrchestratorRefreshOnlyDiscoversImage(t *testing.T) {
 	}
 }
 
+func TestKubeOrchestratorRefreshRejectsImageFromNonRunningContainer(t *testing.T) {
+	runner := &telemetryRunner{}
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "get pods") {
+			pending := strings.Replace(fixturePod(), `"phase":"Running"`, `"phase":"Pending"`, 1)
+			pending = strings.Replace(pending, `"containerStatuses":[{"name":"server","containerID":"container-id","ready":true,"state":{"running":{"startedAt":"2026-01-01T00:00:00Z"}}}]`, `"containerStatuses":[{"name":"server","ready":false,"state":{"waiting":{"reason":"ContainerCreating"}}}]`, 1)
+			return []byte(`{"items":[` + pending + `]}`), nil, true
+		}
+		return nil, nil, false
+	}
+	orchestrator := &kubeOrchestrator{runner: runner, kubectl: "kubectl"}
+	server := Server{Release: "world", Namespace: "games", DesiredImage: "example/server:1"}
+	if _, err := orchestrator.Refresh(context.Background(), server); err == nil || err.Error() != "server container is not running" {
+		t.Fatalf("refresh error = %v, want non-running container error", err)
+	}
+}
+
 func TestCheckUpdateRejectsMissingObservedImage(t *testing.T) {
 	k, runner, server := collectorFixture()
 	server.CurrentImage = "example/server:old"
@@ -935,6 +952,30 @@ func TestKubeOrchestratorUsesChartContract(t *testing.T) {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("deployment command missing %q in:\n%s", expected, joined)
 		}
+	}
+}
+
+func TestKubeOrchestratorPreservesObservedImageReference(t *testing.T) {
+	for _, tc := range []struct {
+		name, image, repository, setting string
+	}{
+		{"registry port and tag", "registry.example:5000/rsdw/server:2026.09", "image.repository=registry.example:5000/rsdw/server", "image.tag=2026.09"},
+		{"digest", "registry.example/rsdw/server@sha256:" + strings.Repeat("a", 64), "image.repository=registry.example/rsdw/server", "image.digest=sha256:" + strings.Repeat("a", 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &recordingRunner{}
+			orchestrator := &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "chart", imageRepository: "configured/server"}
+			if err := orchestrator.Deploy(context.Background(), Server{Release: "world", Namespace: "games", Name: "World", OwnerID: "eos-1", DesiredImage: tc.image}); err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(runner.calls, "\n")
+			if !strings.Contains(joined, "--set-string "+tc.repository) || !strings.Contains(joined, "--set-string "+tc.setting) {
+				t.Fatalf("deployment did not preserve %s:\n%s", tc.image, joined)
+			}
+			if strings.Contains(joined, "image.repository=configured/server") {
+				t.Fatalf("deployment used configured repository:\n%s", joined)
+			}
+		})
 	}
 }
 

@@ -34,7 +34,7 @@ const state = {
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   query: '', category: '', range: '60s', telemetry: null, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
-  modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, request: null,
+  modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, modalInitialSettings: {}, request: null,
   authRequired: false, loginBusy: false, authMode: '', identity: '', csrfToken: '', role: 'denied', capabilities: {}, epoch: 0, logoutCSRF: '', signInFailed: false,
 };
 const tokenKey = 'rsdw-admin-token';
@@ -42,7 +42,7 @@ let searchTimer;
 let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
-const can = (capability) => state.capabilities[({users:'create', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations'})[capability] || capability] === true;
+const can = (capability) => state.capabilities[({users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations'})[capability] || capability] === true;
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
 
 function number(value, suffix = '') {
@@ -119,7 +119,7 @@ function clearProtectedState() {
   state.request?.abort();
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, identity:'', csrfToken:'', capabilities:{}, role:'denied'});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, identity:'', csrfToken:'', capabilities:{}, role:'denied'});
   Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:''});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
@@ -419,6 +419,7 @@ function render() {
   }
   if (state.page === 'maintenance' && selectedServer() && !state.deletions[selectedServer().id]) {
     const server = selectedServer();
+    if (can('edit-settings')) $('#content .action-grid').insertAdjacentHTML('beforeend', '<div class="action-card"><button data-action="edit-settings" data-testid="edit-settings">Edit settings</button><p>Change creator, world name, player limit, memory, and CPU. Requires a rollout.</p></div>');
     $('#content .lifecycle-details').insertAdjacentHTML('beforeend', `<div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div>`);
     $('#content .lifecycle-details').insertAdjacentHTML('beforeend', `<div><dt>Creator</dt><dd>${escapeHTML(server.name || 'Not recorded')}</dd></div><div><dt>Stable server ID</dt><dd class="mono">${escapeHTML(server.id)}</dd></div>`);
     if (can('delete')) $('#content .action-grid').insertAdjacentHTML('beforeend', '<div class="action-card"><button class="danger" data-action="delete" data-testid="delete-server">Delete server</button><p>Disconnect players and remove this server. Keep world data by default.</p></div>');
@@ -504,6 +505,18 @@ async function refresh() {
     if (sequence === refreshSequence) { state.refreshing = false; $('#refresh').disabled = false; }
   }
 }
+function editSettingsValues(server) {
+  return {name:server.name || '', worldName:server.worldName || server.name || '', maxPlayers:server.maxPlayers, memoryLimitMiB:server.memoryLimitMiB || 2048, cpuLimitMillis:server.cpuLimitMillis || 1000};
+}
+function editSettingsPatch(initial, values) {
+  const patch = {};
+  for (const key of Object.keys(initial)) {
+    const value = ['name','worldName'].includes(key) ? values[key].trim() : Number(values[key]);
+    if (value !== initial[key]) patch[key] = value;
+  }
+  if (patch.worldName !== undefined) patch.confirmWorldName = values.confirmWorldName === 'true';
+  return Object.keys(patch).length ? {...patch, confirm:true} : null;
+}
 function openModal(action, userId = '') {
   if (!can(action === 'add-server' ? 'create' : action)) return;
   $('#modal').classList.toggle('create-server-dialog', action === 'add-server');
@@ -531,6 +544,13 @@ function openModal(action, userId = '') {
     $('#modal-body').innerHTML = action === 'delete-user'
       ? `<p>Delete <strong>${escapeHTML(user.name)}</strong> from saved IDs? Existing servers keep their owner ID.</p>`
       : `<label class="field">Display name<input name="name" data-testid="user-name" required maxlength="48" value="${escapeHTML(user?.name || '')}" autocomplete="off" autofocus></label><label class="field">RSDW / EOS player ID<input name="playerId" data-testid="user-player-id" required maxlength="128" pattern="[0-9a-fA-F]{32}" value="${escapeHTML(user?.playerId || '')}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Copy the Player ID from the game's Settings menu. Each ID can be saved once.</small></label>`;
+  } else if (action === 'edit-settings') {
+    const server = selectedServer();
+    state.modalInitialSettings = editSettingsValues(server);
+    const image = server.currentImage ? `Running image ${escapeHTML(server.currentImage)}${server.desiredImage && server.desiredImage !== server.currentImage ? ` · Pending image ${escapeHTML(server.desiredImage)}` : ''}` : `Image ${escapeHTML(server.desiredImage || 'Not recorded')}`;
+    $('#modal-title').textContent = 'Edit server settings';
+    $('#modal-submit').textContent = 'Confirm and apply settings';
+    $('#modal-body').innerHTML = `<p>Stable ID <code>${escapeHTML(server.id)}</code> · Release <code>${escapeHTML(server.namespace)}/${escapeHTML(server.release)}</code></p><p>Stable identity and deployment settings are not editable here: Owner ID ${escapeHTML(server.ownerId || 'Not recorded')} · ${image} · Storage ${escapeHTML(server.storageGiB || 40)} GiB · Port ${escapeHTML(server.gamePort || 7777)} · Service ${escapeHTML(server.serviceType || 'LoadBalancer')}</p><p>Applying changes replaces the game pod and can disconnect active players. This is not hot reload. The existing PVC is retained. C2 performs no save-file rename or migration. Whether this game build renames or selects an existing save from the world name is unverified.</p><div class="form-grid">${[['name','Creator name','text',1,48],['worldName','World name','text',1,2048],['maxPlayers','Max players','number',1,64],['memoryLimitMiB','Memory limit (MiB)','number',256,67584],['cpuLimitMillis','CPU limit (millicores)','number',100,64000]].map(([key,label,type,min,max]) => `<label class="field">${label}<input name="${key}" data-testid="edit-${key}" type="${type}" ${type === 'number' ? `min="${min}" max="${max}" step="1"` : `maxlength="${max}"`} required value="${escapeHTML(state.modalInitialSettings[key])}"></label>`).join('')}</div><label class="field full"><span><input type="checkbox" name="confirmWorldName" value="true" data-testid="confirm-world-name"> I understand that C2 does not rename or migrate save files, and that this game build's world-name save behavior is unverified.</span></label><p id="edit-status" role="status" aria-live="polite">Confirm to request a rollout. Rollout readiness is not verified by this operation.</p>`;
   } else if (action === 'delete') {
     const server = state.servers.find((item) => item.id === state.modalServerId);
     const receipt = state.deletions[state.modalServerId];
@@ -561,7 +581,8 @@ function openModal(action, userId = '') {
   if (action === 'add-integration' || action === 'edit-integration') {
     $('#modal-title').tabIndex = -1;
     $('#modal-title').focus();
-  } else if (action === 'add-user' || action === 'edit-user') $('[data-testid="user-name"]').focus();
+  } else if (action === 'edit-settings') $('[data-testid="edit-name"]').focus();
+  else if (action === 'add-user' || action === 'edit-user') $('[data-testid="user-name"]').focus();
   else if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
 }
 async function loadImageTags() {
@@ -601,6 +622,7 @@ function updateResources() {
 function closeModal() {
   if (state.modalBusy) return;
   $('#modal').close();
+  state.modalInitialSettings = {};
   modalOpener?.focus();
 }
 function createRequestBody(values) {
@@ -622,6 +644,19 @@ async function submitModal(event) {
   const action = state.modalAction;
   let body, path, method = 'POST', message;
   switch (action) {
+    case 'edit-settings':
+      body = editSettingsPatch(state.modalInitialSettings, values);
+      if (!body) { closeModal(); notice('No settings changed. No rollout requested.'); return; }
+      if (body.worldName !== undefined && !body.confirmWorldName) {
+        $('#modal-error').textContent = 'Acknowledge the world-name save warning before applying this change.';
+        $('#modal-error').hidden = false;
+        $('[data-testid="confirm-world-name"]').focus();
+        return;
+      }
+      path = `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/edit-settings`;
+      message = 'Settings apply requested. Rollout is in progress; readiness is not yet verified.';
+      $('#edit-status').textContent = 'Applying settings. This request cannot be cancelled; wait for the result.';
+      break;
     case 'delete':
       body = {confirm:state.modalServerId, mode:values.mode, ...(values.mode === 'purge' ? {purgeConfirm:values.purgeConfirm} : {})};
       path = `/api/servers/${encodeURIComponent(state.modalServerId)}`;
@@ -664,11 +699,13 @@ async function submitModal(event) {
     closeModal();
     notice(message);
     await refresh();
+    if (action === 'edit-settings') $('[data-testid="edit-settings"]')?.focus();
   } catch (error) {
     if (epoch !== state.epoch || error.name === 'AbortError') return;
     if (action === 'delete') await refresh();
     $('#modal-error').textContent = error.message;
     $('#modal-error').hidden = false;
+    if (action === 'edit-settings') $('#edit-status').textContent = 'Apply failed. Review the error, inspect the release if needed, then retry or cancel.';
     $('#modal-error').focus();
   } finally {
     state.modalBusy = false;
@@ -697,7 +734,7 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
-  const permission = {'add-server':'create', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs'}[action];
+  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs'}[action];
   if (permission && !can(permission)) return;
   try {
     switch (action) {
@@ -713,7 +750,7 @@ async function handleAction(event) {
         updateResources();
         break;
       }
-      case 'add-server': case 'restart': case 'update': openModal(action); break;
+      case 'add-server': case 'restart': case 'update': case 'edit-settings': openModal(action); break;
       case 'delete': openModal(action, button.dataset.id); break;
       case 'add-user': case 'edit-user': case 'delete-user': openModal(action, button.dataset.id); break;
       case 'add-integration': case 'edit-integration': openModal(action, button.dataset.id); break;

@@ -260,13 +260,18 @@ func TestRetentionRangeAndDeletion(t *testing.T) {
 
 type blockingTelemetryRunner struct {
 	base    *telemetryRunner
+	block   string
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
 }
 
 func (r *blockingTelemetryRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if strings.Contains(strings.Join(args, " "), "get deployment") {
+	block := r.block
+	if block == "" {
+		block = "get deployment"
+	}
+	if strings.Contains(strings.Join(args, " "), block) {
 		r.once.Do(func() { close(r.started) })
 		select {
 		case <-r.release:
@@ -279,7 +284,7 @@ func (r *blockingTelemetryRunner) Run(ctx context.Context, name string, args ...
 
 func TestConcurrentDesiredSettingsSurviveCollection(t *testing.T) {
 	app, runner, server := fixtureApp(t)
-	blocking := &blockingTelemetryRunner{base: runner, started: make(chan struct{}), release: make(chan struct{})}
+	blocking := &blockingTelemetryRunner{base: runner, block: "get deployment", started: make(chan struct{}), release: make(chan struct{})}
 	app.orchestrator.(*kubeOrchestrator).runner = blocking
 	done := make(chan struct{})
 	go func() { app.collectTelemetry(context.Background()); close(done) }()
@@ -303,6 +308,23 @@ func TestConcurrentDesiredSettingsSurviveCollection(t *testing.T) {
 		t.Fatalf("read join lost desired settings %+v", got)
 	}
 	expectMetric(t, got.Metrics, "cpuLimitCores", "available", number(.5))
+}
+
+func TestCollectorDropsObservationSupersededByPendingRollout(t *testing.T) {
+	app, runner, server := fixtureApp(t)
+	blocking := &blockingTelemetryRunner{base: runner, block: "/api/metrics", started: make(chan struct{}), release: make(chan struct{})}
+	app.orchestrator.(*kubeOrchestrator).runner = blocking
+	done := make(chan struct{})
+	go func() { app.collectTelemetry(context.Background()); close(done) }()
+	<-blocking.started
+	app.markTelemetryPending(server)
+	close(blocking.release)
+	<-done
+
+	visible := app.telemetryFor(server, "60s").Server
+	if visible.Status != StatusStarting || visible.CurrentImage != server.CurrentImage || visible.MetricsAvailable {
+		t.Fatalf("late collection replaced pending telemetry: %+v", visible)
+	}
 }
 
 func TestConcurrentReadsCollectionAndUpdates(t *testing.T) {
