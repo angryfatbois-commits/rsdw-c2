@@ -219,7 +219,7 @@ type deletionResource struct {
 	Kind       string            `json:"kind"`
 	Metadata   kubeMetadata      `json:"metadata"`
 	Spec       json.RawMessage   `json:"spec"`
-	Data       map[string][]byte `json:"data"`
+	Data       map[string]string `json:"data"`
 	Status     struct {
 		Phase string `json:"phase"`
 	} `json:"status"`
@@ -272,7 +272,11 @@ func (k *kubeOrchestrator) deletionRelease(ctx context.Context, namespace, name 
 		return release, storage, err
 	}
 	for _, item := range items {
-		encoded, err := base64.StdEncoding.DecodeString(string(item.Data["release"]))
+		secretData, err := base64.StdEncoding.DecodeString(item.Data["release"])
+		if err != nil {
+			return release, storage, errors.New("cannot decode Helm Secret data; repair it before deletion")
+		}
+		encoded, err := base64.StdEncoding.DecodeString(string(secretData))
 		if err != nil {
 			return release, storage, errors.New("cannot decode Helm release storage; repair it before deletion")
 		}
