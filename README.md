@@ -9,6 +9,7 @@ The console supports these operations:
 - Save named player IDs and select one when creating a server.
 - Read live server health, player count, uptime, and logs; show resource metrics when a metrics source is available.
 - Restart a server after confirmation.
+- Delete a server while keeping its world by default, or explicitly purge its world PVC. See [server deletion](docs/server-deletion.md) for receipts, retries, and storage limits.
 - Detect image drift and push a new image tag after confirmation.
 
 Backups remain unavailable until a backup producer exists. Discord integrations are available to admins; see [Discord alerts](docs/integrations.md) for their event and delivery contracts.

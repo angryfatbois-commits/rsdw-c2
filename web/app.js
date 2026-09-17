@@ -362,7 +362,14 @@ function deletionReceipts() {
   if (!can('delete')) return '';
   const records = Object.values(state.deletions);
   if (!records.length) return '';
-  return `<section class="panel section-gap" data-testid="deletion-receipts"><div class="panel-heading"><h2>Deletion receipts</h2></div>${records.map((record) => `<article><h3>${escapeHTML(record.worldLabel)}</h3><p>Server ID <code>${escapeHTML(record.serverId)}</code>. ${record.completed ? 'Completed' : 'Pending, retry required'}. World data choice <strong>${escapeHTML(record.mode)}</strong>.</p>${record.lastError ? `<p role="status">${escapeHTML(record.lastError)}</p>` : ''}${record.plan.world?.length ? `<ul>${record.plan.world.map((ref) => `<li>${record.mode === 'keep' ? 'Retained' : record.completed ? 'Deleted' : 'Selected'} volume <code>${escapeHTML(ref.namespace)}/${escapeHTML(ref.name)}</code>, UID <code>${escapeHTML(ref.uid)}</code>.</li>`).join('')}</ul>` : '<p>No real storage was changed in demo mode.</p>'}${record.mode === 'keep' ? '<p>To recover a retained world, an operator must verify its UID and exclusive use, then set <code>persistence.existingClaim</code> to this claim in the same namespace. Keep this receipt. C2 does not automatically reuse deleted identities.</p>' : '<p>PVC deletion does not erase provider snapshots or backing volumes with a Retain reclaim policy. Ask the storage operator about those copies.</p>'}${record.completed ? '' : `<button class="danger" data-action="delete" data-id="${escapeHTML(record.serverId)}" data-testid="retry-deletion">Retry deletion</button>`}</article>`).join('')}</section>`;
+  return `<section class="panel section-gap" data-testid="deletion-receipts"><div class="panel-heading"><h2>Deletion receipts</h2></div>${records.map((record) => `<article>
+    <h3>${escapeHTML(record.worldLabel)}</h3><p>Server ID <code>${escapeHTML(record.serverId)}</code>. ${record.completed ? 'Completed' : 'Pending, retry required'}. World data choice <strong>${escapeHTML(record.mode)}</strong>.</p>
+    ${record.lastError ? `<p role="status">${escapeHTML(record.lastError)}</p>` : ''}
+    ${record.plan.world?.length ? `<ul>${record.plan.world.map((ref) => `<li>${record.mode === 'keep' ? 'Retained' : record.completed ? 'Deleted' : 'Selected'} volume <code>${escapeHTML(ref.namespace)}/${escapeHTML(ref.name)}</code>, UID <code>${escapeHTML(ref.uid)}</code>.</li>`).join('')}</ul>` : '<p>No real storage was changed in demo mode.</p>'}
+    ${record.plan.retainedSecrets?.length ? `<p>These external or legacy Secrets were kept because C2 could not prove ownership. No ownership adoption is required to finish deletion. Secret values are not included.</p><ul>${record.plan.retainedSecrets.map((ref) => `<li>Retained Secret <code>${escapeHTML(ref.namespace)}/${escapeHTML(ref.name)}</code>, UID <code>${escapeHTML(ref.uid)}</code>.</li>`).join('')}</ul>` : ''}
+    ${record.mode === 'keep' ? '<p>To recover a retained world, an operator must verify its UID and exclusive use, then set <code>persistence.existingClaim</code> to this claim in the same namespace. Keep this receipt. C2 does not automatically reuse deleted identities.</p>' : '<p>PVC deletion does not erase provider snapshots or backing volumes with a Retain reclaim policy. Ask the storage operator about those copies.</p>'}
+    ${record.completed ? '' : `<button class="danger" data-action="delete" data-id="${escapeHTML(record.serverId)}" data-testid="retry-deletion">Retry deletion</button>`}
+  </article>`).join('')}</section>`;
 }
 function usersPage() {
   if (!can('users')) return dashboard();
@@ -506,8 +513,8 @@ function openModal(action, userId = '') {
   state.modalUserId = userId;
   $('#modal-error').hidden = true;
   $('#modal-submit').disabled = false;
-  $('#modal-submit').classList.toggle('danger',action === 'restart' || action === 'delete-user');
-  $('#modal-submit').classList.toggle('primary',action !== 'restart' && action !== 'delete-user');
+  $('#modal-submit').classList.toggle('danger',['restart','delete-user','delete'].includes(action));
+  $('#modal-submit').classList.toggle('primary',!['restart','delete-user','delete'].includes(action));
   if (action === 'add-integration' || action === 'edit-integration') {
     const item = state.integrations.find((i) => i.id === userId);
     if (action === 'edit-integration' && !item) throw new Error('This integration no longer exists. Refresh the list.');

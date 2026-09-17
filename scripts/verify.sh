@@ -22,6 +22,7 @@ if (missing.length) throw new Error(`Unhandled UI actions: ${missing.join(', ')}
 NODE
 go build -o .tmp/rsdw-c2 .
 node tests/users-browser.cjs
+node tests/deletion-browser.cjs
 node tests/integrations-browser.cjs
 node tests/oidc-browser.cjs
 helm lint charts/rsdw-c2 --set auth.adminTokenSecret.name=rsdw-c2-admin
