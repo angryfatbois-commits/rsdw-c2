@@ -170,7 +170,7 @@ if (command === 'git') {
   if (args[0] === 'manifest') {
     if (process.env.TEST_FAIL === 'image-auth') fail('unauthorized');
     if (process.env.TEST_FAIL === 'image-network') fail('connection refused');
-    if (!fs.existsSync(path.join(state, 'image'))) fail('no such manifest: ' + image);
+    if (!fs.existsSync(path.join(state, 'image'))) fail(process.env.TEST_MISSING_IMAGE || 'no such manifest: ' + image);
     output('{}');
   } else if (args[0] === 'buildx') {
     fs.writeFileSync(path.join(state, 'image'), process.env.GITHUB_SHA);
@@ -242,6 +242,15 @@ test('publish and retry preserve existing image and chart, using real Helm packa
   assert.equal(calls.filter(call => call[0] === 'docker' && call[1] === 'buildx').length, 1);
   assert.equal(calls.filter(call => call[0] === 'helm' && call[1] === 'push').length, 1);
   assert.equal(execFileSync('git', ['diff', '--', 'charts'], { encoding: 'utf8' }), source);
+});
+
+test('publish a new GHCR image when Docker reports manifest unknown', t => {
+  const fixture = publicationFixture(t);
+  const result = fixture.run({ TEST_MISSING_IMAGE: 'manifest unknown' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /Published and verified image/);
+  assert.equal(fixture.calls().filter(call => call[1] === 'buildx').length, 1);
+  assert.equal(fixture.calls().filter(call => call[0] === 'helm' && call[1] === 'push').length, 1);
 });
 
 for (const failure of ['after-image', 'after-chart']) {
