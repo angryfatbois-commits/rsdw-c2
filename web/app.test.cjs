@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
 
@@ -198,6 +198,15 @@ assert.doesNotMatch(context.ui.dashboard(), /data-action="add-server"/);
 console.log('Viewer capability rendering checks passed.');
 
 const test = require('node:test');
+test('edit settings uses effective values and sends only changed fields', () => {
+  const server = {id:'target', name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250};
+  const initial = context.ui.editSettingsValues(server);
+  assert.deepEqual({...initial}, {name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250});
+  assert.equal(context.ui.editSettingsPatch(initial, {...initial}), null);
+  assert.deepEqual({...context.ui.editSettingsPatch(initial, {...initial, name:'New creator', maxPlayers:'12'})}, {name:'New creator', maxPlayers:12, confirm:true});
+  assert.deepEqual({...context.ui.editSettingsPatch(initial, {...initial, worldName:'New world', confirmWorldName:'true'})}, {worldName:'New world', confirmWorldName:true, confirm:true});
+  assert.deepEqual({...context.ui.editSettingsValues({name:'Legacy creator', maxPlayers:4})}, {name:'Legacy creator', worldName:'Legacy creator', maxPlayers:4, memoryLimitMiB:2048, cpuLimitMillis:1000});
+});
 test('create uploads one save with settings and preserves authentication headers', async () => {
   const requests = [];
   const sandbox = vm.createContext({FormData, DOMException, sessionStorage:{getItem(){return 'admin-token';}}, fetch:async(path,options) => {

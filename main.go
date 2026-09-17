@@ -1112,6 +1112,8 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 3 && parts[1] == "actions" && r.Method == http.MethodPost {
 		switch parts[2] {
+		case "edit-settings":
+			a.handleEditSettings(w, r, serverID)
 		case "restart":
 			a.handleRestart(w, r, server)
 		case "update":
