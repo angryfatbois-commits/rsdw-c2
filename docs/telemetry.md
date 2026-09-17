@@ -2,6 +2,8 @@
 
 The dashboard schedules collection every 15 seconds, even when no browser is open. Four workers bound collection concurrency; slow sources or larger fleets can lengthen that interval. It keeps up to one hour of observations in memory. A dashboard service restart clears history. Collection failures create gaps in the metric map and charts, not invented replacement values.
 
+![Telemetry page with range controls, metric cards, charts, and resource usage.](screenshots/telemetry.png)
+
 | Measurement | Source | Meaning |
 | --- | --- | --- |
 | Players | Authenticated game `/api/players` | API-reported connected count. The current upstream API can return an empty roster after an internal lookup failure. |

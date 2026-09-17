@@ -38,7 +38,7 @@ Blob download completion is not exposed by this browser harness. The browser che
 
 `bash scripts/verify.sh` passes Go tests, Go vet, JavaScript syntax and rendering tests, Helm lint and template checks, and HTTP smoke requests. Its server uses an OS-assigned port and fresh state, so an existing preview cannot satisfy the checks.
 
-`sudo env PATH=/home/petzko/.local/bin:/usr/local/bin:/usr/bin:/bin bash scripts/kind-smoke.sh` runs the real Docker build and creates an isolated one-node kind cluster. The test verifies readiness, authentication, empty inventory, in-cluster pod-exec permission, Helm creation, logs, restart, update revision, player-limit override, and audit output. The fixture is a small sleeping container, not the game. Cleanup removes the temporary cluster and its fixture.
+`bash scripts/kind-smoke.sh` runs the real Docker build and creates an isolated one-node kind cluster. The test verifies readiness, authentication, empty inventory, in-cluster pod-exec permission, Helm creation, logs, restart, update revision, player-limit override, and audit output. The fixture is a small sleeping container, not the game. Cleanup removes the temporary cluster and its fixture.
 
 Docker itself was healthy. The user session lacks access to its root-owned socket, so tests used existing sudo access. No account groups or daemon settings changed. The test uses a private kubeconfig and does not target the user's existing cluster.
 

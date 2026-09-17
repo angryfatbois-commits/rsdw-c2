@@ -45,26 +45,13 @@ Run `helm template rsdw-c2 charts/rsdw-c2 -f your-values.yaml` to review the Dep
 
 `publicOrigin` must be an HTTPS origin without a trailing slash, path, query, or fragment. Use an ASCII DNS hostname or a canonical IP address. The console lowercases its hostname, compresses IPv6 addresses, normalizes numeric ports, and removes the default HTTPS port to match the browser's Origin header. Scoped and IPv4-mapped IPv6 addresses are unsupported. Issuers must use HTTPS and cannot contain credentials, queries, or fragments. Discovery endpoints must use HTTPS but may include provider query parameters. There is no runtime setting to disable TLS or ID-token verification. The single replica and `Recreate` strategy are required because sessions live in process memory.
 
-## Pocket ID deployment
+## Provider-specific setup
 
-For the configured Petzko client, render the chart with
-`helm template rsdw-c2 charts/rsdw-c2 -f charts/rsdw-c2/values-pocketid.yaml`.
-The example uses `https://auth.petzko.sh` and the callback
-`https://rsdwc2.petzko.sh/api/auth/callback`. Supply the client secret through
-the existing `rsdw-c2-oidc` Secret's `client-secret` key.
-
-The `groups` scope requests the signed ID token's `groups` array.
-`rsdw_c2_admins` grants admin access and `rsdw_c2_users` grants viewer access.
-Membership in both grants admin access. An identity in neither group is denied.
-Pocket ID [documents the groups scope](https://github.com/pocket-id/pocket-id/discussions/275).
-Discovery supplies the authorization, token, and JWKS endpoints. The existing
-authorization code flow already uses S256 PKCE; no provider-specific handler
-or UserInfo request is required. Sign out ends only the C2 session.
-
-Use **Sign in** and check that the browser reaches `auth.petzko.sh` and displays
-**Petzko C2 Systems**. After deployment, verify admin, viewer, and unmapped
-identities separately. A successful redirect alone does not verify the client
-secret, token exchange, or group membership.
+Use your identity provider's discovery document to confirm the issuer, scopes,
+group claim, and callback URL. Map provider groups or subject IDs to the
+generic role lists in the Helm values above. After deployment, test an admin,
+viewer, and unmapped identity separately. A successful redirect alone does not
+verify the client secret, token exchange, or role mapping.
 
 ## Configure without Helm
 

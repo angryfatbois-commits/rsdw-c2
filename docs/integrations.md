@@ -2,6 +2,8 @@
 
 The Integrations page is available to admins. OIDC viewers cannot read or change integrations, deliveries, or Secret references. OIDC mutations require the session CSRF token and the configured Origin. Token-mode requests require the admin bearer token. Session changes clear integration lists, delivery history, and open configuration forms.
 
+![Integrations page with Discord bot setup and delivery history panels.](screenshots/integrations.png)
+
 ## Configuration
 
 Create a Discord bot with permission to view the target channel and send messages. Put its token in a pre-created Kubernetes Secret in the C2 namespace. C2 reads that namespace from `RSDW_NAMESPACE`, which the chart supplies through the Downward API. Standalone processes default to `rsdw-system`.

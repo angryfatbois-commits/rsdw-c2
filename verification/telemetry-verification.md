@@ -38,7 +38,7 @@ The browser showed a live Kubernetes connection, the fixture server online, play
 
 The 60-second, 5-minute, and 1-hour selectors worked. The player-data disclosure stayed open across a manual refresh. Pause changed to Resume and displayed `Updates paused`; resuming restored live updates. Chart histories rendered from collected samples.
 
-Export CSV saved `/home/petzko/Downloads/rsdw-telemetry (3).csv`. Direct file inspection confirmed the metric, value, source timestamp, status, reason, unit, and source columns. Tick-rate rows had empty numeric cells and `unsupported` status. The browser automation download notification timed out, but the saved file verified the result.
+Exporting CSV created `rsdw-telemetry.csv` in the browser's download directory. Direct file inspection confirmed the metric, value, source timestamp, status, reason, unit, and source columns. Tick-rate rows had empty numeric cells and `unsupported` status. The browser automation download notification timed out, but the saved file verified the result.
 
 The first browser pass caught small CPU values rounded to zero and an awkward line break in the unsupported-value card. The final UI preserves three significant digits below one, scales the CPU chart below one core, and uses smaller text for long card values. Rendering regression tests cover fractional CPU values and the chart ceiling.
 

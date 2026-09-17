@@ -30,9 +30,9 @@ This is a personal project, not a hosted service. Expect opinionated defaults an
 
 You need Go 1.26 or newer.
 
+Clone this repository, then run these commands from its root:
+
 ```sh
-git clone https://github.com/petzkod5/rsdw-c2.git
-cd rsdw-c2
 RSDW_DEMO_DATA=true RSDW_STATE_FILE=./state.json go run .
 ```
 
@@ -66,6 +66,7 @@ Replace `VERSION` with a version from the [GitHub releases](https://github.com/p
 
 - [Configure OIDC sign in](docs/oidc.md)
 - [Configure Discord alerts](docs/integrations.md)
+- [Understand telemetry](docs/telemetry.md)
 - [Import custom saves](docs/custom-saves.md)
 - [Delete servers safely](docs/server-deletion.md)
 - [Run a local kind cluster](docs/kind.md)
