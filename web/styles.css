@@ -165,6 +165,25 @@ td:last-child.actions { text-align: right; }
 .notice.error { color: #fecaca; background: #381e2c; border-color: #a65262; }
 .notice.info { background: #172e4e; color: var(--color-muted-foreground); border-color: var(--color-border); }
 .inline-note { font-size: 14px; margin-top: 16px; }
+.timezone-control { min-width: 220px; }
+.result { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.result:before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+.result-success { color: var(--success); }
+.result-error { color: var(--color-destructive); }
+.result-warning { color: var(--warning); }
+.result-unknown { color: var(--color-muted-foreground); }
+.reboot-form { margin-top: 8px; }
+.checkbox-field { gap: 4px; }
+.checkbox-field span { display: flex; align-items: flex-start; gap: 8px; }
+.checkbox-field input { min-height: 22px; width: 22px; margin: 2px 0 0; }
+.error-summary { border: 1px solid var(--color-destructive); background: #381e2c; color: #fecaca; border-radius: 4px; padding: 14px 16px; margin-bottom: 16px; }
+.error-summary h3 { font-size: 16px; margin-bottom: 6px; }
+.error-summary ul { margin: 0; padding-left: 20px; }
+.error-summary a { color: #fecaca; text-decoration: underline; }
+.preview-results { margin-top: 12px; padding: 12px 16px; border: 1px solid var(--color-divider); border-radius: 4px; }
+.preview-results ol { margin: 8px 0 0; padding-left: 28px; }
+.preview-results li { padding: 3px 0; }
+.preview-heading { color: var(--color-foreground); font-size: 14px; }
 footer { font-size: 14px; color: var(--color-muted-foreground); margin-top: 24px; }
 dialog { width: min(520px,calc(100% - 32px)); max-height: calc(100dvh - 32px); border: 1px solid var(--color-border); border-radius: 4px; padding: 28px; background: var(--color-card); color: var(--color-foreground); box-shadow: 0 20px 80px #0008; }
 dialog::backdrop { background: #000b; }
@@ -182,6 +201,7 @@ dialog.create-server-dialog { width: min(800px,calc(100% - 32px)); }
 .field input:not([type=checkbox]),.field select { width: 100%; min-width: 0; }
 .field:has(input[type=checkbox]) > span { display: flex; align-items: center; gap: 10px; min-height: 44px; }
 .field small { font-size: 13px; color: var(--color-muted-foreground); }
+.field small.field-error { color: #fecaca; }
 #modal-body > p { font-size: 15px; line-height: 1.7; margin-bottom: 20px; }
 #modal-error { margin-top: 16px; }
 #toast { position: fixed; bottom: 24px; right: 24px; z-index: 20; max-width: min(440px,calc(100% - 48px)); background: var(--color-card); border: 1px solid var(--link); border-radius: 4px; padding: 16px 20px; font-size: 15px; box-shadow: 0 8px 30px #0005; }

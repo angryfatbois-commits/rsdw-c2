@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -63,12 +62,14 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 		// Kubernetes container start times have second precision.
 		if o.health == "healthy" && o.runtime != "" && o.runtime != op.Runtime && o.restartOperation == op.ID && !o.runtimeStarted.Before(op.RequestedAt.Truncate(time.Second)) {
 			emitAlert(state, server, RestartCompleted, op.ID, "Replacement runtime is ready", o.at)
+			finishRebootOccurrences(state, op.ID, rebootCompleted, "Replacement runtime is ready", o.at)
 			p.Restart, p.Runtime, p.HealthyBaseline = nil, o.runtime, true
 			current := state.Servers[server.ID]
 			current.Status = StatusOnline
 			state.Servers[server.ID] = current
 		} else if o.at.Sub(op.RequestedAt) >= restartTimeout && o.health != "" {
 			emitAlert(state, server, RestartFailed, op.ID, "No ready marked replacement confirmed within the restart deadline", o.at)
+			finishRebootOccurrences(state, op.ID, rebootFailed, "No ready marked replacement confirmed within the restart deadline", o.at)
 			p.Restart = nil
 			current := state.Servers[server.ID]
 			current.Status = StatusAttention
@@ -132,65 +133,25 @@ func (a *App) handleRestart(w http.ResponseWriter, r *http.Request, server Serve
 		return
 	}
 	defer a.lifecycleMu.Unlock()
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	runtime := a.store.Snapshot().Producers[server.ID].Runtime
-	op := RestartOperation{ID: randomID(), Runtime: runtime, RequestedAt: time.Now().UTC()}
-	status := http.StatusInternalServerError
-	err := a.store.Update(func(state *State) error {
-		p := state.Producers[server.ID]
-		if p.Restart != nil {
-			status = http.StatusConflict
-			return errors.New("a restart is already awaiting reconciliation")
-		}
-		p.Restart = &op
-		p.resetStreak()
-		p.PlayerAt = time.Time{}
-		state.Producers[server.ID] = p
-		server = state.Servers[server.ID]
-		server.Status, server.LastRestart = StatusStarting, op.RequestedAt.Format(time.RFC3339Nano)
-		state.Servers[server.ID] = server
-		emitAlert(state, server, RestartRequested, op.ID, "Restart recorded; completion requires a ready marked replacement runtime", op.RequestedAt)
-		return nil
-	})
+	dispatch, err := a.claimManualRestart(server.ID, a.rebootNow())
 	if err != nil {
-		if status == http.StatusConflict {
-			writeError(w, status, err.Error())
+		if errors.Is(err, errRebootConflict) {
+			writeError(w, http.StatusConflict, "a restart is already awaiting reconciliation")
+		} else if errors.Is(err, errRebootNotFound) {
+			writeError(w, http.StatusNotFound, "server not found")
 		} else {
-			writeError(w, status, "could not persist restart operation")
+			writeError(w, http.StatusInternalServerError, "could not persist restart operation")
 		}
 		return
 	}
-	server.RestartOperation = op.ID
-	commandErr := a.orchestrator.Restart(ctx, server)
-	if a.demo {
-		err = a.store.Update(func(state *State) error {
-			p := state.Producers[server.ID]
-			p.Restart = nil
-			state.Producers[server.ID] = p
-			emitAlert(state, server, RestartCompleted, op.ID, "Demo simulated restart; no Kubernetes operation", time.Now().UTC())
-			server.Status = StatusOnline
-			server.RestartOperation = ""
-			state.Servers[server.ID] = server
-			return nil
-		})
-	} else if commandErr != nil {
-		err = a.store.Update(func(state *State) error {
-			p := state.Producers[server.ID]
-			if p.Restart != nil && p.Restart.ID == op.ID {
-				p.Restart.CommandUncertain = true
-				state.Producers[server.ID] = p
-			}
-			return nil
-		})
-	}
-	if err != nil {
+	commandErr, persistenceErr := a.dispatchRestartOperation(r.Context(), dispatch)
+	if persistenceErr != nil {
 		writeError(w, http.StatusInternalServerError, "restart is recorded; result persistence failed and requires reconciliation")
 		return
 	}
 	if commandErr != nil {
-		writeJSON(w, http.StatusAccepted, map[string]any{"operationId": op.ID, "status": "awaiting_reconciliation", "message": "Restart command outcome is unknown; fresh observations will reconcile it"})
+		writeJSON(w, http.StatusAccepted, map[string]any{"operationId": dispatch.op.ID, "status": "awaiting_reconciliation", "message": "Restart command outcome is unknown; fresh observations will reconcile it"})
 		return
 	}
-	writeJSON(w, http.StatusOK, server)
+	writeJSON(w, http.StatusOK, dispatch.server)
 }

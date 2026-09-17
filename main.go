@@ -123,30 +123,35 @@ func (s Server) MarshalJSON() ([]byte, error) {
 }
 
 type Event struct {
-	Kind        EventKind `json:"kind,omitempty"`
-	Source      string    `json:"source,omitempty"`
-	Accuracy    string    `json:"accuracy,omitempty"`
-	OperationID string    `json:"operationId,omitempty"`
-	ID          string    `json:"id"`
-	Timestamp   time.Time `json:"timestamp"`
-	ServerID    string    `json:"serverId"`
-	ServerName  string    `json:"serverName"`
-	Category    string    `json:"category"`
-	Severity    string    `json:"severity"`
-	Message     string    `json:"message"`
-	Details     string    `json:"details"`
+	Kind         EventKind `json:"kind,omitempty"`
+	Source       string    `json:"source,omitempty"`
+	Accuracy     string    `json:"accuracy,omitempty"`
+	OperationID  string    `json:"operationId,omitempty"`
+	ScheduleID   string    `json:"scheduleId,omitempty"`
+	OccurrenceID string    `json:"occurrenceId,omitempty"`
+	Actor        string    `json:"actor,omitempty"`
+	ID           string    `json:"id"`
+	Timestamp    time.Time `json:"timestamp"`
+	ServerID     string    `json:"serverId"`
+	ServerName   string    `json:"serverName"`
+	Category     string    `json:"category"`
+	Severity     string    `json:"severity"`
+	Message      string    `json:"message"`
+	Details      string    `json:"details"`
 }
 
 type State struct {
-	Deletions      map[string]deletionRecord     `json:"deletions,omitempty"`
-	Integrations   map[string]DiscordIntegration `json:"integrations"`
-	Producers      map[string]AlertProducer      `json:"alertProducers"`
-	Deliveries     map[string]Delivery           `json:"deliveries"`
-	DiscordRetryAt time.Time                     `json:"discordRetryAt,omitempty"`
-	Servers        map[string]Server             `json:"servers"`
-	Events         []Event                       `json:"events"`
-	Users          map[string]User               `json:"users"`
-	PendingSeeds   map[string]PendingSeed        `json:"pendingSeeds,omitempty"`
+	Deletions       map[string]deletionRecord     `json:"deletions,omitempty"`
+	Integrations    map[string]DiscordIntegration `json:"integrations"`
+	Producers       map[string]AlertProducer      `json:"alertProducers"`
+	Deliveries      map[string]Delivery           `json:"deliveries"`
+	RebootSchedules map[string]rebootSchedule     `json:"rebootSchedules,omitempty"`
+	RebootHistory   []rebootExecution             `json:"rebootHistory,omitempty"`
+	DiscordRetryAt  time.Time                     `json:"discordRetryAt,omitempty"`
+	Servers         map[string]Server             `json:"servers"`
+	Events          []Event                       `json:"events"`
+	Users           map[string]User               `json:"users"`
+	PendingSeeds    map[string]PendingSeed        `json:"pendingSeeds,omitempty"`
 }
 
 type User struct {
@@ -222,6 +227,7 @@ type Store struct {
 func NewStore(path string, demo bool) (*Store, error) {
 	s := &Store{path: path, state: State{Servers: map[string]Server{}, Users: map[string]User{}}}
 	s.state.initIntegrations()
+	s.state.initReboots()
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := json.Unmarshal(data, &s.state); err != nil {
@@ -234,7 +240,8 @@ func NewStore(path string, demo bool) (*Store, error) {
 				s.state.Users = map[string]User{}
 			}
 			s.state.initIntegrations()
-			if err := s.Update(func(state *State) error { state.recoverAlerts(); return nil }); err != nil {
+			s.state.initReboots()
+			if err := s.Update(func(state *State) error { state.recoverAlerts(); state.recoverReboots(time.Now().UTC()); return nil }); err != nil {
 				return nil, err
 			}
 			return s, nil
@@ -273,6 +280,18 @@ func (s State) clone() State {
 	}
 	next.Servers, next.Users, next.PendingSeeds = maps.Clone(s.Servers), maps.Clone(s.Users), maps.Clone(s.PendingSeeds)
 	next.Events = append([]Event(nil), s.Events...)
+	next.RebootSchedules = maps.Clone(s.RebootSchedules)
+	next.RebootHistory = append([]rebootExecution(nil), s.RebootHistory...)
+	for index := range next.RebootHistory {
+		next.RebootHistory[index].MissedThrough = cloneTimePtr(next.RebootHistory[index].MissedThrough)
+	}
+	for id, schedule := range next.RebootSchedules {
+		schedule.Definition.DailyTimes = append([]string(nil), schedule.Definition.DailyTimes...)
+		schedule.IntervalAnchor = cloneTimePtr(schedule.IntervalAnchor)
+		schedule.NextRun = cloneTimePtr(schedule.NextRun)
+		schedule.LastOccurrenceAt = cloneTimePtr(schedule.LastOccurrenceAt)
+		next.RebootSchedules[id] = schedule
+	}
 	for id, server := range next.Servers {
 		server.Metrics = maps.Clone(server.Metrics)
 		for key, reading := range server.Metrics {
@@ -759,6 +778,7 @@ type App struct {
 	imageRepo     string
 	telemetryOnce sync.Once
 	telemetry     *telemetryStore
+	clock         func() time.Time
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -781,6 +801,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/reboots" || strings.HasPrefix(r.URL.Path, "/api/reboots/") {
+		a.handleReboots(w, r)
+		return
+	}
 	if r.URL.Path == "/api/image-tags" && r.Method == http.MethodGet {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -1444,6 +1468,7 @@ func main() {
 	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth}
 	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
+	go app.runRebootScheduler(context.Background())
 	go app.runDeliveries(context.Background())
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
