@@ -1,4 +1,4 @@
 FROM rsdw-c2:smoke
 USER root
-RUN apk add --no-cache bash busybox-extras
+RUN apk add --no-cache bash busybox-extras coreutils
 USER 1000:1000

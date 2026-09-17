@@ -50,7 +50,7 @@ timeout 180s helm upgrade --install rsdw-c2 charts/rsdw-c2 --kube-context "$cont
   --set image.repository=rsdw-c2 \
   --set image.tag=smoke \
   --set image.pullPolicy=Never \
-  --set state.persistence.enabled=false
+  --set state.persistence.enabled=true
 "${kube[@]}" -n rsdw-system rollout status deployment/rsdw-c2-rsdw-c2 --timeout=120s
 "${kube[@]}" -n rsdw-system wait --for=condition=ready pod -l app.kubernetes.io/name=rsdw-c2 --timeout=120s
 "${kube[@]}" -n rsdw-system get service/rsdw-c2-rsdw-c2
@@ -70,7 +70,7 @@ grep -q '"servers":\[\]' "$test_dir/bootstrap.json"
 
 kill "$forward_pid"
 forward_pid=
-"${kube[@]}" -n rsdw-system set env deployment/rsdw-c2-rsdw-c2 RSDW_CHART=/tmp/fixture-chart RSDW_IMAGE_REPOSITORY=rsdw-c2-fixture
+"${kube[@]}" -n rsdw-system set env deployment/rsdw-c2-rsdw-c2 RSDW_CHART=/tmp/fixture-chart RSDW_IMAGE_REPOSITORY=rsdw-c2-fixture RSDW_SEED_WRITER_IMAGE=rsdw-c2-fixture:smoke
 "${kube[@]}" -n rsdw-system rollout status deployment/rsdw-c2-rsdw-c2 --timeout=120s
 pod=$("${kube[@]}" -n rsdw-system get pod -l app.kubernetes.io/name=rsdw-c2 -o json | jq -er '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | select(any(.status.conditions[]; .type == "Ready" and .status == "True"))] | if length == 1 then .[0].metadata.name else error("Expected one ready C2 pod") end')
 timeout 30s "${kube[@]}" -n rsdw-system cp verification/fixture-chart "$pod:/tmp/fixture-chart"
@@ -149,5 +149,31 @@ sleep "$review_seconds"
   -d '{"imageTag":"smoke"}' "$api/servers/lifecycle-fixture/actions/update" >"$test_dir/update.json"
 test "$("${kube[@]}" -n fixture-worlds get secret -l owner=helm,name=lifecycle-fixture --no-headers | wc -l)" -eq 2
 "${http[@]}" -fsS -H 'Authorization: Bearer smoke-token' "$api/events" | grep -q 'Image update requested'
+
+curl --connect-timeout 5 --max-time 180 --fail-with-body --silent --show-error \
+  -H 'Authorization: Bearer smoke-token' \
+  --form-string 'request={"name":"Seed fixture","namespace":"fixture-worlds","ownerId":"0123456789abcdef0123456789abcdef","imageTag":"smoke","maxPlayers":12}' \
+  -F 'save=@verification/fixture-world.sav;type=application/octet-stream' "$api/servers" >"$test_dir/seed-create.json"
+seed_claim=$(jq -er '.saveSeed.claim' "$test_dir/seed-create.json")
+test "$(jq -r '.saveSeed.path' "$test_dir/seed-create.json")" = fixture-world.sav
+"${kube[@]}" -n fixture-worlds rollout status deployment/seed-fixture-rsdragonwilds --timeout=120s
+seed_pod=$("${kube[@]}" -n fixture-worlds get pod -l fixture=seed-fixture -o jsonpath='{.items[0].metadata.name}')
+save_path=/home/steam/rsdw-dedicated/RSDragonwilds/Saved/SaveGames/fixture-world.sav
+"${kube[@]}" -n fixture-worlds exec "$seed_pod" -- cat "$save_path" >"$test_dir/imported.sav"
+cmp verification/fixture-world.sav "$test_dir/imported.sav"
+test "$("${kube[@]}" -n fixture-worlds exec "$seed_pod" -- id -u)" = 1000
+"${kube[@]}" -n fixture-worlds get pod "$seed_pod" -o json | jq -e --arg claim "$seed_claim" '
+  any(.spec.volumes[]; .persistentVolumeClaim.claimName == $claim and .persistentVolumeClaim.readOnly == true) and
+  any(.spec.initContainers[].volumeMounts[]; .name == "seed" and .readOnly == true)' >/dev/null
+test -z "$("${kube[@]}" -n fixture-worlds get pod "$seed_claim" --ignore-not-found -o name)"
+"${kube[@]}" -n fixture-worlds exec "$seed_pod" -- sh -c 'printf "%s\n" "World changed after import" > "$1"' fixture "$save_path"
+"${http[@]}" -fsS -H 'Authorization: Bearer smoke-token' -X POST "$api/servers/seed-fixture/actions/restart" >"$test_dir/seed-restart.json"
+"${kube[@]}" -n fixture-worlds rollout status deployment/seed-fixture-rsdragonwilds --timeout=120s
+replacement=$("${kube[@]}" -n fixture-worlds get pod -l fixture=seed-fixture -o jsonpath='{.items[0].metadata.name}')
+test "$replacement" != "$seed_pod"
+test "$("${kube[@]}" -n fixture-worlds exec "$replacement" -- cat "$save_path")" = 'World changed after import'
+"${kube[@]}" -n fixture-worlds logs "$replacement" -c import-save | grep -q 'Existing world found'
+"${kube[@]}" -n fixture-worlds get pvc "$seed_claim" >/dev/null
+printf 'Seed import and restart evidence: %s\n' "$test_dir"
 
 printf '%s\n' 'kind-smoke.sh passed'
