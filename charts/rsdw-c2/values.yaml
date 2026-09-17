@@ -9,6 +9,17 @@ service:
   type: ClusterIP
   port: 8080
 
+ingress:
+  enabled: false
+  ingressClassName: ""
+  annotations: {}
+  hosts:
+    - rsdw-c2.local
+  paths:
+    - path: /
+      pathType: Prefix
+  tls: []
+
 cluster:
   name: local-cluster
   region: eu-central

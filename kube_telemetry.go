@@ -17,10 +17,11 @@ import (
 const telemetryCommandTimeout = 1500 * time.Millisecond
 
 type kubeMetadata struct {
-	Name              string     `json:"name"`
-	Namespace         string     `json:"namespace"`
-	UID               string     `json:"uid"`
-	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+	Annotations       map[string]string `json:"annotations"`
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	UID               string            `json:"uid"`
+	DeletionTimestamp *time.Time        `json:"deletionTimestamp"`
 	OwnerReferences   []struct {
 		Kind       string `json:"kind"`
 		UID        string `json:"uid"`
@@ -62,7 +63,11 @@ type telemetryPod struct {
 		HostNetwork bool                 `json:"hostNetwork"`
 	} `json:"spec"`
 	Status struct {
-		Phase             string `json:"phase"`
+		Phase      string `json:"phase"`
+		Conditions []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
 		ContainerStatuses []struct {
 			Name        string `json:"name"`
 			ContainerID string `json:"containerID"`
@@ -113,7 +118,7 @@ func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTa
 		return podTarget{}, StatusUnknown, errors.New("deployment identity is missing or invalid")
 	}
 	if deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == 0 {
-		return podTarget{}, StatusStopped, errors.New("deployment is scaled to zero")
+		return podTarget{}, StatusStopped, errScaledZero
 	}
 	var replicas struct {
 		Items []struct {
@@ -122,6 +127,9 @@ func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTa
 	}
 	if err := k.kubeJSON(ctx, &replicas, "-n", server.Namespace, "get", "replicasets", "-o", "json"); err != nil {
 		return podTarget{}, StatusUnknown, err
+	}
+	if replicas.Items == nil {
+		return podTarget{}, StatusUnknown, errors.New("ReplicaSet list is missing items")
 	}
 	owned := map[string]bool{}
 	for _, rs := range replicas.Items {
@@ -134,6 +142,9 @@ func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTa
 	}
 	if err := k.kubeJSON(ctx, &pods, "-n", server.Namespace, "get", "pods", "-o", "json"); err != nil {
 		return podTarget{}, StatusUnknown, err
+	}
+	if pods.Items == nil {
+		return podTarget{}, StatusUnknown, errors.New("Pod list is missing items")
 	}
 	candidates := []telemetryPod{}
 	for _, pod := range pods.Items {
@@ -148,6 +159,9 @@ func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTa
 		}
 	}
 	if len(candidates) != 1 {
+		if len(candidates) == 0 {
+			return podTarget{}, StatusStarting, errNoActivePod
+		}
 		return podTarget{}, StatusStarting, fmt.Errorf("expected one active owned Pod, found %d", len(candidates))
 	}
 	pod := candidates[0]
@@ -175,6 +189,9 @@ func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTa
 				target.ready = status.Ready
 			}
 		}
+	}
+	if count > 1 {
+		return podTarget{}, StatusUnknown, errors.New("duplicate server container status")
 	}
 	if count != 1 || target.containerID == "" || target.startedAt.IsZero() || target.startedAt.After(time.Now().Add(5*time.Second)) || pod.Status.Phase != "Running" {
 		target.containerID = ""
@@ -210,6 +227,9 @@ var resourceKeys = []string{"cpuCores", "cpuPercent", "memoryUsedBytes"}
 var networkKeys = []string{"inboundBytesPerSecond", "outboundBytesPerSecond", "networkBytesPerSecond"}
 var diskKeys = []string{"diskUsedBytes", "diskCapacityBytes", "diskPercent"}
 
+var errScaledZero = errors.New("deployment is scaled to zero")
+var errNoActivePod = errors.New("no active owned Pod")
+
 func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server, previous *networkCounters) observation {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
@@ -217,6 +237,9 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 	target, status, err := k.resolvePod(ctx, server)
 	result.status = status
 	if err != nil {
+		if errors.Is(err, errScaledZero) || errors.Is(err, errNoActivePod) {
+			result.health = "unhealthy"
+		}
 		for key := range result.metrics {
 			failReadings(result.metrics, []string{key}, "unavailable", "Pod discovery: "+err.Error(), nil)
 		}
@@ -242,6 +265,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 		setReading(result.metrics, item.key, value, at)
 	}
 	if target.containerID == "" || target.startedAt.IsZero() {
+		result.health = "unhealthy"
 		for key, reading := range result.metrics {
 			if reading.Status == "unavailable" && key != "cpuLimitCores" && key != "memoryLimitBytes" {
 				failReadings(result.metrics, []string{key}, "unavailable", "Server container is not running", nil)
@@ -288,8 +312,22 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 		result.status = StatusUnknown
 		return result
 	}
+	for _, current := range after.Status.ContainerStatuses {
+		if current.Name == "server" {
+			target.ready = current.Ready
+		}
+	}
+	podReady := false
+	for _, condition := range after.Status.Conditions {
+		if condition.Type == "Ready" {
+			podReady = condition.Status == "True"
+			break
+		}
+	}
 	if ready := result.metrics["engineReady"]; ready.Value != nil {
-		if *ready.Value == 1 {
+		result.health = "unhealthy"
+		if *ready.Value == 1 && target.ready && podReady {
+			result.health = "healthy"
 			result.status = StatusOnline
 		} else {
 			result.status = StatusStarting
@@ -297,6 +335,11 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 	} else if result.status == StatusOnline {
 		result.status = StatusAttention
 	}
+	if !target.ready || !podReady {
+		result.health = "unhealthy"
+	}
+	result.runtime, result.runtimeStarted = target.pod.Metadata.UID+"/"+target.containerID, target.startedAt
+	result.restartOperation = target.pod.Metadata.Annotations[restartAnnotation]
 	return result
 }
 

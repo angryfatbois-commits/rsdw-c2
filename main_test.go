@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type registryTransport func(*http.Request) (*http.Response, error)
@@ -91,6 +92,50 @@ func TestCheckUpdateRegistryBehavior(t *testing.T) {
 	}
 }
 
+func TestUpdateReturnsObservedImage(t *testing.T) {
+	t.Setenv("RSDW_IMAGE_REPOSITORY", "example/server")
+	for _, tc := range []struct {
+		name, observed, wantImage string
+		demo                      bool
+	}{
+		{"observed", "example/server:1", "example/server:1", false},
+		{"unobserved", "", "", false},
+		{"demo", "", "example/server:2", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newTestApp(t, tc.demo)
+			server := Server{ID: "world", Release: "world", CurrentImage: "example/server:stored", DesiredImage: "example/server:stored"}
+			if err := app.store.Update(func(s *State) error { s.Servers[server.ID] = server; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			observedAt := time.Now().UTC().Add(-time.Second)
+			if tc.observed != "" {
+				app.observations().history[server.ID] = []observation{{at: observedAt, image: tc.observed, status: StatusOnline, metrics: emptyMetrics()}}
+			}
+			res := requestJSON(t, app, http.MethodPost, "/api/servers/world/actions/update", `{"imageTag":"2"}`)
+			if res.Code != http.StatusOK {
+				t.Fatalf("update = %d: %s", res.Code, res.Body.String())
+			}
+			var got Server
+			if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.CurrentImage != tc.wantImage || got.DesiredImage != "example/server:2" || got.Status != StatusStarting {
+				t.Fatalf("update current=%q desired=%q status=%s", got.CurrentImage, got.DesiredImage, got.Status)
+			}
+			if !tc.demo {
+				wantSeen := ""
+				if tc.observed != "" {
+					wantSeen = observedAt.Format(time.RFC3339Nano)
+				}
+				if got.LastSeen != wantSeen || got.UpdateAvailable != (tc.observed != "") {
+					t.Fatalf("update lastSeen=%q updateAvailable=%t", got.LastSeen, got.UpdateAvailable)
+				}
+			}
+		})
+	}
+}
+
 func TestShellRunnerSecretFailure(t *testing.T) {
 	output, err := (shellRunner{}).Run(context.Background(), "sh", "-c", `printf '%s' "$1" >&2; exit 1`, "sh", "--from-literal=token=test-secret-value")
 	if err == nil {
@@ -123,7 +168,7 @@ func TestCreateSecretFailureDoesNotLeakToken(t *testing.T) {
 	app := newTestApp(t, false)
 	runner := &secretFailureRunner{}
 	app.orchestrator = &kubeOrchestrator{runner: runner, kubectl: "kubectl"}
-	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"World","ownerId":"owner","maxPlayers":4}`)
+	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"World","ownerId":"0123456789abcdef0123456789abcdef","maxPlayers":4}`)
 	if res.Code != http.StatusBadGateway || !strings.Contains(res.Body.String(), "create API token Secret") {
 		t.Fatalf("create response = %d: %s", res.Code, res.Body.String())
 	}
@@ -179,26 +224,362 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func userRequest(t *testing.T, app *App, method, path, body string, wantStatus int) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+app.auth.token)
+	res := httptest.NewRecorder()
+	app.ServeHTTP(res, req)
+	if res.Code != wantStatus {
+		t.Fatalf("%s %s = %d, want %d: %s", method, path, res.Code, wantStatus, res.Body.String())
+	}
+	return res
+}
+
+func TestUsersMigrateLegacyState(t *testing.T) {
+	for _, users := range []string{"", `,"users":null`} {
+		t.Run(users, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.json")
+			legacy := `{"servers":{"world":{"id":"world","name":"Existing world","ownerId":"legacy-owner"}},"events":[{"id":"event","serverId":"world","message":"Existing event"}]` + users + `}`
+			if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store, err := NewStore(path, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := store.Snapshot()
+			if before.Users == nil || len(before.Users) != 0 || before.Servers["world"].OwnerID != "legacy-owner" || before.Events[0].Message != "Existing event" {
+				t.Fatalf("legacy load = %+v", before)
+			}
+			app := &App{store: store, auth: &Auth{token: "test-admin"}}
+			res := userRequest(t, app, "POST", "/api/users", `{"name":" Alice ","playerId":"0123456789ABCDEF0123456789ABCDEF"}`, 201)
+			var user User
+			if err := json.Unmarshal(res.Body.Bytes(), &user); err != nil {
+				t.Fatal(err)
+			}
+			reloaded, err := NewStore(path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := reloaded.Snapshot()
+			if user.ID == "" || after.Users[user.ID] != (User{ID: user.ID, Name: "Alice", PlayerID: "0123456789abcdef0123456789abcdef"}) || !reflect.DeepEqual(before.Servers, after.Servers) || !reflect.DeepEqual(before.Events, after.Events) {
+				t.Fatalf("migration changed or lost data: %+v", after)
+			}
+			delete(after.Users, user.ID)
+			if reloaded.Snapshot().Users[user.ID].Name != "Alice" {
+				t.Fatal("snapshot shares the users map")
+			}
+		})
+	}
+}
+
+func TestUsersCRUDAndOwnerCopies(t *testing.T) {
+	for _, demo := range []bool{false, true} {
+		t.Run(fmt.Sprintf("demo=%t", demo), func(t *testing.T) {
+			app := newTestApp(t, false)
+			app.demo, app.auth.token = demo, "test-admin"
+			list := userRequest(t, app, "GET", "/api/users", "", 200)
+			if list.Body.String() != "{\"users\":[]}\n" {
+				t.Fatalf("empty list = %s", list.Body.String())
+			}
+			res := userRequest(t, app, "POST", "/api/users", `{"name":" Alice ","playerId":"0123456789ABCDEF0123456789ABCDEF"}`, 201)
+			var user User
+			if err := json.Unmarshal(res.Body.Bytes(), &user); err != nil {
+				t.Fatal(err)
+			}
+			if user.ID == "" || user.Name != "Alice" || user.PlayerID != "0123456789abcdef0123456789abcdef" {
+				t.Fatalf("created user = %+v", user)
+			}
+			path := "/api/users/" + user.ID
+			userRequest(t, app, "POST", "/api/users", `{"name":"Alias","playerId":"0123456789ABCDEF0123456789abcdef"}`, 409)
+			userRequest(t, app, "PUT", path, `{"name":"Alice","playerId":"0123456789ABCDEF0123456789ABCDEF"}`, 200)
+			userRequest(t, app, "POST", "/api/users", `{"name":"Alice","playerId":"abcdef0123456789abcdef0123456789"}`, 201)
+			userRequest(t, app, "PUT", path, `{"name":"Duplicate","playerId":"ABCDEF0123456789ABCDEF0123456789"}`, 409)
+			userRequest(t, app, "POST", "/api/servers", `{"name":"Copied owner","ownerId":"0123456789ABCDEF0123456789ABCDEF","maxPlayers":4}`, 201)
+			before := app.store.Snapshot()
+			if before.Servers["copied-owner"].OwnerID != user.PlayerID {
+				t.Fatalf("server owner was not canonical: %+v", before.Servers["copied-owner"])
+			}
+			res = userRequest(t, app, "PUT", path, `{"name":"Renamed","playerId":"11111111111111111111111111111111"}`, 200)
+			want := User{ID: user.ID, Name: "Renamed", PlayerID: "11111111111111111111111111111111"}
+			var edited User
+			if err := json.Unmarshal(res.Body.Bytes(), &edited); err != nil || edited != want {
+				t.Fatalf("edited user = %+v, %v", edited, err)
+			}
+			reloaded, err := NewStore(app.store.path, false)
+			if err != nil || reloaded.Snapshot().Users[user.ID] != want {
+				t.Fatalf("edit did not persist: %v", err)
+			}
+			var listing struct {
+				Users []User `json:"users"`
+			}
+			list = userRequest(t, app, "GET", "/api/users", "", 200)
+			if err := json.Unmarshal(list.Body.Bytes(), &listing); err != nil || len(listing.Users) != 2 || listing.Users[0].Name != "Alice" || listing.Users[1] != want {
+				t.Fatalf("list = %s, %v", list.Body.String(), err)
+			}
+			if strings.Contains(list.Body.String(), "copied-owner") || strings.Contains(list.Body.String(), "test-admin") || strings.Contains(list.Body.String(), "events") {
+				t.Fatal("users endpoint exposed unrelated state")
+			}
+			res = userRequest(t, app, "DELETE", path, "", 204)
+			if res.Body.Len() != 0 {
+				t.Fatal("delete returned a body")
+			}
+			userRequest(t, app, "DELETE", path, "", 404)
+			userRequest(t, app, "PUT", path, `{"name":"Missing","playerId":"11111111111111111111111111111111"}`, 404)
+			reloaded, err = NewStore(app.store.path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after := reloaded.Snapshot()
+			if _, ok := after.Users[user.ID]; ok || len(after.Users) != 1 || !reflect.DeepEqual(before.Servers, after.Servers) || !reflect.DeepEqual(before.Events, after.Events) {
+				t.Fatalf("edit/delete changed server copies or events: %+v", after)
+			}
+			userRequest(t, app, "POST", "/api/users", `{"name":"Reusable again","playerId":"11111111111111111111111111111111"}`, 201)
+		})
+	}
+}
+
+func TestPlayerIDValidationOnEveryInput(t *testing.T) {
+	invalid := []string{"", " ", "owner", "fixture-owner", strings.Repeat("a", 31), strings.Repeat("a", 33), strings.Repeat("g", 32), "01234567-89ab-cdef-0123-456789abcdef", " 0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef\n", "0123456789abcdef\t0123456789abcdef", "0123456789abcdef0123456789abcdeＦ", "0123456789abcdef0123456789abcde\x00"}
+	for _, demo := range []bool{false, true} {
+		app := newTestApp(t, false)
+		app.demo, app.auth.token = demo, "test-admin"
+		res := userRequest(t, app, "POST", "/api/users", `{"name":"Original","playerId":"0123456789abcdef0123456789abcdef"}`, 201)
+		var user User
+		if err := json.Unmarshal(res.Body.Bytes(), &user); err != nil {
+			t.Fatal(err)
+		}
+		before := app.store.Snapshot()
+		for _, value := range invalid {
+			t.Run(fmt.Sprintf("demo=%t/id=%q", demo, value), func(t *testing.T) {
+				body, _ := json.Marshal(map[string]any{"name": "Invalid", "playerId": value})
+				add := userRequest(t, app, "POST", "/api/users", string(body), 400)
+				edit := userRequest(t, app, "PUT", "/api/users/"+user.ID, string(body), 400)
+				body, _ = json.Marshal(map[string]any{"name": "Invalid", "ownerId": value, "maxPlayers": 4})
+				create := userRequest(t, app, "POST", "/api/servers", string(body), 400)
+				if add.Body.String() != edit.Body.String() || add.Body.String() != create.Body.String() || !strings.Contains(add.Body.String(), "32 hexadecimal characters") {
+					t.Fatalf("validation differs: %s / %s / %s", add.Body.String(), edit.Body.String(), create.Body.String())
+				}
+			})
+		}
+		for _, body := range []string{`{`, `{"name":"","playerId":"0123456789abcdef0123456789abcdef"}`, `{"name":"   ","playerId":"0123456789abcdef0123456789abcdef"}`, `{"name":"Two\nlines","playerId":"0123456789abcdef0123456789abcdef"}`, `{"name":"` + strings.Repeat("x", 49) + `","playerId":"0123456789abcdef0123456789abcdef"}`, `{"id":"chosen-id","name":"Name","playerId":"0123456789abcdef0123456789abcdef"}`} {
+			userRequest(t, app, "POST", "/api/users", body, 400)
+			userRequest(t, app, "PUT", "/api/users/"+user.ID, body, 400)
+		}
+		if !reflect.DeepEqual(before, app.store.Snapshot()) {
+			t.Fatal("invalid requests changed state")
+		}
+	}
+}
+
+func TestUsersRejectUnicodeLineSeparators(t *testing.T) {
+	for _, name := range []string{"Two\u2028lines", "Two\u2029lines"} {
+		for _, method := range []string{"POST", "PUT"} {
+			t.Run(fmt.Sprintf("%s/name=%q", method, name), func(t *testing.T) {
+				app := newTestApp(t, false)
+				app.auth.token = "test-admin"
+				res := userRequest(t, app, "POST", "/api/users", `{"name":"Zoë 山","playerId":"0123456789abcdef0123456789abcdef"}`, 201)
+				var user User
+				if err := json.Unmarshal(res.Body.Bytes(), &user); err != nil {
+					t.Fatal(err)
+				}
+				if user.Name != "Zoë 山" {
+					t.Fatalf("created name = %q", user.Name)
+				}
+				before := app.store.Snapshot()
+				path := "/api/users"
+				if method == "PUT" {
+					path += "/" + user.ID
+				}
+				body, _ := json.Marshal(map[string]string{"name": name, "playerId": "11111111111111111111111111111111"})
+				res = userRequest(t, app, method, path, string(body), 400)
+				if res.Body.String() != "{\"error\":\"name must be a single line of 1 to 48 characters\"}\n" {
+					t.Fatalf("validation error = %s", res.Body.String())
+				}
+				reloaded, err := NewStore(app.store.path, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(before, app.store.Snapshot()) || !reflect.DeepEqual(before, reloaded.Snapshot()) {
+					t.Fatal("invalid name changed memory or disk")
+				}
+			})
+		}
+	}
+}
+
+func TestUsersAuthenticationAndRoutes(t *testing.T) {
+	app := newTestApp(t, true)
+	app.auth.token = "test-admin"
+	before := app.store.Snapshot()
+	for _, route := range []struct{ method, path string }{{"GET", "/api/users"}, {"POST", "/api/users"}, {"PUT", "/api/users/missing"}, {"DELETE", "/api/users/missing"}} {
+		for _, token := range []string{"", "Bearer wrong"} {
+			req := httptest.NewRequest(route.method, route.path, strings.NewReader(`{"name":"Name","playerId":"0123456789abcdef0123456789abcdef"}`))
+			req.Header.Set("Authorization", token)
+			res := httptest.NewRecorder()
+			app.ServeHTTP(res, req)
+			if res.Code != 401 || res.Body.String() != "{\"error\":\"authentication required\"}\n" {
+				t.Fatalf("unauthenticated %s %s = %d %s", route.method, route.path, res.Code, res.Body.String())
+			}
+		}
+	}
+	for _, path := range []string{"/api/users/", "/api/users/missing/extra"} {
+		userRequest(t, app, "DELETE", path, "", 404)
+	}
+	res := userRequest(t, app, "DELETE", "/api/users", "", 405)
+	if res.Header().Get("Allow") != "GET, POST" {
+		t.Fatal("missing collection Allow header")
+	}
+	res = userRequest(t, app, "POST", "/api/users/missing", "", 405)
+	if res.Header().Get("Allow") != "PUT, DELETE" {
+		t.Fatal("missing item Allow header")
+	}
+	if !reflect.DeepEqual(before, app.store.Snapshot()) {
+		t.Fatal("unauthorized or invalid routes changed state")
+	}
+}
+
+func TestUsersOIDCRolesAndCSRF(t *testing.T) {
+	app, issuer := oidcTestApp(t)
+	admin, csrf := loginAs(t, app, issuer, "admin")
+	viewer, viewerCSRF := loginAs(t, app, issuer, "viewer")
+	body := `{"name":"Alice","playerId":"0123456789ABCDEF0123456789ABCDEF"}`
+	created := authRequest(app, "POST", "/api/users", admin, app.auth.settings.Origin, csrf, body)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("admin create = %d %s", created.Code, created.Body.String())
+	}
+	var user User
+	if err := json.Unmarshal(created.Body.Bytes(), &user); err != nil {
+		t.Fatal(err)
+	}
+	if user.ID == "" || user.PlayerID != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("created user = %+v", user)
+	}
+	path := "/api/users/" + user.ID
+	before := app.store.Snapshot()
+	for _, route := range [][2]string{{"GET", "/api/users"}, {"POST", "/api/users"}, {"PUT", path}, {"DELETE", path}} {
+		if res := authRequest(app, route[0], route[1], nil, "", "", body); res.Code != 401 {
+			t.Fatalf("anonymous %v = %d", route, res.Code)
+		}
+		if res := authRequest(app, route[0], route[1], viewer, app.auth.settings.Origin, viewerCSRF, body); res.Code != 403 {
+			t.Fatalf("viewer %v = %d", route, res.Code)
+		}
+		if route[0] != "GET" {
+			for _, pair := range [][2]string{{"", csrf}, {"https://evil.example", csrf}, {app.auth.settings.Origin, ""}, {app.auth.settings.Origin, viewerCSRF}} {
+				if res := authRequest(app, route[0], route[1], admin, pair[0], pair[1], body); res.Code != 403 {
+					t.Fatalf("CSRF bypass %v = %d", route, res.Code)
+				}
+			}
+		}
+	}
+	if !reflect.DeepEqual(before, app.store.Snapshot()) {
+		t.Fatal("denied users requests changed state")
+	}
+	list := authRequest(app, "GET", "/api/users", admin, "", "", "")
+	if list.Code != 200 || !strings.Contains(list.Body.String(), user.PlayerID) || strings.Contains(list.Body.String(), "servers") {
+		t.Fatalf("admin list = %d %s", list.Code, list.Body.String())
+	}
+	for _, endpoint := range []string{"/api/bootstrap", "/api/servers/scuffedtards/telemetry"} {
+		res := authRequest(app, "GET", endpoint, viewer, "", "", "")
+		if res.Code != 200 || strings.Contains(res.Body.String(), user.PlayerID) || strings.Contains(res.Body.String(), `"users"`) {
+			t.Fatalf("viewer projection = %d %s", res.Code, res.Body.String())
+		}
+	}
+	if res := authRequest(app, "POST", "/api/users", admin, app.auth.settings.Origin, csrf, body); res.Code != 409 {
+		t.Fatalf("OIDC duplicate = %d %s", res.Code, res.Body.String())
+	}
+	if res := authRequest(app, "PUT", path, admin, app.auth.settings.Origin, csrf, `{"name":"Renamed","playerId":"11111111111111111111111111111111"}`); res.Code != 200 {
+		t.Fatalf("admin edit = %d %s", res.Code, res.Body.String())
+	}
+	if got := app.store.Snapshot().Users[user.ID]; got != (User{ID: user.ID, Name: "Renamed", PlayerID: "11111111111111111111111111111111"}) {
+		t.Fatalf("OIDC edit = %+v", got)
+	}
+	if res := authRequest(app, "DELETE", path, admin, app.auth.settings.Origin, csrf, ""); res.Code != 204 || len(app.store.Snapshot().Users) != 0 {
+		t.Fatalf("admin delete = %d %s", res.Code, res.Body.String())
+	}
+	if res := authRequest(app, "POST", "/api/auth/logout", admin, app.auth.settings.Origin, csrf, ""); res.Code != 204 {
+		t.Fatalf("logout = %d", res.Code)
+	}
+	if res := authRequest(app, "GET", "/api/users", admin, "", "", ""); res.Code != 401 {
+		t.Fatalf("logged out list = %d", res.Code)
+	}
+}
+
+func TestUsersConcurrentDuplicate(t *testing.T) {
+	app := newTestApp(t, false)
+	app.auth.token = "test-admin"
+	results := make(chan int, 12)
+	for i := 0; i < cap(results); i++ {
+		go func() {
+			req := httptest.NewRequest("POST", "/api/users", strings.NewReader(`{"name":"Concurrent","playerId":"0123456789abcdef0123456789abcdef"}`))
+			req.Header.Set("Authorization", "Bearer test-admin")
+			res := httptest.NewRecorder()
+			app.ServeHTTP(res, req)
+			results <- res.Code
+		}()
+	}
+	counts := map[int]int{}
+	for i := 0; i < cap(results); i++ {
+		counts[<-results]++
+	}
+	if counts[201] != 1 || counts[409] != 11 || len(app.store.Snapshot().Users) != 1 {
+		t.Fatalf("concurrent duplicate responses = %v", counts)
+	}
+}
+
+func TestUsersFailedPersistenceLeavesStateUnchanged(t *testing.T) {
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		t.Run(method, func(t *testing.T) {
+			app := newTestApp(t, true)
+			app.auth.token = "test-admin"
+			res := userRequest(t, app, "POST", "/api/users", `{"name":"Original","playerId":"0123456789abcdef0123456789abcdef"}`, 201)
+			var user User
+			if err := json.Unmarshal(res.Body.Bytes(), &user); err != nil {
+				t.Fatal(err)
+			}
+			before := app.store.Snapshot()
+			path := app.store.path
+			app.store.path = filepath.Join(path, "cannot-create-under-file.json")
+			endpoint := "/api/users"
+			if method != "POST" {
+				endpoint += "/" + user.ID
+			}
+			res = userRequest(t, app, method, endpoint, `{"name":"Changed","playerId":"11111111111111111111111111111111"}`, 500)
+			if res.Body.String() != "{\"error\":\"could not persist saved IDs\"}\n" {
+				t.Fatalf("persistence error exposed internal state: %s", res.Body.String())
+			}
+			reloaded, err := NewStore(path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(before, app.store.Snapshot()) || !reflect.DeepEqual(before, reloaded.Snapshot()) {
+				t.Fatal("failed persistence changed memory or disk")
+			}
+		})
+	}
+}
+
 func TestValidateCreate(t *testing.T) {
 	for _, limits := range []struct{ memory, cpu int }{{-1, 1000}, {255, 1000}, {65537, 1000}, {2048, -1}, {2048, 99}, {2048, 64001}} {
-		if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "owner", MaxPlayers: 4, MemoryLimitMiB: limits.memory, CPULimitMillis: limits.cpu}, false); err == nil {
+		if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "0123456789abcdef0123456789abcdef", MaxPlayers: 4, MemoryLimitMiB: limits.memory, CPULimitMillis: limits.cpu}); err == nil {
 			t.Fatalf("invalid resource limits accepted: %+v", limits)
 		}
 	}
-	if err := validateCreate(CreateServerRequest{Name: "World", MaxPlayers: 12}, false); err == nil {
+	if err := validateCreate(CreateServerRequest{Name: "World", MaxPlayers: 12}); err == nil {
 		t.Fatal("missing owner ID accepted")
 	}
-	if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "eos", MaxPlayers: 12, Namespace: "Dragonwilds"}, false); err == nil {
+	if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "0123456789abcdef0123456789abcdef", MaxPlayers: 12, Namespace: "Dragonwilds"}); err == nil {
 		t.Fatal("invalid namespace accepted")
 	}
-	if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "eos", MaxPlayers: 12, ImageTag: "v1.2.3"}, false); err != nil {
+	if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "0123456789abcdef0123456789abcdef", MaxPlayers: 12, ImageTag: "v1.2.3"}); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
 	}
 }
 
 func TestCreatePersistsResourceLimits(t *testing.T) {
 	app := newTestApp(t, false)
-	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Resource test","ownerId":"owner","maxPlayers":6,"memoryLimitMiB":1536,"cpuLimitMillis":750}`)
+	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Resource test","ownerId":"0123456789abcdef0123456789abcdef","maxPlayers":6,"memoryLimitMiB":1536,"cpuLimitMillis":750}`)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", res.Code, res.Body.String())
 	}
@@ -216,7 +597,7 @@ func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
 	app := newTestApp(t, false)
 	runner := &recordingRunner{}
 	app.orchestrator = &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "chart", imageRepository: "example/server"}
-	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Public name","worldName":"Separate world","ownerId":"owner-123","maxPlayers":6,"memoryLimitMiB":1536,"cpuLimitMillis":750,"gamePort":7780,"storageGiB":2,"serviceType":"NodePort","adminIds":"admin-1,admin-2","debugLevel":3,"autoStopOnUpdate":true,"validateGameFiles":true,"additionalArgs":"-log","serverPassword":"private-join","adminPassword":"private-admin"}`)
+	res := requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Public name","worldName":"Separate world","ownerId":"0123456789abcdef0123456789abcdef","maxPlayers":6,"memoryLimitMiB":1536,"cpuLimitMillis":750,"gamePort":7780,"storageGiB":2,"serviceType":"NodePort","adminIds":"admin-1,admin-2","debugLevel":3,"autoStopOnUpdate":true,"validateGameFiles":true,"additionalArgs":"-log","serverPassword":"private-join","adminPassword":"private-admin"}`)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", res.Code, res.Body.String())
 	}
@@ -255,7 +636,7 @@ func TestDemoAPIExercisesMutations(t *testing.T) {
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "DRAGONWILDS") {
 		t.Fatalf("embedded UI status = %d, body = %s", res.Code, res.Body.String())
 	}
-	res = requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Night Shift","namespace":"dragonwilds","region":"eu-central","ownerId":"eos-1","imageTag":"0.1.1","maxPlayers":12}`)
+	res = requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Night Shift","namespace":"dragonwilds","region":"eu-central","ownerId":"0123456789abcdef0123456789abcdef","imageTag":"0.1.1","maxPlayers":12}`)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
 	}

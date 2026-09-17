@@ -61,6 +61,10 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
+            - name: RSDW_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: RSDW_LISTEN_ADDR
               value: ":8080"
             - name: RSDW_CLUSTER_NAME
@@ -69,6 +73,8 @@ spec:
               value: {{ .Values.cluster.region | quote }}
             - name: RSDW_STATE_FILE
               value: /var/lib/rsdw-c2/state.json
+            - name: RSDW_SAVE_UPLOADS_ENABLED
+              value: {{ .Values.state.persistence.enabled | quote }}
             - name: RSDW_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             {{- if eq .Values.auth.mode "token" }}

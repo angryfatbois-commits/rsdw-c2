@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -41,7 +42,9 @@ const (
 )
 
 type Server struct {
+	RestartOperation string `json:"-"`
 	ServerSettings
+	SaveSeed              *SaveSeed                `json:"saveSeed,omitempty"`
 	Metrics               map[string]MetricReading `json:"metrics"`
 	PasswordSecret        string                   `json:"passwordSecret,omitempty"`
 	ServerPassword        string                   `json:"-"`
@@ -92,19 +95,35 @@ func (s Server) MarshalJSON() ([]byte, error) {
 }
 
 type Event struct {
-	ID         string    `json:"id"`
-	Timestamp  time.Time `json:"timestamp"`
-	ServerID   string    `json:"serverId"`
-	ServerName string    `json:"serverName"`
-	Category   string    `json:"category"`
-	Severity   string    `json:"severity"`
-	Message    string    `json:"message"`
-	Details    string    `json:"details"`
+	Kind        EventKind `json:"kind,omitempty"`
+	Source      string    `json:"source,omitempty"`
+	Accuracy    string    `json:"accuracy,omitempty"`
+	OperationID string    `json:"operationId,omitempty"`
+	ID          string    `json:"id"`
+	Timestamp   time.Time `json:"timestamp"`
+	ServerID    string    `json:"serverId"`
+	ServerName  string    `json:"serverName"`
+	Category    string    `json:"category"`
+	Severity    string    `json:"severity"`
+	Message     string    `json:"message"`
+	Details     string    `json:"details"`
 }
 
 type State struct {
-	Servers map[string]Server `json:"servers"`
-	Events  []Event           `json:"events"`
+	Integrations   map[string]DiscordIntegration `json:"integrations"`
+	Producers      map[string]AlertProducer      `json:"alertProducers"`
+	Deliveries     map[string]Delivery           `json:"deliveries"`
+	DiscordRetryAt time.Time                     `json:"discordRetryAt,omitempty"`
+	Servers        map[string]Server             `json:"servers"`
+	Events         []Event                       `json:"events"`
+	Users          map[string]User               `json:"users"`
+	PendingSeeds   map[string]PendingSeed        `json:"pendingSeeds,omitempty"`
+}
+
+type User struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	PlayerID string `json:"playerId"`
 }
 
 type CreateServerRequest struct {
@@ -172,7 +191,8 @@ type Store struct {
 }
 
 func NewStore(path string, demo bool) (*Store, error) {
-	s := &Store{path: path, state: State{Servers: map[string]Server{}}}
+	s := &Store{path: path, state: State{Servers: map[string]Server{}, Users: map[string]User{}}}
+	s.state.initIntegrations()
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := json.Unmarshal(data, &s.state); err != nil {
@@ -180,6 +200,13 @@ func NewStore(path string, demo bool) (*Store, error) {
 			}
 			if s.state.Servers == nil {
 				s.state.Servers = map[string]Server{}
+			}
+			if s.state.Users == nil {
+				s.state.Users = map[string]User{}
+			}
+			s.state.initIntegrations()
+			if err := s.Update(func(state *State) error { state.recoverAlerts(); return nil }); err != nil {
+				return nil, err
 			}
 			return s, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -195,24 +222,60 @@ func NewStore(path string, demo bool) (*Store, error) {
 func (s *Store) Snapshot() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	servers := make(map[string]Server, len(s.state.Servers))
-	for id, server := range s.state.Servers {
-		servers[id] = server
+	return s.state.clone()
+}
+
+func (s State) clone() State {
+	next := s
+	next.Servers, next.Users, next.PendingSeeds = maps.Clone(s.Servers), maps.Clone(s.Users), maps.Clone(s.PendingSeeds)
+	next.Events = append([]Event(nil), s.Events...)
+	for id, server := range next.Servers {
+		server.Metrics = maps.Clone(server.Metrics)
+		for key, reading := range server.Metrics {
+			if reading.Value != nil {
+				value := *reading.Value
+				reading.Value = &value
+			}
+			if reading.ObservedAt != nil {
+				at := *reading.ObservedAt
+				reading.ObservedAt = &at
+			}
+			server.Metrics[key] = reading
+		}
+		if server.SaveSeed != nil {
+			seed := *server.SaveSeed
+			server.SaveSeed = &seed
+		}
+		next.Servers[id] = server
 	}
-	events := append([]Event(nil), s.state.Events...)
-	return State{Servers: servers, Events: events}
+	next.Integrations, next.Producers, next.Deliveries = maps.Clone(s.Integrations), maps.Clone(s.Producers), maps.Clone(s.Deliveries)
+	for id, integration := range next.Integrations {
+		integration.ServerIDs = append([]string{}, integration.ServerIDs...)
+		integration.Rules = maps.Clone(integration.Rules)
+		next.Integrations[id] = integration
+	}
+	for id, producer := range next.Producers {
+		if producer.Restart != nil {
+			restart := *producer.Restart
+			producer.Restart = &restart
+		}
+		next.Producers[id] = producer
+	}
+	return next
 }
 
 func (s *Store) Update(fn func(*State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := fn(&s.state); err != nil {
+	next := s.state.clone()
+	if err := fn(&next); err != nil {
 		return err
 	}
 	if s.path == "" {
+		s.state = next
 		return nil
 	}
-	data, err := json.MarshalIndent(s.state, "", "  ")
+	data, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)
 	}
@@ -233,12 +296,26 @@ func (s *Store) Update(fn func(*State) error) error {
 		tmp.Close()
 		return fmt.Errorf("protect state temp file: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync state: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close state temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("replace state: %w", err)
 	}
+	directory, err := os.Open(filepath.Dir(s.path))
+	if err != nil {
+		return fmt.Errorf("open state directory: %w", err)
+	}
+	err = directory.Sync()
+	directory.Close()
+	if err != nil {
+		return fmt.Errorf("sync state directory: %w", err)
+	}
+	s.state = next
 	return nil
 }
 
@@ -428,6 +505,9 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 		args = append(args, "--set-literal", setting)
 	}
 	args = append(args, "--set", fmt.Sprintf("server.port=%d,service.port=%d,persistence.size=%dGi,service.type=%s", server.GamePort, server.GamePort, server.StorageGiB, server.ServiceType))
+	if server.SaveSeed != nil {
+		args = append(args, "--set-literal", "saveSeed.existingClaim="+server.SaveSeed.Claim, "--set-literal", "saveSeed.path="+server.SaveSeed.Path)
+	}
 	if server.PasswordSecret != "" {
 		for i, entry := range []struct{ name, key string }{{"RSDW_PASSWORD", "serverPassword"}, {"RSDW_ADMIN_PASSWORD", "adminPassword"}} {
 			args = append(args, "--set-string", fmt.Sprintf("server.extraEnv[%d].name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.key=%s", i, entry.name, i, server.PasswordSecret, i, entry.key))
@@ -440,7 +520,8 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 }
 
 func (k *kubeOrchestrator) Restart(ctx context.Context, server Server) error {
-	_, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "rollout", "restart", "deployment/"+deploymentName(server.Release))
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"annotations": map[string]string{restartAnnotation: server.RestartOperation}}}}})
+	_, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "patch", "deployment/"+deploymentName(server.Release), "--type=merge", "-p", string(patch))
 	return err
 }
 
@@ -577,13 +658,16 @@ func newerVersion(candidate, current [3]int) bool {
 }
 
 type App struct {
-	store         *Store
-	orchestrator  Orchestrator
-	demo          bool
-	auth          *Auth
-	imageRepo     string
-	telemetryOnce sync.Once
-	telemetry     *telemetryStore
+	deliveryMu       sync.Mutex
+	discordTransport http.RoundTripper
+	createMu         sync.Mutex
+	store            *Store
+	orchestrator     Orchestrator
+	demo             bool
+	auth             *Auth
+	imageRepo        string
+	telemetryOnce    sync.Once
+	telemetry        *telemetryStore
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -606,12 +690,20 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/integrations" || strings.HasPrefix(r.URL.Path, "/api/integrations/") {
+		a.handleIntegrations(w, r)
+		return
+	}
 	if r.URL.Path == "/api/bootstrap" && r.Method == http.MethodGet {
 		a.handleBootstrap(w, r)
 		return
 	}
 	if r.URL.Path == "/api/servers" && r.Method == http.MethodPost {
 		a.handleCreate(w, r)
+		return
+	}
+	if r.URL.Path == "/api/users" || strings.HasPrefix(r.URL.Path, "/api/users/") {
+		a.handleUsers(w, r)
 		return
 	}
 	if r.URL.Path == "/api/events" && r.Method == http.MethodGet {
@@ -650,10 +742,117 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleUsers(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/users")
+	collection := id == ""
+	id = strings.TrimPrefix(id, "/")
+	if !collection && (id == "" || strings.Contains(id, "/")) {
+		writeError(w, http.StatusNotFound, "route not found")
+		return
+	}
+	if collection && r.Method == http.MethodGet {
+		users := make([]User, 0)
+		for _, user := range a.store.Snapshot().Users {
+			users = append(users, user)
+		}
+		sort.Slice(users, func(i, j int) bool {
+			if users[i].Name == users[j].Name {
+				return users[i].ID < users[j].ID
+			}
+			return users[i].Name < users[j].Name
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"users": users})
+		return
+	}
+	if (collection && r.Method != http.MethodPost) || (!collection && r.Method != http.MethodPut && r.Method != http.MethodDelete) {
+		if collection {
+			w.Header().Set("Allow", "GET, POST")
+		} else {
+			w.Header().Set("Allow", "PUT, DELETE")
+		}
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Name     string `json:"name"`
+		PlayerID string `json:"playerId"`
+	}
+	if r.Method != http.MethodDelete {
+		if err := decodeJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		body.Name = strings.TrimSpace(body.Name)
+		if body.Name == "" || len(body.Name) > 48 || strings.ContainsAny(body.Name, "\x00\r\n\u2028\u2029") {
+			writeError(w, http.StatusBadRequest, "name must be a single line of 1 to 48 characters")
+			return
+		}
+		var err error
+		body.PlayerID, err = normalizePlayerID(body.PlayerID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	user := User{ID: id, Name: body.Name, PlayerID: body.PlayerID}
+	status := http.StatusInternalServerError
+	err := a.store.Update(func(state *State) error {
+		if !collection {
+			if _, ok := state.Users[id]; !ok {
+				status = http.StatusNotFound
+				return errors.New("saved ID not found")
+			}
+		}
+		if r.Method == http.MethodDelete {
+			delete(state.Users, id)
+			return nil
+		}
+		for _, existing := range state.Users {
+			if existing.ID != id && existing.PlayerID == user.PlayerID {
+				status = http.StatusConflict
+				return errors.New("this player ID is already saved")
+			}
+		}
+		if collection {
+			for user.ID == "" || state.Users[user.ID].ID != "" {
+				user.ID = randomID()
+			}
+		}
+		state.Users[user.ID] = user
+		return nil
+	})
+	if err != nil {
+		if status == http.StatusInternalServerError {
+			writeError(w, status, "could not persist saved IDs")
+		} else {
+			writeError(w, status, err.Error())
+		}
+		return
+	}
+	if r.Method == http.MethodDelete {
+		writeJSON(w, http.StatusNoContent, nil)
+		return
+	}
+	status = http.StatusOK
+	if collection {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, user)
+}
+
 func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
-	var request CreateServerRequest
-	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !a.createMu.TryLock() {
+		writeError(w, http.StatusConflict, "another server creation is in progress; try again shortly")
+		return
+	}
+	defer a.createMu.Unlock()
+	request, upload, err := decodeCreate(w, r)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errSaveTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	if request.MemoryLimitMiB == 0 {
@@ -662,10 +861,11 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if request.CPULimitMillis == 0 {
 		request.CPULimitMillis = 1000
 	}
-	if err := validateCreate(request, a.demo); err != nil {
+	if err := validateCreate(request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	request.OwnerID, _ = normalizePlayerID(request.OwnerID)
 	release := slugify(request.Name)
 	if release == "" {
 		writeError(w, http.StatusBadRequest, "name must include a letter or number")
@@ -695,10 +895,40 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "a server with this name already exists")
 		return
 	}
+	for _, pending := range a.store.Snapshot().PendingSeeds {
+		if pending.Release == release {
+			writeError(w, http.StatusConflict, "this server has an unfinished save deployment; its seed storage must be reconciled before retrying")
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
+	if upload != nil {
+		if os.Getenv("RSDW_SAVE_UPLOADS_ENABLED") == "false" {
+			writeError(w, http.StatusServiceUnavailable, "save upload requires persistent C2 state storage")
+			return
+		}
+		k, ok := a.orchestrator.(*kubeOrchestrator)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "save upload requires Kubernetes storage")
+			return
+		}
+		seed, err := a.prepareSeed(ctx, k, server, upload)
+		if seed.Claim != "" {
+			defer a.cleanupSeed(seed.Claim)
+		}
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "could not stage the save; cleanup will retry automatically")
+			return
+		}
+		server.SaveSeed = &seed
+	}
 	if err := a.orchestrator.Deploy(ctx, server); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		if server.SaveSeed != nil {
+			writeError(w, http.StatusBadGateway, "save deployment failed; storage remains owned until Kubernetes confirms it is unused")
+		} else {
+			writeError(w, http.StatusBadGateway, err.Error())
+		}
 		return
 	}
 	if a.demo {
@@ -707,10 +937,13 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	server.ServerPassword, server.AdminPassword = "", ""
 	if err := a.store.Update(func(state *State) error {
 		state.Servers[server.ID] = server
+		if server.SaveSeed != nil {
+			delete(state.PendingSeeds, server.SaveSeed.Claim)
+		}
 		appendEvent(state, server, "system", "success", "Server created", "Helm release accepted")
 		return nil
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "could not persist the server; any seed storage remains owned for recovery")
 		return
 	}
 	writeJSON(w, http.StatusCreated, server)
@@ -788,27 +1021,6 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "route not found")
 }
 
-func (a *App) handleRestart(w http.ResponseWriter, r *http.Request, server Server) {
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	if err := a.orchestrator.Restart(ctx, server); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	server.Status = StatusStarting
-	server.LastRestart = time.Now().UTC().Format(time.RFC3339)
-	server.LastSeen = time.Now().UTC().Format(time.RFC3339)
-	if err := a.store.Update(func(state *State) error {
-		state.Servers[server.ID] = server
-		appendEvent(state, server, "system", "warning", "Restart requested", "The server is restarting")
-		return nil
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, server)
-}
-
 func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server) {
 	var request UpdateServerRequest
 	if err := decodeJSON(r, &request); err != nil {
@@ -826,10 +1038,14 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	server.CurrentImage = server.DesiredImage
-	server.UpdateAvailable = false
+	if a.demo {
+		server.CurrentImage = server.DesiredImage
+		server.UpdateAvailable = false
+		server.LastSeen = time.Now().UTC().Format(time.RFC3339)
+	} else {
+		server = a.telemetryFor(server, "60s").Server
+	}
 	server.Status = StatusStarting
-	server.LastSeen = time.Now().UTC().Format(time.RFC3339)
 	if err := a.store.Update(func(state *State) error {
 		state.Servers[server.ID] = server
 		appendEvent(state, server, "update", "success", "Image update requested", server.DesiredImage)
@@ -903,7 +1119,14 @@ func parseLogs(raw string) []LogLine {
 	return lines
 }
 
-func validateCreate(request CreateServerRequest, demo bool) error {
+func normalizePlayerID(value string) (string, error) {
+	if !regexp.MustCompile(`^[0-9a-fA-F]{32}$`).MatchString(value) {
+		return "", errors.New("player ID must contain exactly 32 hexadecimal characters (0-9, a-f), without spaces or separators")
+	}
+	return strings.ToLower(value), nil
+}
+
+func validateCreate(request CreateServerRequest) error {
 	if request.GamePort != 0 && (request.GamePort < 1024 || request.GamePort > 65535) {
 		return errors.New("gamePort must be between 1024 and 65535")
 	}
@@ -930,8 +1153,8 @@ func validateCreate(request CreateServerRequest, demo bool) error {
 	if strings.TrimSpace(request.Name) == "" || len(request.Name) > 48 {
 		return errors.New("name is required and must be 48 characters or fewer")
 	}
-	if !demo && strings.TrimSpace(request.OwnerID) == "" {
-		return errors.New("ownerId is required")
+	if _, err := normalizePlayerID(request.OwnerID); err != nil {
+		return err
 	}
 	if request.MaxPlayers < 1 || request.MaxPlayers > 64 {
 		return errors.New("maxPlayers must be between 1 and 64")
@@ -1062,7 +1285,9 @@ func main() {
 		orchestrator = demoOrchestrator{}
 	}
 	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth}
+	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
+	go app.runDeliveries(context.Background())
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	listener, err := net.Listen("tcp", addr)
