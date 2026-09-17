@@ -23,10 +23,11 @@ const worlds = [
 // A saved receipt exercises rendering only; demo mode cannot prove Kubernetes retention.
 const receipt = {serverId:'previous-world', worldLabel:'Previous world', namespace:'dragonwilds', release:'previous-world', mode:'keep', completed:true,
   plan:{world:[{kind:'PersistentVolumeClaim', namespace:'dragonwilds', name:'previous-world', uid:'world-uid'}],
+    seeds:[{kind:'PersistentVolumeClaim', namespace:'dragonwilds', name:'uploaded-source', uid:'source-uid'}],
     retainedSecrets:[{kind:'Secret', namespace:'dragonwilds', name:'legacy-api', uid:'secret-uid'}]}};
 const pendingReceipts = Object.fromEntries(['keep','purge'].map((mode) => [`pending-${mode}`, {
   serverId:`pending-${mode}`, worldLabel:`Interrupted ${mode}`, namespace:'dragonwilds', release:`pending-${mode}`,
-  mode, completed:false, lastError:'Fixture interruption; retry required', plan:{},
+  mode, completed:false, lastError:'Fixture interruption; retry required', plan:{seeds:receipt.plan.seeds},
 }]));
 fs.writeFileSync(stateFile, JSON.stringify({servers:Object.fromEntries(worlds.map((server) => [server.id, server])), deletions:{'previous-world':receipt, ...pendingReceipts}}));
 const children = [];
@@ -88,6 +89,9 @@ async function run() {
   assert.match(await retained.innerText(), /Secrets were kept because C2 could not prove ownership/);
   assert.match(await retained.innerText(), /dragonwilds\/legacy-api, UID secret-uid/);
   assert.match(await retained.innerText(), /persistence.existingClaim/);
+  assert.match(await retained.innerText(), /Retained source-save PVC dragonwilds\/uploaded-source, UID source-uid/);
+  assert.match(await retained.innerText(), /recovery through saveSeed/);
+  assert.match(await retained.innerText(), /not a world volume for persistence.existingClaim/);
   await page.getByTestId('delete-server').click();
   assert.match(await page.locator('#modal-body').innerText(), /PC2-US-EAST-02\s+Stable ID petzko-02/);
   assert.equal(await page.getByTestId('delete-mode').inputValue(), 'keep');
@@ -146,6 +150,7 @@ async function run() {
     assert.equal(await page.getByTestId('update-image').count(), 0);
     const pendingReceipt = retained.locator('article').filter({has:page.getByRole('heading', {name:`Interrupted ${mode}`, exact:true})});
     assert.match(await pendingReceipt.innerText(), /Pending, retry required/);
+    assert.match(await pendingReceipt.innerText(), new RegExp(`${mode === 'keep' ? 'Retained' : 'Selected'} source-save PVC dragonwilds/uploaded-source, UID source-uid`));
     await pendingReceipt.getByTestId('retry-deletion').click();
     assert.match(await page.locator('#modal-body').innerText(), new RegExp(`Recorded choice ${mode}\\. It cannot change on retry`));
     assert.equal(await page.getByTestId('delete-mode').count(), 0);
@@ -166,6 +171,7 @@ async function run() {
     await page.reload();
     await pendingReceipt.getByText(`Server ID ${id}. Completed. World data choice ${mode}.`, {exact:true}).waitFor();
     assert.equal(await pendingReceipt.getByTestId('retry-deletion').count(), 0);
+    assert.match(await pendingReceipt.innerText(), new RegExp(`${mode === 'keep' ? 'Retained' : 'Deleted'} source-save PVC dragonwilds/uploaded-source, UID source-uid`));
   }
   await page.screenshot({path:path.join(output, 'receipts.png'), fullPage:true});
 
