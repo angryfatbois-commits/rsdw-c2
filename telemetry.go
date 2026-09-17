@@ -149,9 +149,14 @@ func (a *App) collectTelemetry(ctx context.Context) {
 			for server := range jobs {
 				cache.mu.RLock()
 				history := cache.history[server.ID]
+				historyLength := len(history)
+				var historyAt time.Time
+				if historyLength > 0 {
+					historyAt = history[historyLength-1].at
+				}
 				var previous *networkCounters
-				if len(history) > 0 {
-					previous = history[len(history)-1].network
+				if historyLength > 0 {
+					previous = history[historyLength-1].network
 				}
 				cache.mu.RUnlock()
 				result := observation{metrics: emptyMetrics(), status: StatusUnknown}
@@ -169,6 +174,11 @@ func (a *App) collectTelemetry(ctx context.Context) {
 				}
 				cache.mu.Lock()
 				history = cache.history[server.ID]
+				if len(history) != historyLength || historyLength > 0 && !history[len(history)-1].at.Equal(historyAt) {
+					cache.mu.Unlock()
+					a.lifecycleMu.Unlock()
+					continue
+				}
 				first := 0
 				for first < len(history) && !history[first].at.After(result.at.Add(-telemetryRetention)) {
 					first++
