@@ -396,7 +396,8 @@ func TestOIDCViewerProjection(t *testing.T) {
 		server.DesiredImage = secret
 		server.Namespace = secret
 		server.Release = secret
-		server.WorldName = secret
+		server.WorldName = "Public world"
+		server.OwnershipToken = secret
 		s.Servers[server.ID] = server
 		s.Events[0].Details = secret
 		return nil
@@ -418,7 +419,7 @@ func TestOIDCViewerProjection(t *testing.T) {
 				t.Fatalf("unexpected field %s", field)
 			}
 		}
-		if !strings.Contains(res.Body.String(), "ScuffedTards") || !strings.Contains(res.Body.String(), `"value":7`) {
+		if !strings.Contains(res.Body.String(), "ScuffedTards") || !strings.Contains(res.Body.String(), `"worldName":"Public world"`) || !strings.Contains(res.Body.String(), `"value":7`) {
 			t.Fatal("viewer lost useful data")
 		}
 	}

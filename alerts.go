@@ -37,6 +37,9 @@ func (p *AlertProducer) resetStreak() {
 }
 
 func observeAlerts(state *State, server Server, o observation, now time.Time) {
+	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) {
+		return
+	}
 	p := state.Producers[server.ID]
 	if o.at.IsZero() || !o.at.After(p.LastAt) {
 		return
@@ -124,6 +127,11 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 }
 
 func (a *App) handleRestart(w http.ResponseWriter, r *http.Request, server Server) {
+	server, ok := a.lockServer(w, server.ID)
+	if !ok {
+		return
+	}
+	defer a.lifecycleMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	runtime := a.store.Snapshot().Producers[server.ID].Runtime

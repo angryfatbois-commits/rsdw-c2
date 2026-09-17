@@ -36,7 +36,7 @@ async function holdResponse(page, pathname) {
     captured();
     await released;
     await route.fulfill({...response,headers:Object.fromEntries(Object.entries(response.headers).map(([key,value]) => [key,Array.isArray(value) ? value.join('\n') : String(value)]))});
-  }, {times:1});
+  });
   return {ready:responseReady,release};
 }
 

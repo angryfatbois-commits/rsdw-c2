@@ -139,6 +139,11 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 	for id, d := range snapshot.Deliveries {
 		if d.Status == DeliverySending {
 			if err := a.store.Update(func(state *State) error {
+				current, ok := state.Deliveries[id]
+				if !ok || current.Status != DeliverySending {
+					return nil
+				}
+				d = current
 				d.Status, d.Result = DeliveryUncertain, "Delivery result was not persisted; message may have been sent. No automatic retry."
 				state.Deliveries[id] = d
 				return nil
@@ -160,7 +165,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 			}
 			var ok bool
 			integration, ok = state.Integrations[d.IntegrationID]
-			if !ok || !deliveryEnabled(integration, d) {
+			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) {
 				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", now
 				state.Deliveries[id] = d
 				state.pruneDeliveryHistory()
@@ -184,6 +189,10 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 			finished = now
 		}
 		if err := a.store.Update(func(state *State) error {
+			current, ok := state.Deliveries[id]
+			if !ok || current.Status != DeliverySending || current.Attempts != d.Attempts {
+				return nil
+			}
 			d.Status, d.Result, d.UpdatedAt = result.status, result.reason, finished
 			if result.wait > 0 {
 				state.DiscordRetryAt = finished.Add(result.wait)

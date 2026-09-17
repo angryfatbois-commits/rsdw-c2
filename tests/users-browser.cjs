@@ -108,18 +108,18 @@ async function run() {
     await page.getByTestId('confirm-modal').click();
     await page.locator('#modal-error').waitFor({state:'visible'});
     assert.match(await page.locator('#modal-error').innerText(), message);
-    assert.equal(saved().servers['saved-owner-world'], undefined);
+    assert.equal(Object.values(saved().servers).some((item) => item.name === 'Saved owner world'), false);
     assert.equal(await page.getByTestId('confirm-modal').isEnabled(), true);
   }
   await upload.setInputFiles({name:'World.sav',mimeType:'application/octet-stream',buffer:Buffer.from('GVAS\0browser-save-fixture')});
   await submit('POST', '/api/servers', 503);
   assert.equal(await page.locator('#modal-error').innerText(), 'save upload requires Kubernetes storage');
-  assert.equal(saved().servers['saved-owner-world'], undefined);
+  assert.equal(Object.values(saved().servers).some((item) => item.name === 'Saved owner world'), false);
   await page.screenshot({path:path.join(output, 'save-upload.png'),fullPage:true});
   await upload.setInputFiles([]);
   const created = await submit('POST', '/api/servers', 201);
   assert.equal(created.ownerId, playerID);
-  assert.equal(saved().servers['saved-owner-world'].ownerId, playerID);
+  assert.equal(saved().servers[created.id].ownerId, playerID);
 
   await page.getByTestId('add-server').click();
   await page.getByTestId('saved-user').selectOption(user.id);
@@ -131,7 +131,8 @@ async function run() {
   await page.getByTestId('server-owner').fill(manualID.toUpperCase());
   await page.getByTestId('server-name').fill('Manual owner world');
   await page.getByTestId('server-world-name').fill('Manual world');
-  assert.equal((await submit('POST', '/api/servers', 201)).ownerId, manualID);
+  const manual = await submit('POST', '/api/servers', 201);
+  assert.equal(manual.ownerId, manualID);
 
   await page.getByTestId('nav-users').click();
   await page.getByTestId('edit-user').click();
@@ -140,7 +141,7 @@ async function run() {
   const edited = await submit('PUT', `/api/users/${user.id}`, 200);
   assert.deepEqual(edited, {id:user.id, name:'Renamed', playerId:changedID});
   assert.deepEqual(saved().users[user.id], edited);
-  assert.equal(saved().servers['saved-owner-world'].ownerId, playerID);
+  assert.equal(saved().servers[created.id].ownerId, playerID);
   await page.reload();
   await page.getByTestId('edit-user').waitFor();
   assert.match(await page.locator('#content').innerText(), /Renamed/);
@@ -152,8 +153,8 @@ async function run() {
   await page.getByTestId('delete-user').click();
   await submit('DELETE', `/api/users/${user.id}`, 204);
   assert.deepEqual(saved().users, {});
-  assert.equal(saved().servers['saved-owner-world'].ownerId, playerID);
-  assert.equal(saved().servers['manual-owner-world'].ownerId, manualID);
+  assert.equal(saved().servers[created.id].ownerId, playerID);
+  assert.equal(saved().servers[manual.id].ownerId, manualID);
   assert.equal(saved().servers.scuffedtards.ownerId, 'demo-owner');
 
   await page.getByTestId('nav-dashboard').click();

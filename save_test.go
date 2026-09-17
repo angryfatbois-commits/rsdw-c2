@@ -78,14 +78,25 @@ func (r *saveRunner) Run(_ context.Context, name string, args ...string) ([]byte
 		return nil, errors.New("private-world-fixture: simulated failure")
 	}
 	switch {
+	case strings.Contains(call, "get secrets,deployments"):
+		return []byte(`{"items":[]}`), nil
+	case strings.Contains(call, "get namespace") && strings.Contains(call, "--ignore-not-found"):
+		return nil, nil
+	case strings.Contains(call, "get Secret"):
+		return nil, nil
 	case len(args) > 2 && args[0] == "create" && args[1] == "-f":
 		data, err := os.ReadFile(args[2])
 		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(data, &r.manifest); err != nil {
+		var manifest map[string]any
+		if err := json.Unmarshal(data, &manifest); err != nil {
 			return nil, err
 		}
+		if manifest["kind"] == "Secret" {
+			return []byte("created"), nil
+		}
+		r.manifest = manifest
 		items := r.manifest["items"].([]any)
 		r.claim = items[0].(map[string]any)["metadata"].(map[string]any)["name"].(string)
 		r.pvc, r.writer = true, true
@@ -164,7 +175,7 @@ func TestSaveUploadPersistsReferenceAndSurvivesRestart(t *testing.T) {
 	if !bytes.Equal(runner.copied, saveFixture) {
 		t.Fatalf("copied save = %q", runner.copied)
 	}
-	server := app.store.Snapshot().Servers["imported-world"]
+	server := serverNamed(t, app.store.Snapshot(), "Imported world")
 	if server.SaveSeed == nil || server.SaveSeed.Claim != runner.claim || server.SaveSeed.Path != "World 123.sav" || server.Namespace != "other-worlds" {
 		t.Fatalf("server = %+v", server)
 	}
@@ -202,7 +213,7 @@ func TestSaveUploadPersistsReferenceAndSurvivesRestart(t *testing.T) {
 		t.Fatal("restart cleanup deleted a successful seed")
 	}
 	for _, action := range []struct{ path, body string }{{"restart", ""}, {"update", `{"imageTag":"next"}`}} {
-		req := httptest.NewRequest("POST", "/api/servers/imported-world/actions/"+action.path, strings.NewReader(action.body))
+		req := httptest.NewRequest("POST", "/api/servers/"+server.ID+"/actions/"+action.path, strings.NewReader(action.body))
 		req.Header.Set("Authorization", "Bearer test-admin")
 		res := httptest.NewRecorder()
 		app.ServeHTTP(res, req)
@@ -224,11 +235,11 @@ func TestSaveUploadPersistsReferenceAndSurvivesRestart(t *testing.T) {
 	if deployments != 2 || !runner.pvc {
 		t.Fatalf("deployments = %d, pvc retained = %t", deployments, runner.pvc)
 	}
-	before := len(runner.calls)
+	firstClaim := runner.claim
 	duplicate := httptest.NewRecorder()
 	app.ServeHTTP(duplicate, validSaveRequest(t))
-	if duplicate.Code != 409 || len(runner.calls) != before {
-		t.Fatal("duplicate request reused a seed")
+	if duplicate.Code != 201 || runner.claim == firstClaim || len(app.store.Snapshot().Servers) != 2 {
+		t.Fatal("second world did not get a distinct identity and seed")
 	}
 }
 
@@ -294,7 +305,7 @@ func TestSaveUploadImporterFilenameCompatibility(t *testing.T) {
 				}
 				return
 			}
-			seed := app.store.Snapshot().Servers["imported-world"].SaveSeed
+			seed := serverNamed(t, app.store.Snapshot(), "Imported world").SaveSeed
 			if seed == nil || seed.Path != tc.name || !bytes.Equal(runner.copied, saveFixture) {
 				t.Fatal("staged save differs from upload")
 			}
@@ -409,10 +420,10 @@ func TestSaveUploadAuthenticationAndCreateLock(t *testing.T) {
 	if res.Code != 401 {
 		t.Fatalf("unauthenticated = %d", res.Code)
 	}
-	app.createMu.Lock()
+	app.lifecycleMu.Lock()
 	res = httptest.NewRecorder()
 	app.ServeHTTP(res, validSaveRequest(t))
-	app.createMu.Unlock()
+	app.lifecycleMu.Unlock()
 	if res.Code != 409 || len(runner.calls) != 0 {
 		t.Fatalf("concurrent create = %d", res.Code)
 	}
@@ -432,7 +443,7 @@ func TestSaveRequiresPersistentStorageButEmptyWorldStillWorks(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-admin")
 	res = httptest.NewRecorder()
 	app.ServeHTTP(res, req)
-	if res.Code != 201 || app.store.Snapshot().Servers["imported-world"].SaveSeed != nil {
+	if res.Code != 201 || serverNamed(t, app.store.Snapshot(), "Imported world").SaveSeed != nil {
 		t.Fatalf("empty world = %d %s", res.Code, res.Body.String())
 	}
 	if strings.Contains(strings.Join(runner.calls, "\n"), "saveSeed.") {

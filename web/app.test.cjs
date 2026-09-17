@@ -155,6 +155,22 @@ assert.equal(state.users[0].playerId, '0123456789abcdef0123456789abcdef');
 state.servers = savedServers;
 console.log('UI rendering and saved-ID selection checks passed.');
 
+state.capabilities = {integrations:true};
+state.servers = [
+  {id:'world-01', name:'PETZKO', worldName:'PC2-US-EAST-01'},
+  {id:'world-02', name:'PETZKO', worldName:'PC2-US-EAST-02'},
+  {id:'legacy', name:'Legacy world'},
+];
+for (const [id, label] of [['world-01','PC2-US-EAST-01'], ['world-02','PC2-US-EAST-02'], ['legacy','Legacy world'], ['missing','missing']]) {
+  state.pendingRestarts = {[id]:{id:'restart-operation'}};
+  assert.ok(context.ui.integrationsPage().includes(`Restart restart-operation for ${label} awaits a fresh observation.`));
+}
+state.servers[1].worldName = 'PC2-US-EAST-01';
+state.pendingRestarts = {'world-02':{id:'restart-operation'}};
+assert.ok(context.ui.integrationsPage().includes('Restart restart-operation for PC2-US-EAST-01 (world-02) awaits a fresh observation.'));
+state.pendingRestarts = {};
+state.servers = savedServers;
+
 state.capabilities = {dashboard:true, telemetry:true};
 for (const action of ['add-user', 'edit-user', 'delete-user']) {
   state.modalAction = '';
