@@ -295,6 +295,12 @@ func TestSaveUploadImporterFilenameCompatibility(t *testing.T) {
 				return
 			}
 			seed := app.store.Snapshot().Servers["imported-world"].SaveSeed
+			if seed == nil || seed.Path != tc.name || !bytes.Equal(runner.copied, saveFixture) {
+				t.Fatal("staged save differs from upload")
+			}
+			if _, err := exec.LookPath("bash"); err != nil {
+				t.Skip("Bash unavailable; importer execution is covered by verification/save-import.test.cjs")
+			}
 			source, world := t.TempDir(), filepath.Join(t.TempDir(), "world")
 			if err := os.WriteFile(filepath.Join(source, seed.Path), runner.copied, 0o600); err != nil {
 				t.Fatal(err)
