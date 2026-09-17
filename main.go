@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -105,6 +106,13 @@ type Event struct {
 type State struct {
 	Servers map[string]Server `json:"servers"`
 	Events  []Event           `json:"events"`
+	Users   map[string]User   `json:"users"`
+}
+
+type User struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	PlayerID string `json:"playerId"`
 }
 
 type CreateServerRequest struct {
@@ -172,7 +180,7 @@ type Store struct {
 }
 
 func NewStore(path string, demo bool) (*Store, error) {
-	s := &Store{path: path, state: State{Servers: map[string]Server{}}}
+	s := &Store{path: path, state: State{Servers: map[string]Server{}, Users: map[string]User{}}}
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := json.Unmarshal(data, &s.state); err != nil {
@@ -180,6 +188,9 @@ func NewStore(path string, demo bool) (*Store, error) {
 			}
 			if s.state.Servers == nil {
 				s.state.Servers = map[string]Server{}
+			}
+			if s.state.Users == nil {
+				s.state.Users = map[string]User{}
 			}
 			return s, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -195,24 +206,25 @@ func NewStore(path string, demo bool) (*Store, error) {
 func (s *Store) Snapshot() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	servers := make(map[string]Server, len(s.state.Servers))
-	for id, server := range s.state.Servers {
-		servers[id] = server
-	}
-	events := append([]Event(nil), s.state.Events...)
-	return State{Servers: servers, Events: events}
+	return s.state.clone()
+}
+
+func (s State) clone() State {
+	return State{Servers: maps.Clone(s.Servers), Users: maps.Clone(s.Users), Events: append([]Event(nil), s.Events...)}
 }
 
 func (s *Store) Update(fn func(*State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := fn(&s.state); err != nil {
+	next := s.state.clone()
+	if err := fn(&next); err != nil {
 		return err
 	}
 	if s.path == "" {
+		s.state = next
 		return nil
 	}
-	data, err := json.MarshalIndent(s.state, "", "  ")
+	data, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode state: %w", err)
 	}
@@ -239,6 +251,7 @@ func (s *Store) Update(fn func(*State) error) error {
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("replace state: %w", err)
 	}
+	s.state = next
 	return nil
 }
 
@@ -614,6 +627,10 @@ func (a *App) api(w http.ResponseWriter, r *http.Request) {
 		a.handleCreate(w, r)
 		return
 	}
+	if r.URL.Path == "/api/users" || strings.HasPrefix(r.URL.Path, "/api/users/") {
+		a.handleUsers(w, r)
+		return
+	}
 	if r.URL.Path == "/api/events" && r.Method == http.MethodGet {
 		a.handleEvents(w, r)
 		return
@@ -650,6 +667,104 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) handleUsers(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/users")
+	collection := id == ""
+	id = strings.TrimPrefix(id, "/")
+	if !collection && (id == "" || strings.Contains(id, "/")) {
+		writeError(w, http.StatusNotFound, "route not found")
+		return
+	}
+	if collection && r.Method == http.MethodGet {
+		users := make([]User, 0)
+		for _, user := range a.store.Snapshot().Users {
+			users = append(users, user)
+		}
+		sort.Slice(users, func(i, j int) bool {
+			if users[i].Name == users[j].Name {
+				return users[i].ID < users[j].ID
+			}
+			return users[i].Name < users[j].Name
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"users": users})
+		return
+	}
+	if (collection && r.Method != http.MethodPost) || (!collection && r.Method != http.MethodPut && r.Method != http.MethodDelete) {
+		if collection {
+			w.Header().Set("Allow", "GET, POST")
+		} else {
+			w.Header().Set("Allow", "PUT, DELETE")
+		}
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var body struct {
+		Name     string `json:"name"`
+		PlayerID string `json:"playerId"`
+	}
+	if r.Method != http.MethodDelete {
+		if err := decodeJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		body.Name = strings.TrimSpace(body.Name)
+		if body.Name == "" || len(body.Name) > 48 || strings.ContainsAny(body.Name, "\x00\r\n") {
+			writeError(w, http.StatusBadRequest, "name must be a single line of 1 to 48 characters")
+			return
+		}
+		var err error
+		body.PlayerID, err = normalizePlayerID(body.PlayerID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	user := User{ID: id, Name: body.Name, PlayerID: body.PlayerID}
+	status := http.StatusInternalServerError
+	err := a.store.Update(func(state *State) error {
+		if !collection {
+			if _, ok := state.Users[id]; !ok {
+				status = http.StatusNotFound
+				return errors.New("saved ID not found")
+			}
+		}
+		if r.Method == http.MethodDelete {
+			delete(state.Users, id)
+			return nil
+		}
+		for _, existing := range state.Users {
+			if existing.ID != id && existing.PlayerID == user.PlayerID {
+				status = http.StatusConflict
+				return errors.New("this player ID is already saved")
+			}
+		}
+		if collection {
+			for user.ID == "" || state.Users[user.ID].ID != "" {
+				user.ID = randomID()
+			}
+		}
+		state.Users[user.ID] = user
+		return nil
+	})
+	if err != nil {
+		if status == http.StatusInternalServerError {
+			writeError(w, status, "could not persist saved IDs")
+		} else {
+			writeError(w, status, err.Error())
+		}
+		return
+	}
+	if r.Method == http.MethodDelete {
+		writeJSON(w, http.StatusNoContent, nil)
+		return
+	}
+	status = http.StatusOK
+	if collection {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, user)
+}
+
 func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var request CreateServerRequest
 	if err := decodeJSON(r, &request); err != nil {
@@ -662,10 +777,11 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if request.CPULimitMillis == 0 {
 		request.CPULimitMillis = 1000
 	}
-	if err := validateCreate(request, a.demo); err != nil {
+	if err := validateCreate(request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	request.OwnerID, _ = normalizePlayerID(request.OwnerID)
 	release := slugify(request.Name)
 	if release == "" {
 		writeError(w, http.StatusBadRequest, "name must include a letter or number")
@@ -903,7 +1019,14 @@ func parseLogs(raw string) []LogLine {
 	return lines
 }
 
-func validateCreate(request CreateServerRequest, demo bool) error {
+func normalizePlayerID(value string) (string, error) {
+	if !regexp.MustCompile(`^[0-9a-fA-F]{32}$`).MatchString(value) {
+		return "", errors.New("player ID must contain exactly 32 hexadecimal characters (0-9, a-f), without spaces or separators")
+	}
+	return strings.ToLower(value), nil
+}
+
+func validateCreate(request CreateServerRequest) error {
 	if request.GamePort != 0 && (request.GamePort < 1024 || request.GamePort > 65535) {
 		return errors.New("gamePort must be between 1024 and 65535")
 	}
@@ -930,8 +1053,8 @@ func validateCreate(request CreateServerRequest, demo bool) error {
 	if strings.TrimSpace(request.Name) == "" || len(request.Name) > 48 {
 		return errors.New("name is required and must be 48 characters or fewer")
 	}
-	if !demo && strings.TrimSpace(request.OwnerID) == "" {
-		return errors.New("ownerId is required")
+	if _, err := normalizePlayerID(request.OwnerID); err != nil {
+		return err
 	}
 	if request.MaxPlayers < 1 || request.MaxPlayers > 64 {
 		return errors.New("maxPlayers must be between 1 and 64")

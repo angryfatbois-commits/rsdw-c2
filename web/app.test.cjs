@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
 
@@ -115,13 +115,57 @@ context.exportCSV('events.csv', [{message:'=SUM(1,2)', details:'He said "hello"'
 assert.equal(context.exportResult[0], 'events.csv');
 assert.equal(context.exportResult[1], '"message","details"\r\n"\'=SUM(1,2)","He said ""hello"""');
 assert.equal(context.exportResult[2], 'text/csv;charset=utf-8');
-console.log('UI rendering checks passed.');
+const savedServers = state.servers;
+state.servers = [];
+state.users = [];
+html = context.ui.usersPage();
+assert.match(html, /No player IDs saved yet/);
+assert.match(html, /data-testid="add-user"/);
+state.users = [
+  {id:'stable-one', name:'<Alice & "friends">', playerId:'0123456789abcdef0123456789abcdef'},
+  {id:'stable-two', name:'<Alice & "friends">', playerId:'11111111111111111111111111111111'},
+];
+html = context.ui.usersPage();
+assert.match(html, /&lt;Alice &amp; &quot;friends&quot;&gt;/);
+assert.doesNotMatch(html, /<Alice/);
+assert.match(html, /data-action="edit-user" data-id="stable-one"/);
+assert.match(html, /data-action="delete-user" data-id="stable-two"/);
+assert.match(html, /0123456789abcdef0123456789abcdef/);
+assert.match(html, /11111111111111111111111111111111/);
+const ownerField = {value:'manual-value'};
+context.document = {querySelector(selector) {
+  assert.equal(selector, '[data-testid="server-owner"]');
+  return ownerField;
+}};
+context.ui.handleChange({target:{id:'saved-user', value:'stable-one'}});
+assert.equal(ownerField.value, '0123456789abcdef0123456789abcdef');
+context.ui.handleChange({target:{id:'saved-user', value:'stable-two'}});
+assert.equal(ownerField.value, '11111111111111111111111111111111');
+ownerField.value = 'abcdef0123456789abcdef0123456789';
+context.ui.handleChange({target:{id:'saved-user', value:''}});
+assert.equal(ownerField.value, 'abcdef0123456789abcdef0123456789');
+context.ui.handleChange({target:{id:'saved-user', value:'deleted-id'}});
+assert.equal(ownerField.value, 'abcdef0123456789abcdef0123456789');
+assert.equal(state.users[0].playerId, '0123456789abcdef0123456789abcdef');
+state.servers = savedServers;
+console.log('UI rendering and saved-ID selection checks passed.');
 
 state.capabilities = {dashboard:true, telemetry:true};
+for (const action of ['add-user', 'edit-user', 'delete-user']) {
+  state.modalAction = '';
+  context.ui.openModal(action, 'stable-one');
+  assert.equal(state.modalAction, '');
+  state.modalAction = action;
+  context.ui.submitModal({preventDefault(){}});
+}
+state.modalAction = '';
+context.ui.handleChange({target:{id:'saved-user', value:'stable-one'}});
+assert.equal(ownerField.value, 'abcdef0123456789abcdef0123456789');
 state.events = [{message:'SECRET EVENT', details:'SECRET DETAILS'}];
 state.logs = 'SECRET LOG';
-for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance]) {
+for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance, context.ui.usersPage]) {
   html = render();
+  assert.doesNotMatch(html, /Alice|0123456789abcdef|data-action="(?:add-user|edit-user|delete-user)"/);
   assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output)"/);
 }
 html = telemetry();
@@ -149,17 +193,21 @@ test('identity changes clear protected data and reject late API and log response
   vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.authUI = {state, api, loadLogs, applyAuth, logout, discoverAuth, refresh};', sandbox);
   const ui = sandbox.authUI;
   ui.applyAuth({mode:'oidc',authenticated:true,subject:'operator',role:'admin',csrfToken:'admin-session',required:true,capabilities:{dashboard:true,telemetry:true,logs:true,events:true}});
-  Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], telemetry:{secret:true}, selectedEventId:'secret', modalAction:'restart', modalServerId:'world'});
+  Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], users:[{id:'saved', name:'Alice', playerId:'0123456789abcdef0123456789abcdef'}], telemetry:{secret:true}, selectedEventId:'secret', modalAction:'edit-user', modalUserId:'saved', modalServerId:'world'});
   element('#modal-body').innerHTML = 'secret settings';
   const logs = ui.loadLogs();
   const events = ui.api('/api/events');
+  const users = ui.api('/api/users');
   const logRejected = assert.rejects(logs, {name:'AbortError'});
   const eventsRejected = assert.rejects(events, {name:'AbortError'});
+  const usersRejected = assert.rejects(users, {name:'AbortError'});
   ui.applyAuth({mode:'oidc',authenticated:true,subject:'reader',role:'viewer',csrfToken:'viewer-session',required:true,capabilities:{dashboard:true,telemetry:true}});
   for (const request of requests) request.resolve({status:200,ok:true,headers:{get:()=> 'admin-session'},text:async()=>JSON.stringify({lines:['late secret'],events:[{message:'late secret'}]})});
-  await Promise.all([logRejected, eventsRejected]);
+  await Promise.all([logRejected, eventsRejected, usersRejected]);
   assert.equal(ui.state.logs, '');
   assert.equal(ui.state.events.length, 0);
+  assert.equal(ui.state.users.length, 0);
+  assert.equal(ui.state.modalUserId, '');
   assert.equal(ui.state.servers.length, 0);
   assert.equal(ui.state.telemetry, null);
   assert.equal(ui.state.modalAction, '');
@@ -196,4 +244,41 @@ test('identity changes clear protected data and reject late API and log response
   assert.equal(requests.at(-1).options.headers.Authorization, undefined);
   requests.at(-1).resolve({status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify({mode:'oidc',authenticated:true,role:'viewer'})});
   assert.equal((await discovery).authenticated, true);
+});
+
+test('saved IDs refresh only for admins and late results cannot survive a session change', async () => {
+  const elements = new Map();
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, close(){}, setAttribute(){}, classList:{remove(){}, toggle(){}}});
+    return elements.get(selector);
+  };
+  let auth = {mode:'oidc', authenticated:true, subject:'admin', role:'admin', csrfToken:'admin-session', capabilities:{dashboard:true,create:true}};
+  let resolveUsers;
+  const paths = [];
+  const response = (body) => ({status:200, ok:true, headers:{get:()=>null}, text:async()=>JSON.stringify(body)});
+  const sandbox = vm.createContext({
+    DOMException, AbortController, URLSearchParams, clearTimeout, setTimeout,
+    document:{querySelector:element}, sessionStorage:{getItem:()=>'', removeItem(){}},
+    fetch: async (path) => {
+      paths.push(path);
+      if (path === '/api/auth') return response(auth);
+      if (path === '/api/bootstrap') return response({servers:[], cluster:'test', mode:'demo'});
+      if (path === '/api/users') return new Promise((resolve) => { resolveUsers = resolve; });
+      throw new Error(`Unexpected request ${path}`);
+    },
+  });
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nrender = () => {}; connection = () => {}; this.ui = {state, applyAuth, refresh, logout};', sandbox);
+  const ui = sandbox.ui;
+  const refresh = ui.refresh();
+  await new Promise(setImmediate);
+  assert.equal(paths.at(-1), '/api/users');
+  auth = {mode:'oidc', authenticated:true, subject:'viewer', role:'viewer', csrfToken:'viewer-session', capabilities:{dashboard:true,telemetry:true}};
+  ui.applyAuth(auth);
+  resolveUsers(response({users:[{id:'private', name:'Private', playerId:'0123456789abcdef0123456789abcdef'}]}));
+  await refresh;
+  assert.equal(ui.state.users.length, 0);
+  paths.length = 0;
+  await ui.refresh();
+  assert.deepEqual(paths, ['/api/auth', '/api/bootstrap']);
+  assert.equal(ui.state.users.length, 0);
 });

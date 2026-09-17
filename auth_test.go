@@ -350,7 +350,7 @@ func TestOIDCRoutePolicyAndZeroEffects(t *testing.T) {
 	for _, route := range routes[2:8] {
 		body := `{"imageTag":"0.1.2"}`
 		if route[1] == "/api/servers" {
-			body = `{"name":"new-world","maxPlayers":4}`
+			body = `{"name":"new-world","ownerId":"0123456789abcdef0123456789abcdef","maxPlayers":4}`
 		}
 		if route[0] == "POST" {
 			for _, pair := range [][2]string{{"", adminCSRF}, {"https://evil.example", adminCSRF}, {app.auth.settings.Origin, ""}, {app.auth.settings.Origin, "wrong"}} {

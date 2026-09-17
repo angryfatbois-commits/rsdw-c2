@@ -94,7 +94,7 @@ done
 [[ -n "$port" ]]
 api="http://127.0.0.1:$port/api"
 "${http[@]}" -fsS -H 'Authorization: Bearer smoke-token' -H 'Content-Type: application/json' \
-  -d '{"name":"Lifecycle fixture","namespace":"fixture-worlds","ownerId":"fixture-owner","imageTag":"smoke","maxPlayers":12}' "$api/servers" >"$test_dir/create.json"
+  -d '{"name":"Lifecycle fixture","namespace":"fixture-worlds","ownerId":"0123456789abcdef0123456789abcdef","imageTag":"smoke","maxPlayers":12}' "$api/servers" >"$test_dir/create.json"
 "${kube[@]}" -n fixture-worlds rollout status deployment/lifecycle-fixture-rsdragonwilds --timeout=120s
 test "$("${kube[@]}" -n fixture-worlds get deployment lifecycle-fixture-rsdragonwilds -o jsonpath='{.spec.template.spec.containers[0].env[0].value}')" = '-ini:Game:[/Script/Engine.GameSession]:MaxPlayers=12'
 fixture_pod=$("${kube[@]}" -n fixture-worlds get pod -l fixture=lifecycle-fixture -o jsonpath='{.items[0].metadata.name}')

@@ -25,12 +25,13 @@ const pages = {
   telemetry: ['Telemetry', 'Live performance and resource usage.'],
   events: ['Events', 'Search every server event in one place.'],
   maintenance: ['Maintenance', 'Make safe changes to your servers.'],
+  users: ['Saved IDs', 'Manage reusable Dragonwilds player IDs.'],
 };
 const state = {
-  page: 'dashboard', servers: [], events: [], serverId: '', fleetFilter: 'all',
+  page: 'dashboard', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   query: '', category: '', range: '60s', telemetry: null, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
-  modalAction: '', modalServerId: '', modalBusy: false, request: null,
+  modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, request: null,
   authRequired: false, loginBusy: false, authMode: '', identity: '', csrfToken: '', role: 'denied', capabilities: {}, epoch: 0, logoutCSRF: '', signInFailed: false,
 };
 const tokenKey = 'rsdw-admin-token';
@@ -38,7 +39,7 @@ let searchTimer;
 let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
-const can = (capability) => state.capabilities[capability] === true;
+const can = (capability) => state.capabilities[({users:'create', 'add-user':'create', 'edit-user':'create', 'delete-user':'create'})[capability] || capability] === true;
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
 
 function number(value, suffix = '') {
@@ -107,7 +108,7 @@ function clearProtectedState() {
   state.request?.abort();
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
-  Object.assign(state, {servers:[], events:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalBusy:false, identity:'', csrfToken:'', capabilities:{}, role:'denied'});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, identity:'', csrfToken:'', capabilities:{}, role:'denied'});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
   $('#modal-error').textContent = '';
@@ -344,6 +345,10 @@ function maintenance() {
   const changes = activity.filter((event) => ['system', 'update'].includes(event.category));
   return `<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(server.name)}</p></div>${status(server.status)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Waiting for deployment')}</dd></div></dl><div class="action-grid"><div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div></div><p class="inline-note">Restart and update actions require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(server.status)}</dd></div><div><dt>Players connected</dt><dd>${metricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
 }
+function usersPage() {
+  if (!can('users')) return dashboard();
+  return `<section class="panel"><div class="panel-heading"><h2>Saved player IDs</h2><button class="primary" data-action="add-user" data-testid="add-user">${icon('plus')}Add saved ID</button></div><p class="inline-note">Use a saved ID when creating a server. Editing or deleting it leaves existing servers unchanged.</p>${state.users.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Player ID</th><th>Actions</th></tr></thead><tbody>${state.users.map((user) => `<tr><td>${escapeHTML(user.name)}</td><td class="mono">${escapeHTML(user.playerId)}</td><td class="actions"><button data-action="edit-user" data-id="${escapeHTML(user.id)}" data-testid="edit-user" aria-label="Edit ${escapeHTML(user.name)}">Edit</button><button class="danger" data-action="delete-user" data-id="${escapeHTML(user.id)}" data-testid="delete-user" aria-label="Delete ${escapeHTML(user.name)}">Delete</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No player IDs saved yet. Manual ID entry is always available when creating a server.</p>'}</section>`;
+}
 function render() {
   if (state.authRequired) { lockedState(); return; }
   if (!can(state.page)) state.page = 'dashboard';
@@ -360,7 +365,8 @@ function render() {
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(server.name)}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
   $('#server-filter').disabled = !state.servers.length;
-  $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance})[state.page]();
+  $('#server-filter').hidden = state.page === 'users';
+  $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance,users:usersPage})[state.page]();
   for (const key of openCharts) {
     const disclosure = document.querySelector(`details[data-chart="${CSS.escape(key)}"]`);
     if (disclosure) disclosure.open = true;
@@ -421,6 +427,7 @@ async function refresh() {
     const eventsPromise = can('events') ? api(`/api/events?${eventParams}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.events = eventArray(result); }) : Promise.resolve();
     const server = selectedServer();
     const requests = [eventsPromise];
+    if (can('users')) requests.push(api('/api/users',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.users = result.users; }));
     if (state.page === 'telemetry' && server) {
       requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(state.range)}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.telemetry = result; }));
       if (can('logs')) requests.push(loadLogs(controller.signal));
@@ -446,17 +453,26 @@ async function refresh() {
     if (sequence === refreshSequence) { state.refreshing = false; $('#refresh').disabled = false; }
   }
 }
-function openModal(action) {
+function openModal(action, userId = '') {
   if (!can(action === 'add-server' ? 'create' : action)) return;
   $('#modal').classList.toggle('create-server-dialog', action === 'add-server');
   modalOpener = document.activeElement;
   state.modalAction = action;
   state.modalServerId = selectedServer()?.id || '';
+  state.modalUserId = userId;
   $('#modal-error').hidden = true;
   $('#modal-submit').disabled = false;
-  $('#modal-submit').classList.toggle('danger',action === 'restart');
-  $('#modal-submit').classList.toggle('primary',action !== 'restart');
-  if (action === 'add-server') {
+  $('#modal-submit').classList.toggle('danger',action === 'restart' || action === 'delete-user');
+  $('#modal-submit').classList.toggle('primary',action !== 'restart' && action !== 'delete-user');
+  if (['add-user','edit-user','delete-user'].includes(action)) {
+    const user = state.users.find((item) => item.id === userId);
+    if (action !== 'add-user' && !user) throw new Error('This saved ID no longer exists. Refresh the list.');
+    $('#modal-title').textContent = action === 'delete-user' ? 'Delete saved ID?' : action === 'edit-user' ? 'Edit saved ID' : 'Add saved ID';
+    $('#modal-submit').textContent = action === 'delete-user' ? 'Delete saved ID' : 'Save ID';
+    $('#modal-body').innerHTML = action === 'delete-user'
+      ? `<p>Delete <strong>${escapeHTML(user.name)}</strong> from saved IDs? Existing servers keep their owner ID.</p>`
+      : `<label class="field">Display name<input name="name" data-testid="user-name" required maxlength="48" value="${escapeHTML(user?.name || '')}" autocomplete="off" autofocus></label><label class="field">RSDW / EOS player ID<input name="playerId" data-testid="user-player-id" required maxlength="128" pattern="[0-9a-fA-F]{32}" value="${escapeHTML(user?.playerId || '')}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Copy the Player ID from the game's Settings menu. Each ID can be saved once.</small></label>`;
+  } else if (action === 'add-server') {
     $('#modal-title').textContent = 'Create a server';
     $('#modal-submit').textContent = 'Deploy server';
     $('#modal-body').innerHTML = '<p>A new Dragonwilds world, deployed to your Kubernetes cluster.</p><div class="form-grid"><label class="field full">Owner Name<input name="name" data-testid="server-name" required maxlength="48" placeholder="Owner display name" autocomplete="off" autofocus></label><label class="field">Namespace<input name="namespace" data-testid="server-namespace" required maxlength="63" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" value="dragonwilds" title="Lowercase letters, numbers, and hyphens; start and end with a letter or number"><small>Lowercase letters, numbers, and hyphens.</small></label><label class="field">Region<input name="region" data-testid="server-region" required maxlength="63" value="local"></label><label class="field full">Owner ID<input name="ownerId" data-testid="server-owner" required maxlength="128" autocomplete="off" placeholder="Your game account ID"><small>The account that owns this world.</small></label><label class="field">Image tag<input name="imageTag" data-testid="server-image" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value="latest" title="A valid container image tag"></label><label class="field">Max players<input name="maxPlayers" data-testid="server-max-players" type="number" min="1" max="64" value="4" required></label></div>';
@@ -470,10 +486,14 @@ function openModal(action) {
     $('#modal-body .form-grid').insertAdjacentHTML('beforeend', '<label class="field">Memory limit (MiB)<input name="memoryLimitMiB" data-testid="server-memory-limit" type="number" min="256" max="65536" value="2048" required><small>2048 MiB = 2 GiB. Exceeding this limit can restart the server.</small></label><label class="field">CPU limit (millicores)<input name="cpuLimitMillis" data-testid="server-cpu-limit" type="number" min="100" max="64000" value="1000" required><small>1000 millicores = 1 CPU core. CPU is throttled at this limit.</small></label><p class="field full inline-note">Kubernetes reserves 256 MiB and 100 millicores per game container. Limits are ceilings, not guaranteed capacity. The game may require more memory to start. Player-limit enforcement depends on the game build.</p>');
     $('[data-testid="server-image"]').value = '0.1.1';
     $('[data-testid="server-owner"]').parentElement.firstChild.textContent = 'Owner EOS player ID';
+    $('[data-testid="server-owner"]').pattern = '[0-9a-fA-F]{32}';
+    $('[data-testid="server-owner"]').title = 'Exactly 32 hexadecimal characters, without spaces or separators';
+    $('[data-testid="server-owner"]').parentElement.insertAdjacentHTML('beforebegin', `<label class="field full">Saved player ID<select id="saved-user" data-testid="saved-user"><option value="">Enter an ID manually</option>${state.users.map((user) => `<option value="${escapeHTML(user.id)}">${escapeHTML(user.name)} (${escapeHTML(user.playerId)})</option>`).join('')}</select><small>Select a saved ID to copy it into the editable owner ID field.</small></label>`);
     $('#modal-body .form-grid').insertAdjacentHTML('beforeend', `<label class="field full">Server Name<input name="worldName" data-testid="server-world-name" required maxlength="128" placeholder="My Dragonwilds server"><small>Stored separately from the owner name.</small></label><label class="field">Game UDP port<input name="gamePort" type="number" min="1024" max="65535" value="7777" required></label><label class="field">World storage (GiB)<input name="storageGiB" type="number" min="1" max="2048" value="40" required></label><label class="field full">Service exposure<select name="serviceType"><option value="NodePort">NodePort (local kind testing)</option><option value="ClusterIP">ClusterIP (cluster network only)</option><option value="LoadBalancer">LoadBalancer (requires a provider)</option></select></label><label class="field">Server password<input name="serverPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Empty allows passwordless joins.</small></label><label class="field">Admin password<input name="adminPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Stored in a Kubernetes Secret.</small></label><label class="field full">Administrator EOS IDs<input name="adminIds" maxlength="2048" placeholder="Comma-separated EOS player IDs"></label><label class="field">Logging<select name="debugLevel"><option value="0">Normal</option><option value="1">SteamCMD debug</option><option value="2">Game debug</option><option value="3">SteamCMD and game debug</option></select></label><label class="field">Validate game files<select name="validateGameFiles"><option value="false">No</option><option value="true">Yes (slower startup)</option></select></label><label class="field full">Stop on game update<select name="autoStopOnUpdate"><option value="false">Disabled</option><option value="true">Enabled (game-build dependent)</option></select></label><label class="field full">Additional startup arguments<input name="additionalArgs" maxlength="2048" placeholder="Optional Unreal startup arguments"><small>The player-count override is appended automatically. API authentication is configured automatically.</small></label>`);
   }
   $('#modal').showModal();
-  if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
+  if (action === 'add-user' || action === 'edit-user') $('[data-testid="user-name"]').focus();
+  else if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
 }
 function closeModal() {
   if (state.modalBusy) return;
@@ -486,19 +506,35 @@ async function submitModal(event) {
   const epoch = state.epoch;
   const values = Object.fromEntries(new FormData($('#modal-form')));
   const action = state.modalAction;
-  const body = action === 'add-server' ? {...values, maxPlayers:Number(values.maxPlayers), memoryLimitMiB:Number(values.memoryLimitMiB), cpuLimitMillis:Number(values.cpuLimitMillis), gamePort:Number(values.gamePort), storageGiB:Number(values.storageGiB), debugLevel:Number(values.debugLevel), validateGameFiles:values.validateGameFiles === 'true', autoStopOnUpdate:values.autoStopOnUpdate === 'true'} : action === 'update' ? {imageTag:values.imageTag} : {};
-  const path = action === 'add-server' ? '/api/servers' : `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/${action}`;
+  let body, path, method = 'POST', message;
+  switch (action) {
+    case 'add-user': case 'edit-user':
+      body = {name:values.name, playerId:values.playerId};
+      path = action === 'add-user' ? '/api/users' : `/api/users/${encodeURIComponent(state.modalUserId)}`;
+      method = action === 'add-user' ? 'POST' : 'PUT';
+      message = 'Player ID saved.';
+      break;
+    case 'delete-user':
+      path = `/api/users/${encodeURIComponent(state.modalUserId)}`;
+      method = 'DELETE';
+      message = 'Saved ID deleted. Existing servers are unchanged.';
+      break;
+    default:
+      body = action === 'add-server' ? {...values, maxPlayers:Number(values.maxPlayers), memoryLimitMiB:Number(values.memoryLimitMiB), cpuLimitMillis:Number(values.cpuLimitMillis), gamePort:Number(values.gamePort), storageGiB:Number(values.storageGiB), debugLevel:Number(values.debugLevel), validateGameFiles:values.validateGameFiles === 'true', autoStopOnUpdate:values.autoStopOnUpdate === 'true'} : action === 'update' ? {imageTag:values.imageTag} : {};
+      path = action === 'add-server' ? '/api/servers' : `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/${action}`;
+      message = action === 'add-server' ? 'Server deployment requested.' : action === 'restart' ? 'Server restart requested.' : 'Image update requested.';
+  }
   state.modalBusy = true;
   $('#modal-form').setAttribute('aria-busy','true');
   $('#modal-submit').disabled = true;
   $('#modal-error').hidden = true;
   $('#modal').querySelectorAll('[data-action="close-modal"]').forEach((button) => { button.disabled = true; });
   try {
-    await api(path,{method:'POST',body:JSON.stringify(body)});
+    await api(path,{method,body:body ? JSON.stringify(body) : undefined});
     if (epoch !== state.epoch) return;
     state.modalBusy = false;
     closeModal();
-    notice(action === 'add-server' ? 'Server deployment requested.' : action === 'restart' ? 'Server restart requested.' : 'Image update requested.');
+    notice(message);
     await refresh();
   } catch (error) {
     if (epoch !== state.epoch || error.name === 'AbortError') return;
@@ -540,6 +576,7 @@ async function handleAction(event) {
       case 'logout': await logout(); break;
       case 'close-login': closeLogin(); break;
       case 'add-server': case 'restart': case 'update': openModal(action); break;
+      case 'add-user': case 'edit-user': case 'delete-user': openModal(action, button.dataset.id); break;
       case 'close-modal': closeModal(); break;
       case 'retry': await refresh(); break;
       case 'fleet-filter': state.fleetFilter = button.dataset.value; render(); break;
@@ -578,6 +615,13 @@ function navigate() {
   if (state.loaded) render();
   refresh();
 }
+function handleChange(event) {
+  if (event.target.id === 'saved-user' && can('create')) {
+    const user = state.users.find((item) => item.id === event.target.value);
+    if (user) $('[data-testid="server-owner"]').value = user.playerId;
+  }
+  if (event.target.id === 'telemetry-range') { state.range = event.target.value; state.telemetry = null; refresh(); }
+}
 $('#refresh').innerHTML = icon('refresh');
 $('#refresh').addEventListener('click',refresh);
 $('#pause').addEventListener('click',() => { state.paused = !state.paused; connection(); if (!state.paused) refresh(); });
@@ -588,6 +632,7 @@ $('#login-dialog').addEventListener('cancel',(event) => { event.preventDefault()
 $('#modal').addEventListener('cancel',(event) => { event.preventDefault(); closeModal(); });
 document.addEventListener('click',handleAction);
 document.addEventListener('input',(event) => {
+  if (event.target.name === 'ownerId') $('#saved-user').value = '';
   if (event.target.id === 'admin-token') event.target.removeAttribute('aria-invalid');
   if (event.target.id === 'event-search') {
     state.query = event.target.value;
@@ -600,7 +645,7 @@ document.addEventListener('input',(event) => {
     $('#log-output').textContent = filteredLogs() || 'No log lines match this view.';
   }
 });
-document.addEventListener('change',(event) => { if (event.target.id === 'telemetry-range') { state.range = event.target.value; state.telemetry = null; refresh(); } });
+document.addEventListener('change',handleChange);
 window.addEventListener('hashchange',navigate);
 document.addEventListener('visibilitychange',() => { if (!document.hidden && !state.paused && !$('#modal').open) refresh(); });
 setInterval(() => {
