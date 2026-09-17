@@ -28,7 +28,7 @@ if docker manifest inspect "$image" >"$task_dir/image.json" 2>"$task_dir/image.e
   printf 'Reusing existing image %s\n' "$image"
 else
   cat "$task_dir/image.err" >&2
-  grep -Fq "no such manifest: $image" "$task_dir/image.err"
+  [[ $(<"$task_dir/image.err") == "no such manifest: $image" || $(<"$task_dir/image.err") == "manifest unknown" ]]
   docker buildx build --platform linux/amd64 --provenance=false \
     --label "org.opencontainers.image.source=https://github.com/petzkod5/rsdw-c2" \
     --label "org.opencontainers.image.revision=$GITHUB_SHA" \
