@@ -343,6 +343,21 @@ func (a *App) cleanupSeed(claim string) {
 	if a.store.writable() != nil {
 		return
 	}
+	snapshot := a.store.Snapshot()
+	pending, ok := snapshot.PendingSeeds[claim]
+	protected := false
+	for _, record := range snapshot.Deletions {
+		for _, refs := range [][]resourceIdentity{record.Plan.World, record.Plan.Seeds} {
+			for _, ref := range refs {
+				if ref.Name == claim && (!ok || ref.Namespace == pending.Namespace) {
+					protected = true
+					if !record.Completed || record.Mode == keepWorld {
+						return
+					}
+				}
+			}
+		}
+	}
 	root, err := a.seedRoot()
 	if err != nil {
 		return
@@ -353,21 +368,8 @@ func (a *App) cleanupSeed(claim string) {
 			return
 		}
 	}
-	pending, ok := a.store.Snapshot().PendingSeeds[claim]
-	if !ok {
+	if !ok || protected {
 		return
-	}
-	for _, record := range a.store.Snapshot().Deletions {
-		for _, world := range record.Plan.World {
-			if world.Namespace == pending.Namespace && world.Name == claim {
-				return
-			}
-		}
-		for _, seed := range record.Plan.Seeds {
-			if seed.Namespace == pending.Namespace && seed.Name == claim {
-				return
-			}
-		}
 	}
 	k, ok := a.orchestrator.(*kubeOrchestrator)
 	if !ok {

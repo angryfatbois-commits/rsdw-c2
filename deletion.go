@@ -185,8 +185,10 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 			state.Integrations[key] = integration
 		}
 		cancelServerDeliveries(state, id)
-		for _, seed := range record.Plan.Seeds {
-			delete(state.PendingSeeds, seed.Name)
+		if record.Mode == purgeWorld {
+			for _, seed := range record.Plan.Seeds {
+				delete(state.PendingSeeds, seed.Name)
+			}
 		}
 		state.Deletions[id] = record
 		appendEvent(state, server, "system", "success", "Server deleted", "World data choice: "+string(record.Mode))
@@ -321,7 +323,6 @@ func manifestResources(release storedRelease) ([]deletionResource, error) {
 		if r.Kind == "" {
 			continue
 		}
-		// Only the game chart's namespaced resource kinds have audited uninstall semantics.
 		version := map[string]string{"Deployment": "apps/v1", "Service": "v1", "ConfigMap": "v1", "Secret": "v1", "PersistentVolumeClaim": "v1"}[r.Kind]
 		if version == "" || r.APIVersion != version || r.Metadata.Name == "" || r.Metadata.Annotations["helm.sh/hook"] != "" {
 			return nil, fmt.Errorf("unsupported uninstall resource %s; audit this release outside C2", r.Kind)
@@ -521,7 +522,7 @@ func (k *kubeOrchestrator) inspectDeletion(ctx context.Context, server Server, s
 
 func worldProtected(state State, deleting string, ref resourceIdentity) error {
 	for id, record := range state.Deletions {
-		if id != deleting && slices.ContainsFunc(record.Plan.World, func(r resourceIdentity) bool { return r.Namespace == ref.Namespace && r.Name == ref.Name }) {
+		if id != deleting && slices.ContainsFunc(append(slices.Clone(record.Plan.World), record.Plan.Seeds...), func(r resourceIdentity) bool { return r.Namespace == ref.Namespace && r.Name == ref.Name }) {
 			return errors.New("world storage is protected by another deletion receipt")
 		}
 	}
@@ -575,8 +576,12 @@ func (k *kubeOrchestrator) checkDeletionReferences(ctx context.Context, namespac
 		}
 		spec := podSpec(item)
 		claims, secrets := referencedNames(spec, "persistentVolumeClaim"), secretNames(spec)
+		var configs []string
+		for _, key := range []string{"configMap", "configMapRef", "configMapKeyRef"} {
+			configs = append(configs, referencedNames(spec, key)...)
+		}
 		for _, ref := range append(append(append(slices.Clone(plan.World), plan.Seeds...), plan.Secrets...), plan.Resources...) {
-			if ref.Kind == "PersistentVolumeClaim" && slices.Contains(claims, ref.Name) || ref.Kind == "Secret" && slices.Contains(secrets, ref.Name) {
+			if ref.Kind == "PersistentVolumeClaim" && slices.Contains(claims, ref.Name) || ref.Kind == "Secret" && slices.Contains(secrets, ref.Name) || ref.Kind == "ConfigMap" && slices.Contains(configs, ref.Name) {
 				return fmt.Errorf("%s %s still references %s; stop or detach that consumer before retrying", item.Kind, item.Metadata.Name, ref.Name)
 			}
 		}
@@ -621,6 +626,11 @@ func (k *kubeOrchestrator) removeServer(ctx context.Context, record deletionReco
 				return err
 			}
 		}
+		if record.Mode == keepWorld && slices.Contains(plan.Seeds, ref) {
+			if err := retainedWorld(live, ref); err != nil {
+				return err
+			}
+		}
 		if storage.UID != "" && slices.Contains(plan.Resources, ref) && live.Metadata.UID != "" && !helmOwned(live, record.Release) {
 			return errors.New("release resource ownership changed")
 		}
@@ -660,7 +670,20 @@ func (k *kubeOrchestrator) removeServer(ctx context.Context, record deletionReco
 			return err
 		}
 	}
-	for _, ref := range append(slices.Clone(plan.Secrets), plan.Seeds...) {
+	for _, ref := range plan.Seeds {
+		if record.Mode == keepWorld {
+			live, err := k.deletionGet(ctx, ref.Kind, ref.Namespace, ref.Name)
+			if err != nil {
+				return err
+			}
+			if err := retainedWorld(live, ref); err != nil {
+				return err
+			}
+		} else if err := k.deleteIdentity(ctx, ref); err != nil {
+			return err
+		}
+	}
+	for _, ref := range plan.Secrets {
 		if err := k.deleteIdentity(ctx, ref); err != nil {
 			return err
 		}
