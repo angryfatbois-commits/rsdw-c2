@@ -101,7 +101,7 @@ func decodeCreate(w http.ResponseWriter, r *http.Request) (CreateServerRequest, 
 				return request, nil, errors.New("provide exactly one .sav file")
 			}
 			if !validSaveName(name) {
-				return request, nil, errors.New("select a .sav file with a plain filename of at most 128 bytes, without paths or control characters")
+				return request, nil, errors.New("select a .sav file with a plain filename of at most 128 bytes, without paths, control characters, or a leading hyphen")
 			}
 			content, err := io.ReadAll(part)
 			if err != nil {
@@ -125,7 +125,7 @@ func decodeCreate(w http.ResponseWriter, r *http.Request) (CreateServerRequest, 
 }
 
 func validSaveName(name string) bool {
-	return len(name) > 4 && len(name) <= 128 && !strings.HasPrefix(name, ".") &&
+	return len(name) > 4 && len(name) <= 128 && !strings.HasPrefix(name, ".") && !strings.HasPrefix(name, "-") &&
 		strings.HasSuffix(name, ".sav") && !strings.ContainsAny(name, `/\`) &&
 		strings.IndexFunc(name, unicode.IsControl) < 0
 }
@@ -210,7 +210,8 @@ func (k *kubeOrchestrator) stageSeed(ctx context.Context, namespace string, seed
 		}},
 		map[string]any{"apiVersion": "v1", "kind": "Pod", "metadata": metadata, "spec": map[string]any{
 			"automountServiceAccountToken": false, "restartPolicy": "Never", "activeDeadlineSeconds": 180,
-			"securityContext": map[string]any{"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "fsGroup": 1000, "seccompProfile": map[string]string{"type": "RuntimeDefault"}},
+			"terminationGracePeriodSeconds": 5,
+			"securityContext":               map[string]any{"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "fsGroup": 1000, "seccompProfile": map[string]string{"type": "RuntimeDefault"}},
 			"containers": []any{map[string]any{
 				"name": "writer", "image": envOr("RSDW_SEED_WRITER_IMAGE", "busybox:1.37.0"), "command": []string{"sleep", "180"},
 				"securityContext": map[string]any{"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true, "capabilities": map[string]any{"drop": []string{"ALL"}}},

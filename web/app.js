@@ -505,7 +505,7 @@ function closeModal() {
 function createRequestBody(values) {
   const {save, ...settings} = values;
   if (!save?.name) return JSON.stringify(settings);
-  if (!save.name.endsWith('.sav') || save.name.startsWith('.') || /[/\\\x00-\x1f\x7f]/.test(save.name)) throw new Error('Select a .sav file with a plain filename.');
+  if (!save.name.endsWith('.sav') || save.name.startsWith('.') || save.name.startsWith('-') || /[/\\\x00-\x1f\x7f]/.test(save.name)) throw new Error('Select a .sav file with a plain filename without a leading hyphen.');
   if (save.size === 0) throw new Error('Save file must not be empty.');
   if (save.size > 32 * 1024 * 1024) throw new Error('Save file must be at most 32 MiB.');
   const body = new FormData();

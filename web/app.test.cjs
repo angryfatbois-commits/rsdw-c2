@@ -203,6 +203,9 @@ test('create uploads one save with settings and preserves authentication headers
   assert.deepEqual(JSON.parse(empty), {name:'Empty world'});
   await api('/api/servers', {method:'POST',body:empty});
   assert.equal(requests[2].options.headers['Content-Type'], 'application/json');
+  for (const name of ['-World.sav', '--help.sav']) {
+    assert.throws(() => createRequestBody({name:'World',save:new File([content], name)}), /plain filename/);
+  }
   for (const [file, error] of [[{name:'world.zip',size:4},/Select a .sav/],[{name:'../world.sav',size:4},/plain filename/],[{name:'world.sav',size:0},/must not be empty/],[{name:'world.sav',size:32*1024*1024+1},/at most 32 MiB/]]) {
     assert.throws(()=>createRequestBody({name:'World',save:file}), error);
   }

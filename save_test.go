@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -246,6 +247,10 @@ func TestSaveWriterSecurityAndAtomicPublish(t *testing.T) {
 		}
 	}
 	spec := items[1].(map[string]any)["spec"].(map[string]any)
+	grace, ok := spec["terminationGracePeriodSeconds"].(float64)
+	if !ok || grace < 0 || grace >= 30 {
+		t.Fatalf("writer termination grace must leave time within the 30-second deletion timeout, got %v", spec["terminationGracePeriodSeconds"])
+	}
 	wantSecurity := map[string]any{"runAsUser": float64(1000), "runAsGroup": float64(1000), "runAsNonRoot": true, "fsGroup": float64(1000), "seccompProfile": map[string]any{"type": "RuntimeDefault"}}
 	if !reflect.DeepEqual(spec["securityContext"], wantSecurity) || spec["automountServiceAccountToken"] != false || spec["restartPolicy"] != "Never" {
 		t.Fatalf("unsafe writer: %v", spec)
@@ -259,6 +264,53 @@ func TestSaveWriterSecurityAndAtomicPublish(t *testing.T) {
 	copyAt, publishAt, deleteAt, deployAt := strings.Index(calls, " cp "), strings.Index(calls, "mv -T /seed/.incoming"), strings.Index(calls, " delete pod "), strings.Index(calls, "helm ")
 	if copyAt < 0 || publishAt <= copyAt || deleteAt <= publishAt || deployAt <= deleteAt {
 		t.Fatalf("wrong staging order: %s", calls)
+	}
+	if !strings.Contains(calls, "delete pod "+runner.claim+" --ignore-not-found --wait=true --timeout=30s") {
+		t.Fatalf("writer removal must be confirmed before deployment: %s", calls)
+	}
+}
+
+func TestSaveUploadImporterFilenameCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"-World.sav", http.StatusBadRequest},
+		{"--help.sav", http.StatusBadRequest},
+		{"World-save.sav", http.StatusCreated},
+		{"World 123.sav", http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, runner := saveApp(t)
+			res := httptest.NewRecorder()
+			app.ServeHTTP(res, saveRequest(t, uploadPart{"request", "", []byte(saveSettings)}, uploadPart{"save", tc.name, saveFixture}))
+			if res.Code != tc.status {
+				t.Fatalf("upload = %d, want %d: %s", res.Code, tc.status, res.Body.String())
+			}
+			assertNoLocalSeeds(t, app)
+			if tc.status == http.StatusBadRequest {
+				if len(runner.calls) != 0 || len(app.store.Snapshot().PendingSeeds) != 0 || len(app.store.Snapshot().Servers) != 0 {
+					t.Fatal("option-like filename reached staging or deployment")
+				}
+				return
+			}
+			seed := app.store.Snapshot().Servers["imported-world"].SaveSeed
+			source, world := t.TempDir(), filepath.Join(t.TempDir(), "world")
+			if err := os.WriteFile(filepath.Join(source, seed.Path), runner.copied, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command("bash", "verification/fixture-chart/files/seed-save.sh", source, seed.Path, world).CombinedOutput()
+			if err != nil {
+				t.Fatalf("import staged save: %v: %s", err, output)
+			}
+			data, err := os.ReadFile(filepath.Join(world, tc.name))
+			if err != nil || !bytes.Equal(data, saveFixture) {
+				t.Fatalf("imported save differs from upload: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(world, ".seed-complete")); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -479,6 +531,9 @@ func TestSaveFailureCleanupAndRestartRecovery(t *testing.T) {
 			}
 			if len(app.store.Snapshot().Servers) != 0 {
 				t.Fatal("failure registered a successful server")
+			}
+			if failure == " delete pod " && strings.Contains(strings.Join(runner.calls, "\n"), "helm ") {
+				t.Fatal("deployed before confirming writer removal")
 			}
 			assertNoLocalSeeds(t, app)
 			if failure == " delete pod " {
