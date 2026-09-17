@@ -173,6 +173,9 @@ td:last-child.actions { text-align: right; }
 .result-warning { color: var(--warning); }
 .result-unknown { color: var(--color-muted-foreground); }
 .reboot-form { margin-top: 8px; }
+.daily-times { display: grid; gap: 10px; }
+.daily-time-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 10px; }
+.daily-time-row button { min-height: 44px; }
 .checkbox-field { gap: 4px; }
 .checkbox-field span { display: flex; align-items: flex-start; gap: 8px; }
 .checkbox-field input { min-height: 22px; width: 22px; margin: 2px 0 0; }

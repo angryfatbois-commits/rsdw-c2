@@ -179,3 +179,76 @@ func TestScheduledRebootMissingTargetAndPersistenceFailureDoNotDispatch(t *testi
 		t.Fatalf("persistence failure dispatched = %+v", runner.calls)
 	}
 }
+
+func TestScheduledRebootDeletionReceiptBlocksClaimsAndNewSchedules(t *testing.T) {
+	app := newTestApp(t, false)
+	runner := &rebootTestOrchestrator{}
+	app.orchestrator = runner
+	now := rebootAt("2026-09-17T12:00:00Z")
+	app.clock = func() time.Time { return now }
+	due := now.Add(-15 * time.Second)
+	if err := app.store.Update(func(state *State) error {
+		state.initReboots()
+		if state.Deletions == nil {
+			state.Deletions = map[string]deletionRecord{}
+		}
+		state.Servers["world"] = Server{ID: "world", Name: "World"}
+		state.Deletions["world"] = deletionRecord{ServerID: "world", Completed: false}
+		state.RebootSchedules["pending-delete"] = rebootSchedule{ID: "pending-delete", Definition: rebootDefinition{ServerID: "world", Mode: rebootModeDaily, DailyTimes: []string{"05:00"}, ExecutionTimezone: "UTC"}, Enabled: true, Revision: 1, NextRun: cloneTimePtr(&due)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.scanReboots(context.Background(), now)
+	if len(runner.calls) != 0 {
+		t.Fatalf("deleting target dispatched = %+v", runner.calls)
+	}
+	state := app.store.Snapshot()
+	if len(state.RebootHistory) != 1 || state.RebootHistory[0].Result != rebootSkipped {
+		t.Fatalf("deleting target result = %+v", state.RebootHistory)
+	}
+
+	created := requestJSON(t, app, http.MethodPost, "/api/reboots", `{"serverId":"world","enabled":false,"mode":"daily","dailyTimes":["05:00"],"executionTimezone":"UTC"}`)
+	if created.Code != http.StatusBadRequest || !strings.Contains(created.Body.String(), "serverId") {
+		t.Fatalf("new schedule for deleting target = %d: %s", created.Code, created.Body.String())
+	}
+}
+
+func TestServerDeletionRemovesSchedulesAndRetainsRebootHistory(t *testing.T) {
+	app := newTestApp(t, true)
+	now := rebootAt("2026-09-17T12:00:00Z")
+	app.clock = func() time.Time { return now }
+	created := requestJSON(t, app, http.MethodPost, "/api/reboots", `{"serverId":"scuffedtards","enabled":true,"mode":"daily","dailyTimes":["05:00"],"executionTimezone":"UTC","acknowledgeDisconnect":true}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	var schedule rebootScheduleView
+	if err := json.Unmarshal(created.Body.Bytes(), &schedule); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.Update(func(state *State) error {
+		due := now.Add(-15 * time.Second)
+		item := state.RebootSchedules[schedule.ID]
+		item.NextRun = cloneTimePtr(&due)
+		state.RebootSchedules[schedule.ID] = item
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.scanReboots(context.Background(), now)
+	if len(app.store.Snapshot().RebootHistory) != 1 {
+		t.Fatalf("scheduled history = %+v", app.store.Snapshot().RebootHistory)
+	}
+
+	deleted := requestJSON(t, app, http.MethodDelete, "/api/servers/scuffedtards", `{"confirm":"scuffedtards","mode":"keep"}`)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete status = %d: %s", deleted.Code, deleted.Body.String())
+	}
+	state := app.store.Snapshot()
+	if len(state.RebootSchedules) != 0 {
+		t.Fatalf("server deletion retained schedules = %+v", state.RebootSchedules)
+	}
+	if len(state.RebootHistory) != 1 {
+		t.Fatalf("server deletion removed reboot history = %+v", state.RebootHistory)
+	}
+}

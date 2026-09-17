@@ -459,6 +459,30 @@ function rebootTimingLabel(schedule) {
 function timezoneSelect(name, selected, testId) {
   return `<select name="${name}" id="${name}" data-testid="${testId || name}" required>${timezoneOptions(selected).map((zone) => `<option value="${escapeHTML(zone)}" ${zone === selected ? 'selected' : ''}>${escapeHTML(zone)}</option>`).join('')}</select>`;
 }
+function dailyTimeRow(value, index) {
+  return `<div class="daily-time-row"><label class="field"><span>Time ${index + 1}</span><input type="time" name="dailyTime" data-testid="reboot-daily-time" value="${escapeHTML(value)}" required aria-describedby="dailyTimes-error"></label><button type="button" class="subtle" data-action="remove-daily-time" aria-label="Remove time ${index + 1}">Remove</button></div>`;
+}
+function updateDailyTimeControls() {
+  const rows = Array.from(document.querySelectorAll('#dailyTimes .daily-time-row'));
+  rows.forEach((row, index) => {
+    row.querySelector('span').textContent = `Time ${index + 1}`;
+    row.querySelector('button').disabled = rows.length === 1;
+    row.querySelector('button').setAttribute('aria-label', `Remove time ${index + 1}`);
+  });
+}
+function addDailyTime() {
+  const container = $('#dailyTimes');
+  if (!container) return;
+  container.insertAdjacentHTML('beforeend', dailyTimeRow('', container.querySelectorAll('.daily-time-row').length));
+  updateDailyTimeControls();
+  container.lastElementChild.querySelector('input')?.focus();
+}
+function removeDailyTime(button) {
+  const container = $('#dailyTimes');
+  if (!container || container.querySelectorAll('.daily-time-row').length === 1) return;
+  button.closest('.daily-time-row')?.remove();
+  updateDailyTimeControls();
+}
 function rebootsPage() {
   const selected = state.displayTimezone || browserTimezone();
   const availability = state.rebootsAvailable ? '' : '<p class="notice info" role="status">Scheduled execution is disabled for this deployment. Existing schedules remain visible so you can inspect, disable, or delete them.</p>';
@@ -471,8 +495,9 @@ function rebootForm(item) {
   const zone = item?.executionTimezone || state.displayTimezone || browserTimezone();
   const enabled = item?.enabled !== false;
   const mode = item?.mode || 'daily';
-  const daily = (item?.dailyTimes || ['05:00']).join(', ');
-  return `<p>Choose exactly one timing mode. The first run is strictly after this save. Editing the target, timing, or execution timezone starts a new schedule anchor.</p><div class="error-summary" id="reboot-error-summary" role="alert" tabindex="-1" hidden><h3>Check the schedule</h3><ul></ul></div><div class="form-grid reboot-form"><label class="field">Server<select name="serverId" id="serverId" data-testid="reboot-server" required>${state.servers.map((server) => `<option value="${escapeHTML(server.id)}" ${server.id === (item?.serverId || state.modalServerId) ? 'selected' : ''}>${escapeHTML(serverLabel(server))}</option>`).join('')}</select><small id="serverId-error" data-reboot-error></small></label><label class="field">Execution timezone${timezoneSelect('executionTimezone', zone, 'reboot-timezone')}<small id="executionTimezone-error" data-reboot-error>Stored with this schedule; it is not changed by the display preference.</small></label><label class="field">Timing mode<select name="mode" id="reboot-mode" data-testid="reboot-mode" aria-describedby="mode-error" required><option value="cron" ${mode === 'cron' ? 'selected' : ''}>Cron expression</option><option value="interval" ${mode === 'interval' ? 'selected' : ''}>Elapsed interval</option><option value="daily" ${mode === 'daily' ? 'selected' : ''}>Daily wall-clock times</option></select><small id="mode-error" data-reboot-error></small></label><span></span><label class="field full" data-reboot-field="cron" ${mode === 'cron' ? '' : 'hidden'}>Cron expression<input name="cron" id="cron" data-testid="reboot-cron" value="${escapeHTML(item?.cron || '0 5 * * *')}" placeholder="minute hour day-of-month month day-of-week" aria-describedby="cron-error"><small id="cron-error" data-reboot-error>Five fields. Sunday is 0 or SUN; day-of-month and day-of-week use standard cron OR semantics. No seconds, descriptors, or timezone prefixes.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Every<input type="number" name="intervalValue" id="intervalValue" data-testid="reboot-interval-value" min="1" max="8760" value="${escapeHTML(item?.intervalValue || 12)}" aria-describedby="intervalValue-error"><small id="intervalValue-error" data-reboot-error>Hours: 1–8760. Days: 1–365. A day is exactly 24 elapsed hours.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Unit<select name="intervalUnit" id="intervalUnit" data-testid="reboot-interval-unit" aria-describedby="intervalUnit-error"><option value="hours" ${item?.intervalUnit !== 'days' ? 'selected' : ''}>hours</option><option value="days" ${item?.intervalUnit === 'days' ? 'selected' : ''}>days</option></select><small id="intervalUnit-error" data-reboot-error></small></label><label class="field full" data-reboot-field="daily" ${mode === 'daily' ? '' : 'hidden'}>Daily times<input name="dailyTimes" id="dailyTimes" data-testid="reboot-daily-times" value="${escapeHTML(daily)}" placeholder="05:00, 17:00" aria-describedby="dailyTimes-error"><small id="dailyTimes-error" data-reboot-error>One or more unique HH:mm values separated by commas. Times are sorted and deduplicated.</small></label><label class="field full checkbox-field"><span><input type="checkbox" name="enabled" ${enabled ? 'checked' : ''}> Enable this schedule</span><small>A disabled schedule keeps its history and next run is cleared.</small></label><label class="field full checkbox-field"><span><input type="checkbox" name="acknowledgeDisconnect" id="acknowledgeDisconnect" aria-describedby="acknowledgeDisconnect-error"> I understand that an enabled scheduled reboot may disconnect connected players.</span><small id="acknowledgeDisconnect-error" data-reboot-error>Required every time an enabled schedule is saved.</small></label><div class="field full"><button type="button" class="subtle" data-action="preview-reboot" data-testid="preview-reboot">Preview next five runs</button><div id="reboot-preview" class="preview-results" aria-live="polite"></div></div></div>`;
+  const dailyTimes = item?.dailyTimes?.length ? item.dailyTimes : ['05:00'];
+  const dailyRows = dailyTimes.map((value, index) => dailyTimeRow(value, index)).join('');
+  return `<p>Choose exactly one timing mode. The first run is strictly after this save. Editing the target, timing, or execution timezone starts a new schedule anchor.</p><div class="error-summary" id="reboot-error-summary" role="alert" tabindex="-1" hidden><h3>Check the schedule</h3><ul></ul></div><div class="form-grid reboot-form"><label class="field">Server<select name="serverId" id="serverId" data-testid="reboot-server" required>${state.servers.map((server) => `<option value="${escapeHTML(server.id)}" ${server.id === (item?.serverId || state.modalServerId) ? 'selected' : ''}>${escapeHTML(serverLabel(server))}</option>`).join('')}</select><small id="serverId-error" data-reboot-error></small></label><label class="field">Execution timezone${timezoneSelect('executionTimezone', zone, 'reboot-timezone')}<small id="executionTimezone-error" data-reboot-error>Stored with this schedule; it is not changed by the display preference.</small></label><label class="field">Timing mode<select name="mode" id="reboot-mode" data-testid="reboot-mode" aria-describedby="mode-error" required><option value="cron" ${mode === 'cron' ? 'selected' : ''}>Cron expression</option><option value="interval" ${mode === 'interval' ? 'selected' : ''}>Elapsed interval</option><option value="daily" ${mode === 'daily' ? 'selected' : ''}>Daily wall-clock times</option></select><small id="mode-error" data-reboot-error></small></label><span></span><label class="field full" data-reboot-field="cron" ${mode === 'cron' ? '' : 'hidden'}>Cron expression<input name="cron" id="cron" data-testid="reboot-cron" value="${escapeHTML(item?.cron || '0 5 * * *')}" placeholder="minute hour day-of-month month day-of-week" aria-describedby="cron-error"><small id="cron-error" data-reboot-error>Five fields. Sunday is 0 or SUN; day-of-month and day-of-week use standard cron OR semantics. No seconds, descriptors, or timezone prefixes.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Every<input type="number" name="intervalValue" id="intervalValue" data-testid="reboot-interval-value" min="1" max="8760" value="${escapeHTML(item?.intervalValue || 12)}" aria-describedby="intervalValue-error"><small id="intervalValue-error" data-reboot-error>Hours: 1–8760. Days: 1–365. A day is exactly 24 elapsed hours.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Unit<select name="intervalUnit" id="intervalUnit" data-testid="reboot-interval-unit" aria-describedby="intervalUnit-error"><option value="hours" ${item?.intervalUnit !== 'days' ? 'selected' : ''}>hours</option><option value="days" ${item?.intervalUnit === 'days' ? 'selected' : ''}>days</option></select><small id="intervalUnit-error" data-reboot-error></small></label><div class="field full" data-reboot-field="daily" ${mode === 'daily' ? '' : 'hidden'}><span>Daily times</span><div id="dailyTimes" class="daily-times" aria-describedby="dailyTimes-error">${dailyRows}</div><button type="button" class="subtle" data-action="add-daily-time" data-testid="add-daily-time">Add another time</button><small id="dailyTimes-error" data-reboot-error>Use the native time controls. Times must be unique HH:mm values; they are sorted before execution.</small></div><label class="field full checkbox-field"><span><input type="checkbox" name="enabled" ${enabled ? 'checked' : ''}> Enable this schedule</span><small>A disabled schedule keeps its history and next run is cleared.</small></label><label class="field full checkbox-field"><span><input type="checkbox" name="acknowledgeDisconnect" id="acknowledgeDisconnect" aria-describedby="acknowledgeDisconnect-error"> I understand that an enabled scheduled reboot may disconnect connected players.</span><small id="acknowledgeDisconnect-error" data-reboot-error>Required every time an enabled schedule is saved.</small></label><div class="field full"><button type="button" class="subtle" data-action="preview-reboot" data-testid="preview-reboot">Preview next five runs</button><div id="reboot-preview" class="preview-results" aria-live="polite"></div></div></div>`;
 }
 const rebootErrorControls = {mode:'reboot-mode', serverId:'serverId', executionTimezone:'executionTimezone', cron:'cron', intervalValue:'intervalValue', intervalUnit:'intervalUnit', dailyTimes:'dailyTimes', enabled:'enabled', acknowledgeDisconnect:'acknowledgeDisconnect'};
 function clearRebootErrors() {
@@ -501,11 +526,12 @@ function showRebootErrors(fields) {
   summary.focus();
 }
 function rebootRequestFromForm() {
-  const values = Object.fromEntries(new FormData($('#modal-form')));
+  const fields = new FormData($('#modal-form'));
+  const values = Object.fromEntries(fields);
   const body = {serverId:values.serverId, enabled:values.enabled === 'on', mode:values.mode, executionTimezone:values.executionTimezone, acknowledgeDisconnect:values.acknowledgeDisconnect === 'on'};
   if (values.mode === 'cron') body.cron = values.cron;
   if (values.mode === 'interval') { body.intervalValue = Number(values.intervalValue); body.intervalUnit = values.intervalUnit; }
-  if (values.mode === 'daily') body.dailyTimes = values.dailyTimes.split(',').map((value) => value.trim()).filter(Boolean);
+  if (values.mode === 'daily') body.dailyTimes = fields.getAll('dailyTime').map((value) => value.trim()).filter(Boolean);
   return body;
 }
 function syncRebootModeFields() {
@@ -513,7 +539,7 @@ function syncRebootModeFields() {
   document.querySelectorAll('[data-reboot-field]').forEach((field) => {
     const active = field.dataset.rebootField === mode;
     field.hidden = !active;
-    field.querySelectorAll('input,select').forEach((input) => { input.disabled = !active; });
+    field.querySelectorAll('input,select,button').forEach((input) => { input.disabled = !active; });
   });
 }
 async function previewReboot() {
@@ -737,7 +763,7 @@ function openModal(action, userId = '') {
     $('#modal-title').focus();
   } else if (action === 'edit-settings') $('[data-testid="edit-name"]').focus();
   else if (action === 'add-user' || action === 'edit-user') $('[data-testid="user-name"]').focus();
-  else if (action === 'add-reboot' || action === 'edit-reboot') { syncRebootModeFields(); $('[data-testid="reboot-server"]')?.focus(); }
+  else if (action === 'add-reboot' || action === 'edit-reboot') { syncRebootModeFields(); updateDailyTimeControls(); $('[data-testid="reboot-server"]')?.focus(); }
   else if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
 }
 async function loadImageTags() {
@@ -908,7 +934,7 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
-  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'}[action];
+  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots'}[action];
   if (permission && !can(permission)) return;
   try {
     switch (action) {
@@ -927,6 +953,8 @@ async function handleAction(event) {
       case 'add-server': case 'restart': case 'update': case 'edit-settings': openModal(action); break;
       case 'delete': openModal(action, button.dataset.id); break;
       case 'add-reboot': case 'edit-reboot': case 'delete-reboot': openModal(action, button.dataset.id || ''); break;
+      case 'add-daily-time': addDailyTime(); break;
+      case 'remove-daily-time': removeDailyTime(button); break;
       case 'preview-reboot': await previewReboot(); break;
       case 'add-user': case 'edit-user': case 'delete-user': openModal(action, button.dataset.id); break;
       case 'add-integration': case 'edit-integration': openModal(action, button.dataset.id); break;
@@ -988,7 +1016,7 @@ function handleChange(event) {
     if (user) $('[data-testid="server-owner"]').value = user.playerId;
   }
   if (event.target.id === 'telemetry-range') { state.range = event.target.value; state.telemetry = null; refresh(); }
-  if (event.target.id === 'reboot-mode') syncRebootModeFields();
+  if (event.target.id === 'reboot-mode') { syncRebootModeFields(); updateDailyTimeControls(); }
   if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
 }
 $('#refresh').innerHTML = icon('refresh');

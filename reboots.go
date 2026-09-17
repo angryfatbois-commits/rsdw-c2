@@ -135,7 +135,10 @@ func (a *App) rebootSchedulingEnabled() bool {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("RSDW_REBOOTS_ENABLED")), "false") {
 		return false
 	}
-	return a.demo || !strings.EqualFold(strings.TrimSpace(os.Getenv("RSDW_STATE_PERSISTENT")), "false")
+	if a.demo {
+		return true
+	}
+	return a.store != nil && a.store.path != "" && !strings.EqualFold(strings.TrimSpace(os.Getenv("RSDW_STATE_PERSISTENT")), "false")
 }
 
 func rebootExecutionActive(result rebootResult) bool {
@@ -364,7 +367,12 @@ func (a *App) previewReboot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if definition.ServerID != "" {
-		if _, ok := a.store.Snapshot().Servers[definition.ServerID]; !ok {
+		snapshot := a.store.Snapshot()
+		if snapshot.deleting(definition.ServerID) {
+			writeRebootFieldError(w, "serverId", "serverId identifies a server with a deletion in progress or a recorded deletion")
+			return
+		}
+		if _, ok := snapshot.Servers[definition.ServerID]; !ok {
 			writeRebootFieldError(w, "serverId", "serverId does not identify an existing server")
 			return
 		}
@@ -470,6 +478,9 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 		server, ok := state.Servers[definition.ServerID]
 		if !ok {
 			return fmt.Errorf("server not found")
+		}
+		if state.deleting(definition.ServerID) {
+			return fmt.Errorf("server is being deleted")
 		}
 		if id == "" && len(state.RebootSchedules) >= maxRebootSchedules {
 			return rebootDefinitionError{cause: errors.New("the deployment has reached the maximum of 256 reboot schedules")}
@@ -586,7 +597,7 @@ func (a *App) writeRebootSaveError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, errRebootInvalid):
 		writeRebootValidationError(w, err)
-	case strings.Contains(err.Error(), "server not found"):
+	case strings.Contains(err.Error(), "server not found"), strings.Contains(err.Error(), "server is being deleted"):
 		writeRebootFieldError(w, "serverId", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "could not persist reboot schedule")
