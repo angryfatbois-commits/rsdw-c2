@@ -69,13 +69,46 @@
     "auth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["adminTokenSecret"],
+      "required": ["mode", "adminTokenSecret", "oidc"],
       "properties": {
+        "mode": {"enum": ["token", "oidc"]},
         "adminTokenSecret": {
           "type": "object",
           "additionalProperties": false,
           "required": ["name", "key"],
           "properties": {"name": {"type": "string"}, "key": {"type": "string", "minLength": 1}}
+        },
+        "oidc": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["issuer", "publicOrigin", "clientID", "clientSecret", "scopes", "groupsClaim", "rolePolicy"],
+          "properties": {
+            "issuer": {"type": "string", "pattern": "^$|^https://[^/?#@\\s]+(/[^?#\\s]*)?$"},
+            "publicOrigin": {"type": "string", "pattern": "^$|^https://[^/?#@\\s]+$"},
+            "clientID": {"type": "string"},
+            "clientSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "key"],
+              "properties": {"name": {"type": "string"}, "key": {"type": "string", "minLength": 1}}
+            },
+            "scopes": {
+              "type": "array", "minItems": 1, "uniqueItems": true, "contains": {"const": "openid"},
+              "items": {"type": "string", "pattern": "^[^\\s]+$", "not": {"const": "offline_access"}}
+            },
+            "groupsClaim": {"type": "string", "minLength": 1, "pattern": "\\S"},
+            "rolePolicy": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["adminSubjects", "viewerSubjects", "adminGroups", "viewerGroups"],
+              "properties": {
+                "adminSubjects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "\\S"}},
+                "viewerSubjects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "\\S"}},
+                "adminGroups": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "\\S"}},
+                "viewerGroups": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "\\S"}}
+              }
+            }
+          }
         }
       }
     },
