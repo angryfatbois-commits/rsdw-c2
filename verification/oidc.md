@@ -39,7 +39,35 @@ The test prints the console and test issuer URLs. Choose Admin, Viewer, or Denie
 
 The HTTP mode changes only test code. Its browser pages use HTTP and translated cookies; discovery, token exchange, JWKS, and token verification retain TLS with the test CA. This mode does not verify production Secure-cookie behavior. TLS unit tests verify the production attributes.
 
-The fixture uses the real embedded UI, auth implementation, fake orchestrator, and cached numeric metrics. No Docker, kind, game server, live provider, production system, or GitHub mutation was used by the implementation owner. Independent browser validation belongs to the parent and is not claimed in this record. Production IdP setup remains a deployment task.
+The fixture uses the real embedded UI, auth implementation, fake orchestrator, and cached numeric metrics. No Docker, kind, game server, live provider, or production system was used. Production IdP setup remains a deployment task.
+
+## Independent verification
+
+The parent ran `go test -race -count=1 ./...` and `bash scripts/verify.sh` at `7b2653b`. Both passed. An earlier independent `govulncheck` run found no vulnerabilities in the feature dependencies.
+
+Both commands passed again after the final public-origin regression fix and telemetry description edit. The race run completed in 5.759 seconds. The temporary browser fixture was stopped after verification.
+
+Browser checks used the in-app browser with the user-approved HTTP loopback fixture. Production HTTPS and browser certificate settings were not changed.
+
+| Browser check | Observed result |
+| --- | --- |
+| Anonymous entry | Sign in required; no admin-token prompt or protected data. |
+| Unmapped identity | Sign-in failure message; no session or navigation. |
+| Admin login | Dashboard, telemetry, events, maintenance, and Add server controls visible. |
+| Admin restart | Confirmation dialog; Confirm restart produced Server restart requested against the fake orchestrator. |
+| Sign out | Protected data and navigation cleared; sign-in screen remained. |
+| Admin-to-viewer switch | Viewer role, dashboard and telemetry only; no create, maintenance, events, or logs. |
+| Direct viewer maintenance URL | Dashboard rendered instead; no lifecycle controls. |
+| Viewer telemetry | Synthetic player, tick, CPU, memory, and traffic charts rendered. Five-minute and one-hour selection worked. |
+| Pause, resume, refresh | Pause changed to Resume updates; resume restored polling; refresh completed. |
+| CSV export | UI reported Exported 80 records; no browser console errors. The browser-tool download event timed out, so file delivery is not claimed. CSV serialization passes automated tests. |
+| Session expiry | Fixture expiry followed by refresh cleared protected data and returned to sign in. |
+| Session persistence | Reload retained the viewer session. |
+| Mobile viewport | Not verified. The browser ignored the requested 390-pixel viewport and retained a 1265-pixel content width. The temporary override was reset. |
+
+The browser run did not deploy a game server, test a live identity provider, or prove production Secure-cookie transport. Automated TLS tests cover production cookie attributes and OIDC validation. Browser inspection found a description that promised logs to viewers; the shared telemetry description now refers only to performance and resource usage.
+
+Final independent review found no residual defect in callback cancellation. It found that padded ports and expanded IPv6 origins could fail exact Origin checks. The added regression failed before the fix and passed after port and address normalization. Invalid ports, scoped IPv6, and IPv4-mapped IPv6 now fail configuration checks. Issues #13 and #14 track these pre-merge findings. The review also corrected two claims in the design document. Review agents used the inherited model, not a separate model family.
 
 ## Changed files
 
@@ -48,4 +76,4 @@ The fixture uses the real embedded UI, auth implementation, fake orchestrator, a
 - Deployment and verification: `charts/rsdw-c2/values.yaml`, `charts/rsdw-c2/values.schema.json`, `charts/rsdw-c2/templates/deployment.yaml`, `scripts/verify-auth-chart.sh`, and `scripts/verify.sh`.
 - Documentation: `README.md`, `ARCHITECTURE.md`, `docs/oidc.md`, and this record.
 
-The existing `todo.md` and `.audit/oidc-*` files remain uncommitted for the parent.
+The local `todo.md` is not part of the feature commits. The decision record is in `.audit/oidc-decisions.tsv`.

@@ -43,7 +43,7 @@ auth:
 
 Run `helm template rsdw-c2 charts/rsdw-c2 -f your-values.yaml` to review the Deployment before installation. Use your normal release workflow to install it. The existing Secret must be available in the release namespace. Restart the Deployment after changing its Secret or role policy.
 
-`publicOrigin` must be an HTTPS origin without a trailing slash, path, query, or fragment. The console lowercases its hostname and removes an explicit `:443` to match the browser's Origin header. Issuers must use HTTPS and cannot contain credentials, queries, or fragments. Discovery endpoints must use HTTPS but may include provider query parameters. There is no runtime setting to disable TLS or ID-token verification. The single replica and `Recreate` strategy are required because sessions live in process memory.
+`publicOrigin` must be an HTTPS origin without a trailing slash, path, query, or fragment. Use an ASCII DNS hostname or a canonical IP address. The console lowercases its hostname, compresses IPv6 addresses, normalizes numeric ports, and removes the default HTTPS port to match the browser's Origin header. Scoped and IPv4-mapped IPv6 addresses are unsupported. Issuers must use HTTPS and cannot contain credentials, queries, or fragments. Discovery endpoints must use HTTPS but may include provider query parameters. There is no runtime setting to disable TLS or ID-token verification. The single replica and `Recreate` strategy are required because sessions live in process memory.
 
 ## Configure without Helm
 

@@ -1,0 +1,9 @@
+ts	phase	decision	why	evidence	result
+2026-09-16T22:54:09Z	ground	Isolate OIDC work on codex/oidc from origin/main	Preserve the existing telemetry task's working changes	git base ecbdfed	isolated worktree
+2026-09-16T22:54:09Z	policy	Give viewers dashboard and telemetry reads only	Raw logs, events, and server settings can contain sensitive operational data	viewer.go; auth_test.go	implemented with explicit response projections and route denial
+2026-09-16T22:54:09Z	design	Compare opaque server sessions with encrypted cookies	Logout revocation and deployment complexity need an explicit choice	.audit/oidc-design.md	selected bounded opaque sessions; inherited-model candidates reduce model diversity
+2026-09-16	review	Cancel consumed login transactions before session admission	An older callback could recreate a session after logout	https://github.com/petzkod5/rsdw-c2/issues/13; TestReviewLogoutDuringCallback	fixed and independently retested with race detection
+2026-09-16	browser	Use an HTTP fixture bound to loopback only	The in-app browser cannot accept the local test certificates	user approval; TestOIDCHTTPBrowserAdapter	production TLS unchanged; browser login and role checks completed
+2026-09-16	review	Normalize padded ports and expanded IPv6 origins	Browser Origin serialization otherwise rejects authenticated mutations	https://github.com/petzkod5/rsdw-c2/issues/14; TestOIDCCanonicalPublicOrigin	regression failed before fix and passed after fix
+2026-09-16	verification	Record browser limitations instead of treating attempts as passes	Download events and viewport resizing were not observable	verification/oidc.md	CSV UI feedback passed; file delivery and mobile layout not claimed
+2026-09-16	delivery	Open one integrated authentication PR using gh	Backend, viewer projections, UI capabilities, and Helm must agree; Origin CLI unavailable	docs/oidc.md; verification/oidc.md	no live provider changes, production deployment, or merge

@@ -22,7 +22,7 @@ const icons = {
 const icon = (name) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.server}</svg>`;
 const pages = {
   dashboard: ['Dashboard', 'Monitor every server from one place.'],
-  telemetry: ['Telemetry', 'Live performance, resource usage, and server logs.'],
+  telemetry: ['Telemetry', 'Live performance and resource usage.'],
   events: ['Events', 'Search every server event in one place.'],
   maintenance: ['Maintenance', 'Make safe changes to your servers.'],
 };
