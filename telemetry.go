@@ -247,6 +247,18 @@ func joinObservation(server Server, result observation, now time.Time) Server {
 	return server
 }
 
+func (a *App) markTelemetryPending(server Server) {
+	pending := observation{at: time.Now().UTC(), metrics: emptyMetrics(), status: StatusStarting, image: server.CurrentImage}
+	cache := a.observations()
+	cache.mu.Lock()
+	history := cache.history[server.ID]
+	if len(history) >= telemetryMaxSamples {
+		history = history[len(history)-telemetryMaxSamples+1:]
+	}
+	cache.history[server.ID] = append(history, pending)
+	cache.mu.Unlock()
+}
+
 func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 	now := time.Now().UTC()
 	duration := time.Minute

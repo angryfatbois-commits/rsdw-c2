@@ -516,6 +516,10 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 	if server.CPULimitMillis == 0 {
 		server.CPULimitMillis = 1000
 	}
+	imageRepository, imageTagValue, imageDigest, err := imageReferenceValues(server.DesiredImage)
+	if err != nil {
+		return fmt.Errorf("invalid server image: %w", err)
+	}
 	if _, err := k.runner.Run(ctx, k.kubectl, "get", "namespace", server.Namespace); err != nil {
 		if _, err := k.runner.Run(ctx, k.kubectl, "create", "namespace", server.Namespace); err != nil {
 			return fmt.Errorf("create namespace: %w", err)
@@ -553,7 +557,13 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 			}
 		}
 	}
-	args := []string{"upgrade", "--install", server.Release, k.chart, "--namespace", server.Namespace, "--create-namespace", "--set-literal", "server.env.RSDW_OWNER_ID=" + server.OwnerID, "--set-literal", "server.env.RSDW_SERVER_NAME=" + server.Name, "--set-string", "image.repository=" + k.imageRepository, "--set-string", "image.tag=" + imageTag(server.DesiredImage), "--set-string", "api.bearerTokenSecret.name=" + secret}
+	args := []string{"upgrade", "--install", server.Release, k.chart, "--namespace", server.Namespace, "--create-namespace", "--set-literal", "server.env.RSDW_OWNER_ID=" + server.OwnerID, "--set-literal", "server.env.RSDW_SERVER_NAME=" + server.Name, "--set-string", "image.repository=" + imageRepository}
+	if imageDigest != "" {
+		args = append(args, "--set-string", "image.digest="+imageDigest)
+	} else {
+		args = append(args, "--set-string", "image.tag="+imageTagValue)
+	}
+	args = append(args, "--set-string", "api.bearerTokenSecret.name="+secret)
 	if k.chartVersion != "" {
 		args = append(args, "--version", k.chartVersion)
 	}
@@ -601,6 +611,9 @@ func (k *kubeOrchestrator) Refresh(ctx context.Context, server Server) (Server, 
 	target, status, err := k.resolvePod(ctx, server)
 	if err != nil {
 		return server, err
+	}
+	if target.containerID == "" || target.startedAt.IsZero() {
+		return server, errors.New("server container is not running")
 	}
 	if target.container.Image == "" {
 		return server, errors.New("observed server image is unavailable")
@@ -1166,6 +1179,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.markTelemetryPending(server)
 	writeJSON(w, http.StatusOK, server)
 }
 
@@ -1356,6 +1370,32 @@ func imageTag(image string) string {
 		return image[index+1:]
 	}
 	return image
+}
+
+var (
+	imageReferencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]*$`)
+	imageTagPattern       = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
+	imageDigestPattern    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:[A-Za-z0-9=_-]+$`)
+)
+
+func imageReferenceValues(image string) (repository, tag, digest string, err error) {
+	image = strings.TrimSpace(image)
+	if image == "" || !imageReferencePattern.MatchString(image) {
+		return "", "", "", errors.New("image reference contains unsupported characters")
+	}
+	if at := strings.LastIndexByte(image, '@'); at >= 0 {
+		repository, digest = image[:at], image[at+1:]
+		if strings.Contains(repository, "@") || repository == "" || !imageDigestPattern.MatchString(digest) {
+			return "", "", "", errors.New("image digest reference is invalid")
+		}
+		return repository, "", digest, nil
+	}
+	lastSlash := strings.LastIndexByte(image, '/')
+	lastColon := strings.LastIndexByte(image, ':')
+	if lastColon <= lastSlash || lastColon == len(image)-1 || !imageTagPattern.MatchString(image[lastColon+1:]) {
+		return "", "", "", errors.New("image reference must include a valid tag or digest")
+	}
+	return image[:lastColon], image[lastColon+1:], "", nil
 }
 func deploymentName(release string) string { return release + "-rsdragonwilds" }
 func boundedInt(raw string, fallback, minValue, maxValue int) int {

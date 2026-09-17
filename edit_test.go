@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type editOrchestrator struct {
@@ -165,6 +166,30 @@ func TestEditSettingsUsesObservedImageAndPreservesPendingIntent(t *testing.T) {
 	got := app.store.Snapshot().Servers[server.ID]
 	if got.CurrentImage != "example/server:1.2.4" || got.DesiredImage != "example/server:2.0.0" || !got.UpdateAvailable {
 		t.Fatalf("image state = current %q desired %q available %t", got.CurrentImage, got.DesiredImage, got.UpdateAvailable)
+	}
+}
+
+func TestEditSettingsMarksTelemetryPendingUntilReplacementObservation(t *testing.T) {
+	app := newTestApp(t, false)
+	orchestrator := &editOrchestrator{observedImage: "example/server:1.2.4"}
+	app.orchestrator = orchestrator
+	server := editFixtureServer()
+	if err := app.store.Update(func(state *State) error { state.Servers[server.ID] = server; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	oldValue, observedAt := 12.0, time.Now().UTC()
+	app.observations().history[server.ID] = []observation{{
+		at: time.Now().UTC(), status: StatusOnline, image: server.CurrentImage,
+		metrics: map[string]MetricReading{"players": {Value: &oldValue, Status: "available", Source: "test", Unit: "players", ObservedAt: &observedAt}},
+	}}
+
+	res := requestJSON(t, app, http.MethodPost, "/api/servers/target/actions/edit-settings", `{"name":"Edited","confirm":true}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("edit status = %d: %s", res.Code, res.Body.String())
+	}
+	visible := app.telemetryFor(app.store.Snapshot().Servers[server.ID], "60s").Server
+	if visible.Status != StatusStarting || visible.CurrentImage != "example/server:1.2.4" || visible.MetricsAvailable {
+		t.Fatalf("pending telemetry = %+v", visible)
 	}
 }
 

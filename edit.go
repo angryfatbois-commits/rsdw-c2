@@ -113,5 +113,6 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Could not persist settings for server %s, release %s/%s. The cluster may already contain the submitted values. Inspect the existing release and reconcile C2 state before retrying.", server.ID, server.Namespace, server.Release))
 		return
 	}
+	a.markTelemetryPending(server)
 	writeJSON(w, http.StatusOK, server)
 }
