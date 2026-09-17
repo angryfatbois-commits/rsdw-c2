@@ -11,7 +11,7 @@ The console supports these operations:
 - Restart a server after confirmation.
 - Detect image drift and push a new image tag after confirmation.
 
-Backups and integrations are not part of this release.
+Backups remain unavailable until a backup producer exists. Discord integrations are available to admins; see [Discord alerts](docs/integrations.md) for their event and delivery contracts.
 
 ## Run the console locally
 
