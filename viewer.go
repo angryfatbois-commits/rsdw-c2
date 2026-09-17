@@ -1,0 +1,126 @@
+package main
+
+import (
+	"math"
+	"time"
+)
+
+type ViewerMetric struct {
+	Value      *float64   `json:"value"`
+	Status     string     `json:"status"`
+	Source     string     `json:"source"`
+	Unit       string     `json:"unit"`
+	ObservedAt *time.Time `json:"observedAt"`
+	Reason     string     `json:"reason"`
+}
+
+type ViewerHealthCheck struct {
+	Name   string    `json:"name"`
+	Status string    `json:"status"`
+	At     time.Time `json:"at"`
+}
+
+func finiteMetric(value *float64) *float64 {
+	if value == nil || math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
+		return nil
+	}
+	return value
+}
+
+type ViewerServer struct {
+	ID               string                  `json:"id"`
+	Name             string                  `json:"name"`
+	Status           Status                  `json:"status"`
+	MaxPlayers       int                     `json:"maxPlayers"`
+	LastSeen         string                  `json:"lastSeen"`
+	Metrics          map[string]ViewerMetric `json:"metrics"`
+	MetricsAvailable bool                    `json:"metricsAvailable"`
+}
+
+func viewerServer(server Server) ViewerServer {
+	status := StatusUnknown
+	switch server.Status {
+	case StatusOnline, StatusStarting, StatusAttention, StatusStopped:
+		status = server.Status
+	}
+	return ViewerServer{ID: server.ID, Name: server.Name, Status: status, MaxPlayers: server.MaxPlayers, LastSeen: server.LastSeen, Metrics: viewerMetrics(server.Metrics), MetricsAvailable: server.MetricsAvailable}
+}
+
+func viewerMetricStatus(status string) string {
+	switch status {
+	case "available", "stale", "unsupported", "warming_up", "warming", "starting", "stopped", "unavailable":
+		return status
+	default:
+		return "unavailable"
+	}
+}
+
+func viewerMetrics(metrics map[string]MetricReading) map[string]ViewerMetric {
+	result := make(map[string]ViewerMetric, len(metricCatalog))
+	for _, definition := range metricCatalog {
+		reading := metrics[definition.key]
+		status := viewerMetricStatus(reading.Status)
+		value, reason := finiteMetric(reading.Value), ""
+		if value == nil && status == "available" {
+			status = "unavailable"
+		}
+		if status != "available" {
+			value, reason = nil, "Metric is not currently available"
+		}
+		result[definition.key] = ViewerMetric{Value: value, Status: status, Source: definition.source, Unit: definition.unit, ObservedAt: reading.ObservedAt, Reason: reason}
+	}
+	return result
+}
+
+type ViewerTelemetry struct {
+	Server            ViewerServer            `json:"server"`
+	Metrics           map[string]ViewerMetric `json:"metrics"`
+	MetricsAvailable  bool                    `json:"metricsAvailable"`
+	Samples           []MetricSample          `json:"samples"`
+	MetricDefinitions []MetricDefinition      `json:"metricDefinitions"`
+	HealthChecks      []ViewerHealthCheck     `json:"healthChecks"`
+}
+
+func viewerTelemetry(telemetry Telemetry) ViewerTelemetry {
+	result := ViewerTelemetry{Server: viewerServer(telemetry.Server), Metrics: viewerMetrics(telemetry.Metrics), MetricsAvailable: telemetry.MetricsAvailable, Samples: []MetricSample{}, MetricDefinitions: []MetricDefinition{}}
+	result.HealthChecks = []ViewerHealthCheck{}
+	if ready := result.Metrics["engineReady"]; ready.ObservedAt != nil {
+		status := ready.Status
+		if ready.Value != nil {
+			status = "starting"
+			if *ready.Value == 1 {
+				status = "healthy"
+			}
+		}
+		result.HealthChecks = append(result.HealthChecks, ViewerHealthCheck{Name: "Game API engine readiness", Status: status, At: *ready.ObservedAt})
+	}
+	for _, definition := range metricCatalog {
+		result.MetricDefinitions = append(result.MetricDefinitions, MetricDefinition{Metric: definition.key, Description: definition.description})
+	}
+	for _, sample := range telemetry.Samples {
+		at, _ := sample["timestamp"].(time.Time)
+		view := MetricSample{"timestamp": at}
+		times := map[string]*time.Time{}
+		statuses := map[string]string{}
+		reasons := map[string]string{}
+		sourceTimes, _ := sample["observedAt"].(map[string]*time.Time)
+		sourceStatuses, _ := sample["status"].(map[string]string)
+		for _, definition := range metricCatalog {
+			key := definition.key
+			value, _ := sample[key].(*float64)
+			value = finiteMetric(value)
+			statuses[key] = viewerMetricStatus(sourceStatuses[key])
+			if value == nil && statuses[key] == "available" {
+				statuses[key] = "unavailable"
+			}
+			if statuses[key] != "available" {
+				value = nil
+				reasons[key] = "Metric is not currently available"
+			}
+			view[key], times[key] = value, sourceTimes[key]
+		}
+		view["observedAt"], view["status"], view["reason"] = times, statuses, reasons
+		result.Samples = append(result.Samples, view)
+	}
+	return result
+}

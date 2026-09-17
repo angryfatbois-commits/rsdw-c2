@@ -6,6 +6,7 @@ const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
 vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
+state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
 
 state.servers = [{id:'world', name:'Test world', status:'online', players:2, maxPlayers:4, metricsAvailable:false}];
 state.telemetry = {samples:[], healthChecks:[], metricDefinitions:[{metric:'tick_rate', description:'Ticks <per> second'}]};
@@ -115,3 +116,84 @@ assert.equal(context.exportResult[0], 'events.csv');
 assert.equal(context.exportResult[1], '"message","details"\r\n"\'=SUM(1,2)","He said ""hello"""');
 assert.equal(context.exportResult[2], 'text/csv;charset=utf-8');
 console.log('UI rendering checks passed.');
+
+state.capabilities = {dashboard:true, telemetry:true};
+state.events = [{message:'SECRET EVENT', details:'SECRET DETAILS'}];
+state.logs = 'SECRET LOG';
+for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance]) {
+  html = render();
+  assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output)"/);
+}
+html = telemetry();
+assert.match(html, /data-testid="export-telemetry"/);
+assert.match(html, /data-testid="telemetry-range"/);
+assert.match(html, /Test world/);
+state.servers = [];
+assert.doesNotMatch(context.ui.dashboard(), /data-action="add-server"/);
+console.log('Viewer capability rendering checks passed.');
+
+const test = require('node:test');
+test('identity changes clear protected data and reject late API and log responses', async () => {
+  const elements = new Map();
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, open:false, close(){this.open=false;}, setAttribute(){}, classList:{remove(){}, add(){}, toggle(){}}});
+    return elements.get(selector);
+  };
+  const requests = [];
+  let storedToken = '';
+  const sandbox = vm.createContext({
+    DOMException, AbortController, clearTimeout, setTimeout,
+    document:{querySelector:element}, sessionStorage:{getItem(){return storedToken;}, removeItem(){storedToken='';}},
+    fetch: (path, options) => new Promise((resolve) => requests.push({path, options, resolve})),
+  });
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.authUI = {state, api, loadLogs, applyAuth, logout, discoverAuth, refresh};', sandbox);
+  const ui = sandbox.authUI;
+  ui.applyAuth({mode:'oidc',authenticated:true,subject:'operator',role:'admin',csrfToken:'admin-session',required:true,capabilities:{dashboard:true,telemetry:true,logs:true,events:true}});
+  Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], telemetry:{secret:true}, selectedEventId:'secret', modalAction:'restart', modalServerId:'world'});
+  element('#modal-body').innerHTML = 'secret settings';
+  const logs = ui.loadLogs();
+  const events = ui.api('/api/events');
+  const logRejected = assert.rejects(logs, {name:'AbortError'});
+  const eventsRejected = assert.rejects(events, {name:'AbortError'});
+  ui.applyAuth({mode:'oidc',authenticated:true,subject:'reader',role:'viewer',csrfToken:'viewer-session',required:true,capabilities:{dashboard:true,telemetry:true}});
+  for (const request of requests) request.resolve({status:200,ok:true,headers:{get:()=> 'admin-session'},text:async()=>JSON.stringify({lines:['late secret'],events:[{message:'late secret'}]})});
+  await Promise.all([logRejected, eventsRejected]);
+  assert.equal(ui.state.logs, '');
+  assert.equal(ui.state.events.length, 0);
+  assert.equal(ui.state.servers.length, 0);
+  assert.equal(ui.state.telemetry, null);
+  assert.equal(ui.state.modalAction, '');
+  assert.equal(element('#modal-body').innerHTML, '');
+  assert.equal(element('#session-role').textContent, 'Viewer');
+  assert.equal(ui.state.capabilities.logs, undefined);
+  const responseChanged = ui.api('/api/bootstrap');
+  const changedRejected = assert.rejects(responseChanged, {name:'AbortError'});
+  requests.at(-1).resolve({status:200,ok:true,headers:{get:()=> 'different-session'},text:async()=>'{"servers":[{"name":"secret"}]}'});
+  await changedRejected;
+  assert.equal(ui.state.authRequired, true);
+  assert.equal(ui.state.servers.length, 0);
+  assert.equal(element('#login-dialog').open, false);
+  ui.applyAuth({mode:'oidc',authenticated:true,subject:'reader',role:'viewer',csrfToken:'expired-session',required:true,capabilities:{dashboard:true,telemetry:true}});
+  const logout = ui.logout();
+  const requestCount = requests.length;
+  await ui.refresh();
+  assert.equal(requests.length, requestCount);
+  assert.equal(requests.at(-1).options.headers['X-CSRF-Token'], 'expired-session');
+  assert.equal(ui.state.authRequired, true);
+  requests.at(-1).resolve({status:401,ok:false,headers:{get:()=>null},text:async()=>'{"error":"authentication required"}'});
+  await logout;
+  assert.equal(ui.state.logoutCSRF, '');
+  assert.equal(element('#session-controls').hidden, true);
+  assert.equal(element('#toast').hidden, true);
+
+  ui.state.authMode = '';
+  storedToken = 'old-admin-token';
+  const discovery = ui.discoverAuth();
+  assert.equal(requests.at(-1).options.headers.Authorization, 'Bearer old-admin-token');
+  requests.at(-1).resolve({status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify({mode:'oidc',authenticated:false})});
+  await new Promise(setImmediate);
+  assert.equal(storedToken, '');
+  assert.equal(requests.at(-1).options.headers.Authorization, undefined);
+  requests.at(-1).resolve({status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify({mode:'oidc',authenticated:true,role:'viewer'})});
+  assert.equal((await discovery).authenticated, true);
+});

@@ -1,7 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
-{{- if not .Values.auth.adminTokenSecret.name }}
+{{- if and (eq .Values.auth.mode "token") (not .Values.auth.adminTokenSecret.name) }}
 {{- fail "auth.adminTokenSecret.name is required; create the Secret before installing RSDW C2" }}
+{{- end }}
+{{- $oidc := .Values.auth.oidc }}
+{{- $policy := $oidc.rolePolicy }}
+{{- $assignments := concat $policy.adminSubjects $policy.viewerSubjects $policy.adminGroups $policy.viewerGroups }}
+{{- if eq .Values.auth.mode "oidc" }}
+{{- if .Values.auth.adminTokenSecret.name }}{{ fail "OIDC mode cannot configure an admin token Secret" }}{{ end }}
+{{- if not (and $oidc.issuer $oidc.publicOrigin $oidc.clientID $oidc.clientSecret.name (len $assignments)) }}
+{{- fail "OIDC mode requires issuer, publicOrigin, clientID, clientSecret.name and explicit role assignments" }}
+{{- end }}
+{{- else if or $oidc.issuer $oidc.publicOrigin $oidc.clientID $oidc.clientSecret.name (len $assignments) }}
+{{- fail "OIDC settings require auth.mode=oidc" }}
 {{- end }}
 metadata:
   name: {{ include "rsdwc2.fullname" . }}
@@ -58,11 +69,33 @@ spec:
               value: {{ .Values.cluster.region | quote }}
             - name: RSDW_STATE_FILE
               value: /var/lib/rsdw-c2/state.json
+            - name: RSDW_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            {{- if eq .Values.auth.mode "token" }}
             - name: RSDW_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.auth.adminTokenSecret.name }}
                   key: {{ .Values.auth.adminTokenSecret.key }}
+            {{- else }}
+            - name: RSDW_OIDC_ISSUER
+              value: {{ $oidc.issuer | quote }}
+            - name: RSDW_OIDC_PUBLIC_ORIGIN
+              value: {{ $oidc.publicOrigin | quote }}
+            - name: RSDW_OIDC_CLIENT_ID
+              value: {{ $oidc.clientID | quote }}
+            - name: RSDW_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $oidc.clientSecret.name | quote }}
+                  key: {{ $oidc.clientSecret.key | quote }}
+            - name: RSDW_OIDC_SCOPES
+              value: {{ join " " $oidc.scopes | quote }}
+            - name: RSDW_OIDC_GROUPS_CLAIM
+              value: {{ $oidc.groupsClaim | quote }}
+            - name: RSDW_OIDC_ROLE_POLICY
+              value: {{ $policy | toJson | quote }}
+            {{- end }}
           volumeMounts:
             - name: state
               mountPath: /var/lib/rsdw-c2

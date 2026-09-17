@@ -143,7 +143,7 @@ func newTestApp(t *testing.T, demo bool) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &App{store: store, orchestrator: demoOrchestrator{}, demo: demo}
+	return &App{store: store, orchestrator: demoOrchestrator{}, demo: demo, auth: &Auth{demo: true}}
 }
 
 func requestJSON(t *testing.T, app *App, method, path, body string) *httptest.ResponseRecorder {
@@ -295,7 +295,7 @@ func TestDemoAPIExercisesMutations(t *testing.T) {
 
 func TestAuthBoundary(t *testing.T) {
 	app := newTestApp(t, false)
-	app.authToken = "secret"
+	app.auth = &Auth{token: "secret"}
 	res := requestJSON(t, app, http.MethodGet, "/api/bootstrap", "")
 	if res.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d", res.Code)

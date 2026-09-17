@@ -580,16 +580,23 @@ type App struct {
 	store         *Store
 	orchestrator  Orchestrator
 	demo          bool
-	authToken     string
+	auth          *Auth
 	imageRepo     string
 	telemetryOnce sync.Once
 	telemetry     *telemetryStore
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
-		if r.URL.Path != "/api/auth" && r.URL.Path != "/api/session" && !a.authorized(r) {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		w.Header().Set("Cache-Control", "no-store")
+		if a.auth.routes(w, r) {
+			return
+		}
+		var ok bool
+		r, ok = a.auth.authorize(w, r)
+		if !ok {
 			return
 		}
 		a.api(w, r)
@@ -598,30 +605,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.FileServer(http.FS(webRoot)).ServeHTTP(w, r)
 }
 
-func (a *App) authorized(r *http.Request) bool {
-	return a.authToken == "" || r.Header.Get("Authorization") == "Bearer "+a.authToken
-}
-
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/api/auth" && r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, map[string]bool{"required": a.authToken != ""})
-		return
-	}
-	if r.URL.Path == "/api/session" && r.Method == http.MethodPost {
-		var body struct {
-			Token string `json:"token"`
-		}
-		if err := decodeJSON(r, &body); err != nil || body.Token == "" || body.Token != a.authToken {
-			if a.authToken == "" && body.Token == "" {
-				writeJSON(w, http.StatusNoContent, nil)
-				return
-			}
-			writeError(w, http.StatusUnauthorized, "invalid admin token")
-			return
-		}
-		writeJSON(w, http.StatusNoContent, nil)
-		return
-	}
 	if r.URL.Path == "/api/bootstrap" && r.Method == http.MethodGet {
 		a.handleBootstrap(w, r)
 		return
@@ -652,9 +636,17 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	if a.demo {
 		mode = "demo"
 	}
+	if requestPrincipal(r).Role == RoleViewer {
+		view := make([]ViewerServer, 0, len(servers))
+		for _, server := range servers {
+			view = append(view, viewerServer(server))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"servers": view, "mode": mode, "cluster": map[string]any{"name": envOr("RSDW_CLUSTER_NAME", "local-cluster"), "region": envOr("RSDW_CLUSTER_REGION", "eu-central"), "uptimeSeconds": int64(time.Since(startedAt).Seconds())}, "capabilities": capabilities(RoleViewer)})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"servers": servers, "events": recentEvents(snapshot.Events, 20), "mode": mode, "cluster": map[string]any{"name": envOr("RSDW_CLUSTER_NAME", "local-cluster"), "region": envOr("RSDW_CLUSTER_REGION", "eu-central"), "uptimeSeconds": int64(time.Since(startedAt).Seconds())},
-		"capabilities": map[string]bool{"create": true, "restart": true, "update": true, "logs": true, "updateCheck": true},
+		"capabilities": capabilities(RoleAdmin),
 	})
 }
 
@@ -772,7 +764,12 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[1] == "telemetry" && r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, a.telemetryFor(server, r.URL.Query().Get("range")))
+		telemetry := a.telemetryFor(server, r.URL.Query().Get("range"))
+		if requestPrincipal(r).Role == RoleViewer {
+			writeJSON(w, http.StatusOK, viewerTelemetry(telemetry))
+		} else {
+			writeJSON(w, http.StatusOK, telemetry)
+		}
 		return
 	}
 	if len(parts) == 3 && parts[1] == "actions" && r.Method == http.MethodPost {
@@ -1051,9 +1048,9 @@ var startedAt = time.Now()
 
 func main() {
 	demo := strings.EqualFold(os.Getenv("RSDW_DEMO_DATA"), "true")
-	authToken := os.Getenv("RSDW_ADMIN_TOKEN")
-	if !demo && authToken == "" {
-		log.Fatal("RSDW_ADMIN_TOKEN is required outside demo mode")
+	auth, err := authFromEnv(context.Background(), demo)
+	if err != nil {
+		log.Fatal(err)
 	}
 	statePath := envOr("RSDW_STATE_FILE", "/var/lib/rsdw-c2/state.json")
 	store, err := NewStore(statePath, demo)
@@ -1064,7 +1061,7 @@ func main() {
 	if demo {
 		orchestrator = demoOrchestrator{}
 	}
-	app := &App{store: store, orchestrator: orchestrator, demo: demo, authToken: authToken}
+	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth}
 	go app.runCollector(context.Background(), 15*time.Second)
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
