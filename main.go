@@ -708,7 +708,7 @@ func (a *App) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body.Name = strings.TrimSpace(body.Name)
-		if body.Name == "" || len(body.Name) > 48 || strings.ContainsAny(body.Name, "\x00\r\n") {
+		if body.Name == "" || len(body.Name) > 48 || strings.ContainsAny(body.Name, "\x00\r\n\u2028\u2029") {
 			writeError(w, http.StatusBadRequest, "name must be a single line of 1 to 48 characters")
 			return
 		}

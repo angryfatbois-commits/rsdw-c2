@@ -328,6 +328,42 @@ func TestPlayerIDValidationOnEveryInput(t *testing.T) {
 	}
 }
 
+func TestUsersRejectUnicodeLineSeparators(t *testing.T) {
+	for _, name := range []string{"Two\u2028lines", "Two\u2029lines"} {
+		for _, method := range []string{"POST", "PUT"} {
+			t.Run(fmt.Sprintf("%s/name=%q", method, name), func(t *testing.T) {
+				app := newTestApp(t, false)
+				app.auth.token = "test-admin"
+				res := userRequest(t, app, "POST", "/api/users", `{"name":"Zoë 山","playerId":"0123456789abcdef0123456789abcdef"}`, 201)
+				var user User
+				if err := json.Unmarshal(res.Body.Bytes(), &user); err != nil {
+					t.Fatal(err)
+				}
+				if user.Name != "Zoë 山" {
+					t.Fatalf("created name = %q", user.Name)
+				}
+				before := app.store.Snapshot()
+				path := "/api/users"
+				if method == "PUT" {
+					path += "/" + user.ID
+				}
+				body, _ := json.Marshal(map[string]string{"name": name, "playerId": "11111111111111111111111111111111"})
+				res = userRequest(t, app, method, path, string(body), 400)
+				if res.Body.String() != "{\"error\":\"name must be a single line of 1 to 48 characters\"}\n" {
+					t.Fatalf("validation error = %s", res.Body.String())
+				}
+				reloaded, err := NewStore(app.store.path, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(before, app.store.Snapshot()) || !reflect.DeepEqual(before, reloaded.Snapshot()) {
+					t.Fatal("invalid name changed memory or disk")
+				}
+			})
+		}
+	}
+}
+
 func TestUsersAuthenticationAndRoutes(t *testing.T) {
 	app := newTestApp(t, true)
 	app.auth.token = "test-admin"
