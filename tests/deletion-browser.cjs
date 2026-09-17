@@ -20,7 +20,6 @@ const worlds = [
   {id:'pending-keep', name:'PETZKO', worldName:'Interrupted keep'},
   {id:'pending-purge', name:'PETZKO', worldName:'Interrupted purge'},
 ].map((server) => ({namespace:'dragonwilds', release:server.id, status:'online', maxPlayers:4, ...server}));
-// A saved receipt exercises rendering only; demo mode cannot prove Kubernetes retention.
 const receipt = {serverId:'previous-world', worldLabel:'Previous world', namespace:'dragonwilds', release:'previous-world', mode:'keep', completed:true,
   plan:{world:[{kind:'PersistentVolumeClaim', namespace:'dragonwilds', name:'previous-world', uid:'world-uid'}],
     seeds:[{kind:'PersistentVolumeClaim', namespace:'dragonwilds', name:'uploaded-source', uid:'source-uid'}],
@@ -175,7 +174,6 @@ async function run() {
   }
   await page.screenshot({path:path.join(output, 'receipts.png'), fullPage:true});
 
-  // Reuse the real OIDC fixture to prove viewer restrictions without spoofing capabilities.
   const oidc = await start('go', ['test','-count=1','-run','^TestOIDCBrowserFixture$','-v','-timeout','90s'],
     {RSDW_OIDC_BROWSER_TEST:'1', RSDW_OIDC_BROWSER_HTTP:'0'}, /Console: (https:\/\/127\.0\.0\.1:\d+)/, true);
   const viewer = await browser.newPage({ignoreHTTPSErrors:true});
