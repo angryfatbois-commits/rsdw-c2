@@ -109,9 +109,9 @@ If the GHCR packages are private, authenticate with `helm registry login ghcr.io
 
 ## Release versions and publication
 
-The [CI workflow](.github/workflows/ci.yml) runs on pull requests and every push to `main`. Configure branch protection to require its `Verify` check. That job runs `bash scripts/verify.sh`, then offline tests of the workflow and publication guards. The image build runs after `Verify` for `linux/amd64`, including on pull requests, with publishing disabled.
+The [CI workflow](.github/workflows/ci.yml) runs on pull requests and every push to `main`. Configure branch protection to require its `Verify` check. That job runs `bash scripts/verify.sh`, then offline tests of the workflow and publication guards. The image build runs after `Verify` for `linux/amd64`, including on pull requests, with publishing disabled. The image job loads that build into a disposable kind cluster and installs a packaged chart with an admin-token Secret. It requires readiness, rejection of unauthenticated requests, and successful authentication with the Secret's token before release can run. Its local `0.0.0` test package and image are never published.
 
-CI uses Go `1.26.0` from `go.mod`, Node.js `24.10.0`, Python `3.13.7`, and Helm `4.2.2` on Ubuntu `24.04`. The image includes Helm `4.2.2` and kubectl `1.36.2`. The release dependencies are pinned in `package-lock.json`, and Actions are pinned to commit SHAs.
+CI uses Go `1.26.0` from `go.mod`, Node.js `24.10.0`, Python `3.13.7`, and Helm `4.2.2` on Ubuntu `24.04`. The image includes Helm `4.2.2` and kubectl `1.36.2`. Both cluster-check jobs explicitly install kind `0.33.0` and kubectl `1.36.2`. They use the digest-pinned Kubernetes `1.36.4` node image from the [kind release](https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0) and the hosted runner's Docker daemon. The release dependencies are pinned in `package-lock.json`, and Actions are pinned to commit SHAs.
 
 After both checks pass for the same commit on `main`, semantic-release reads the full Git history and tags. It owns all release versions and creates exact `vX.Y.Z` tags. Do not create release tags manually. Supported Conventional Commit effects are:
 
@@ -130,11 +130,11 @@ Publication runs in this order within the same gated workflow:
 1. semantic-release creates `vX.Y.Z` and the GitHub release. Generated GitHub release notes are the project's changelog.
 2. The publisher packages and checks the chart locally, then publishes `ghcr.io/petzkod5/rsdw-c2:X.Y.Z` only if that image does not already exist. It pulls the image, checks its source revision and architecture, runs the bundled Helm and kubectl, and starts the console with `RSDW_ADMIN_TOKEN` to check `/api/auth`. The run logs the immutable `ghcr.io/petzkod5/rsdw-c2@sha256:...` reference. There is no mutable `latest` tag.
 3. After that exact image passes, the publisher pushes `oci://ghcr.io/petzkod5/charts/rsdw-c2` at version `X.Y.Z`. Packaging sets `version` and `appVersion` to `X.Y.Z`; the chart's existing default selects the same image tag. Source chart files stay unchanged.
-4. The publisher pulls the OCI chart into a fresh directory and compares its contents with the locally packaged chart. It checks metadata, the default image, readiness, the required admin Secret reference, rejection without that reference, and a client-only Helm install dry run. This checks installation rendering without deploying to a cluster.
+4. The publisher pulls the OCI chart into a fresh directory and compares its contents with the locally packaged chart. It checks metadata, the default image, readiness, the required admin Secret reference, rejection without that reference, and a client-only Helm install dry run. CI also installs this downloaded archive in a fresh kind cluster with the matching image already pulled and a new admin-token Secret. It waits for the default persistent volume and Deployment to become ready, then checks the Service and authenticated API. Each check uses a private kubeconfig, prints diagnostics on failure, and deletes its disposable cluster. It never uses an external cluster.
 
 Only the release job has `contents: write` and `packages: write`. It uses `GITHUB_TOKEN`; issue and pull-request writes are disabled. The workflow does not rely on a tag-triggered workflow, since tags created with `GITHUB_TOKEN` do not trigger another Actions run. See [GitHub's workflow trigger rules](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow).
 
-If publication fails, rerun the failed Actions run for the same commit. A tag already at that commit supplies the original version. A missing GitHub release is recovered from that existing tag with GitHub-generated notes. An existing image must match the commit revision, and an existing chart must have identical extracted contents. Retries never repush existing versions; authentication, network, and content conflicts stop the run. The workflow serializes runs on `main` and does not cancel an active publisher. A newer push does not repair an older incomplete release; rerun the older failed run explicitly.
+If publication fails, rerun the failed Actions run for the same commit. A tag already at that commit supplies the original version. A missing GitHub release is recovered from that existing tag with GitHub-generated notes. An existing image must match the commit revision, and an existing chart must have identical extracted contents. Retries never repush existing versions; authentication, network, and content conflicts stop the run. The workflow serializes runs on `main` with `queue: max` and does not cancel an active publisher. [GitHub permits up to 100 pending runs per concurrency group](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency). A newer push does not repair an older incomplete release; rerun the older failed run explicitly.
 
 Before the first release, ensure Actions can write repository contents and both GHCR packages, including access to any packages that already exist. A collision with a pre-existing version fails without replacing it. A GitHub release can appear before its artifacts finish publishing, so wait for its Actions run to succeed before installing it.
 
@@ -163,7 +163,7 @@ The checks cover Go tests, signed-token OIDC flows and rejection cases, the buil
 
 With Playwright and Chromium available, run `node tests/users-browser.cjs` after `bash scripts/verify.sh` for the authenticated Saved IDs browser flow. Set `NODE_PATH` if Playwright is installed outside the project, and `RSDW_TEST_CHROMIUM` to use a specific Chromium executable. The test uses temporary state and demo mode without a Kubernetes cluster.
 
-The workflow has additional offline regression tests for its own publication logic. These use fake registry commands and real local Helm packaging. They do not create Git tags, contact GHCR, or publish anything.
+The workflow has additional offline regression tests for its own publication logic. These use fake registry commands, real local Helm packaging, and the configured release-notes generator with a literal `feat(chart)` commit. They do not create Git tags, contact GHCR, or publish anything.
 
 ```sh
 npm ci --ignore-scripts
@@ -171,10 +171,21 @@ node --test .github/release.test.mjs
 actionlint .github/workflows/ci.yml
 ```
 
+Actionlint `1.7.12` reports `queue` as unknown even though GitHub supports it. The workflow regression test covers `queue: max`; keep that setting when using an older linter.
+
 `scripts/verify.sh` remains the application verification contract. The workflow tests supplement it; they do not replace or duplicate the application checks. A Docker build is an optional local check and also runs as a separate CI job.
 
 ```sh
 docker build --platform linux/amd64 -t rsdw-c2:local .
+```
+
+To run the packaged-chart installation check locally, install the CI versions of kind and kubectl and enable Docker access. This optional local check runs automatically in CI and fails there if Docker is unavailable.
+
+```sh
+docker build --platform linux/amd64 -t ghcr.io/petzkod5/rsdw-c2:0.0.0 .
+chart_dir=$(mktemp -d)
+helm package charts/rsdw-c2 --version 0.0.0 --app-version 0.0.0 --destination "$chart_dir"
+node .github/check-chart.mjs "$chart_dir/rsdw-c2-0.0.0.tgz" 0.0.0 --kind
 ```
 
 Run the disposable low-memory cluster check when Docker access is available.

@@ -27,6 +27,7 @@ test('workflow has one verified main release path and builds PRs without publica
   assert.deepEqual(workflow.on, { pull_request: null, push: { branches: ['main'] } });
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
+  assert.equal(workflow.concurrency.queue, 'max');
   assert.equal(workflow.concurrency.group, 'ci-${{ github.ref }}');
   assert.deepEqual(Object.keys(workflow.jobs), ['verify', 'image', 'release']);
   const { verify, image, release: publishing } = workflow.jobs;
@@ -35,6 +36,16 @@ test('workflow has one verified main release path and builds PRs without publica
   const build = image.steps.find(step => step.uses?.startsWith('docker/build-push-action@'));
   assert.equal(build.with.push, false);
   assert.equal(build.with.platforms, 'linux/amd64');
+  assert.equal(build.with.load, true);
+  assert.equal(build.with.tags, 'ghcr.io/petzkod5/rsdw-c2:0.0.0');
+  for (const job of [image, publishing]) {
+    const setup = job.steps.find(step => step.uses?.startsWith('helm/kind-action@'));
+    assert.deepEqual(setup.with, { version: 'v0.33.0', kubectl_version: 'v1.36.2', install_only: true, ignore_failed_clean: true });
+  }
+  const install = image.steps.at(-1);
+  assert.match(install.run, /helm package charts\/rsdw-c2 --version 0\.0\.0 --app-version 0\.0\.0/);
+  assert.match(install.run, /node \.github\/check-chart\.mjs "\$RUNNER_TEMP\/rsdw-c2-0\.0\.0\.tgz" 0\.0\.0 --kind/);
+  assert.equal(publishing.steps.at(-1).env.CHART_CHECK_MODE, '--kind');
   assert.deepEqual(publishing.needs, ['verify', 'image']);
   assert.equal(publishing.if, "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'petzkod5/rsdw-c2'");
   assert.deepEqual(publishing.permissions, { contents: 'write', packages: 'write' });
@@ -68,6 +79,24 @@ test('Conventional Commits select the version and chart features qualify', async
     const actual = await analyzeCommits(config.plugins[0][1], { commits: [{ hash: sha, message }], cwd: process.cwd(), logger: { log() {} } });
     assert.equal(actual, expected, message);
   }
+});
+
+test('configured release notes include a literal chart feature before tag creation', async () => {
+  const [name, options] = config.plugins.find(([name]) => name === '@semantic-release/release-notes-generator');
+  const { generateNotes } = await import(name);
+  const notes = await generateNotes(options, {
+    cwd: process.cwd(),
+    options: { repositoryUrl: 'https://github.com/petzkod5/rsdw-c2' },
+    commits: [{ hash: sha, message: 'feat(chart): add settings' }],
+    lastRelease: { version: '1.1.0', gitTag: 'v1.1.0' },
+    nextRelease: { version: '1.2.0', gitTag: 'v1.2.0' },
+    logger: { log() {} },
+  });
+  assert.equal(typeof notes, 'string');
+  assert(notes.trim().length > 0);
+  assert.match(notes, /Features/);
+  assert.match(notes, /\*\*chart:\*\* add settings/);
+  assert.match(notes, /1\.2\.0/);
 });
 
 function releaseCalls(tags, { result = false, apiError, checkout = sha } = {}) {
@@ -192,7 +221,7 @@ function publicationFixture(t) {
     run(overrides = {}, version = '1.2.3') {
       return spawnSync('bash', ['.github/publish.sh', version], {
         encoding: 'utf8',
-        env: { ...env, PATH: `${dir}/bin:${process.env.PATH}`, TEST_HELM: helm, TEST_STATE: dir, ...overrides },
+        env: { ...env, CHART_CHECK_MODE: '--offline', PATH: `${dir}/bin:${process.env.PATH}`, TEST_HELM: helm, TEST_STATE: dir, ...overrides },
       });
     },
     calls() {
@@ -254,6 +283,15 @@ test('invalid version, wrong event, and wrong tag never contact a registry', t =
   assert.notEqual(fixture.run({ GITHUB_EVENT_NAME: 'pull_request' }).status, 0);
   assert.notEqual(fixture.run({ TEST_TAG_MISMATCH: 'yes' }).status, 0);
   assert(!fixture.calls().some(call => ['docker', 'helm', 'curl'].includes(call[0])));
+});
+
+test('downloaded chart validation rejects an unknown install mode without reporting success', t => {
+  const fixture = publicationFixture(t);
+  const result = fixture.run({ CHART_CHECK_MODE: '--typo' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unknown chart check mode: --typo/);
+  assert.doesNotMatch(result.stdout, /Published and verified image/);
+  assert(existsSync(path.join(fixture.dir, 'chart.tgz')));
 });
 
 test('packaged chart validation rejects incorrect metadata, image defaults, and readiness', t => {

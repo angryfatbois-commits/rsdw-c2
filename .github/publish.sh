@@ -66,5 +66,5 @@ fi
 tar -xzf "$archive" -C "$task_dir/expected"
 tar -xzf "$task_dir/pulled/rsdw-c2-$version.tgz" -C "$task_dir/actual"
 diff -ru "$task_dir/expected" "$task_dir/actual"
-node .github/check-chart.mjs "$task_dir/pulled/rsdw-c2-$version.tgz" "$version"
+node .github/check-chart.mjs "$task_dir/pulled/rsdw-c2-$version.tgz" "$version" "${CHART_CHECK_MODE:---kind}"
 printf 'Published and verified image %s and chart %s:%s\n' "$digest" "$chart" "$version"
