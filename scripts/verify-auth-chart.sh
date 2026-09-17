@@ -7,6 +7,8 @@ oidc=("${oidcBase[@]}" --set 'auth.oidc.rolePolicy.viewerGroups[0]=readers')
 rendered=$(helm template auth-test charts/rsdw-c2 "${oidc[@]}")
 [[ "$rendered" == *'RSDW_OIDC_CLIENT_SECRET'* && "$rendered" == *'name: "console-oidc"'* && "$rendered" != *'RSDW_ADMIN_TOKEN'* ]]
 helm lint charts/rsdw-c2 "${oidc[@]}"
+rendered=$(helm template auth-test charts/rsdw-c2 -f charts/rsdw-c2/values-pocketid.yaml)
+[[ "$rendered" == *'https://auth.petzko.sh'* && "$rendered" == *'openid email profile groups'* && "$rendered" == *'rsdw_c2_admins'* && "$rendered" == *'rsdw_c2_users'* && "$rendered" != *'RSDW_ADMIN_TOKEN'* ]]
 helm template auth-test charts/rsdw-c2 "${oidcBase[@]}" --set 'auth.oidc.rolePolicy.adminSubjects[0]=operator-subject' >/dev/null
 rendered=$(helm template auth-test charts/rsdw-c2 --set auth.adminTokenSecret.name=console-admin)
 [[ "$rendered" == *'RSDW_ADMIN_TOKEN'* && "$rendered" != *'RSDW_OIDC_CLIENT_SECRET'* ]]

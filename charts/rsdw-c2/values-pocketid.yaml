@@ -1,0 +1,16 @@
+auth:
+  mode: oidc
+  adminTokenSecret:
+    name: ""
+  oidc:
+    issuer: https://auth.petzko.sh
+    publicOrigin: https://rsdwc2.petzko.sh
+    clientID: 14d040bd-aa42-4448-bfc4-4ebd23b2ef41
+    clientSecret:
+      name: rsdw-c2-oidc
+      key: client-secret
+    scopes: [openid, email, profile, groups]
+    groupsClaim: groups
+    rolePolicy:
+      adminGroups: [rsdw_c2_admins]
+      viewerGroups: [rsdw_c2_users]
