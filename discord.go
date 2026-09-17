@@ -163,6 +163,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 			if !ok || !deliveryEnabled(integration, d) {
 				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", now
 				state.Deliveries[id] = d
+				state.pruneDeliveryHistory()
 				return nil
 			}
 			d.Status, d.UpdatedAt = DeliverySending, now
@@ -199,6 +200,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 				}
 			}
 			state.Deliveries[id] = d
+			state.pruneDeliveryHistory()
 			return nil
 		}); err != nil {
 			return errors.New("could not persist delivery result; sending delivery requires reconciliation")

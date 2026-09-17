@@ -50,7 +50,7 @@ During a tracked restart, C2 suppresses player and down/recovered alerts. Comple
 
 ## Delivery reference
 
-The queue is independent of the 500-event display history. Each event and integration pair has one stable 24-character delivery ID derived from their IDs. The queue stores an immutable event copy and guild/channel target, never a token. Delivery records are retained in state without automatic expiry; the API displays the most recent 100. This initial JSON-backed implementation is intended for one C2 replica.
+The queue is independent of the 500-event display history. Each event and integration pair has one stable 24-character delivery ID derived from their IDs. The queue stores an immutable event copy and guild/channel target, never a token. C2 retains the newest 100 sent or failed deliveries, plus every pending, retrying, sending, or uncertain delivery. The API displays the most recent 100 records. C2 queues new events only; pruning completed history does not replay old events when it restarts or an integration is enabled again. This JSON-backed implementation is intended for one C2 replica.
 
 | State | Meaning |
 | --- | --- |

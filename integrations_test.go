@@ -234,7 +234,7 @@ func TestDeliveryIndependentOfDisplayRetention(t *testing.T) {
 		for j := 0; j < 600; j++ {
 			appendEvent(s, server, "system", "success", "display only", "")
 		}
-		queueDelivery(s, s.Integrations["bot"], first)
+		queueDeliveryForNewEvent(s, s.Integrations["bot"], first)
 		return nil
 	})
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func discordApp(t *testing.T) (*App, string) {
 		i := integrationFixture()
 		s.Integrations[i.ID] = i
 		e := emitAlert(s, s.Servers["scuffedtards"], ServerDown, "", "Confirmed unhealthy", time.Now())
-		id = queueDelivery(s, i, e).ID
+		id = queueDeliveryForNewEvent(s, i, e).ID
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -331,4 +332,118 @@ func TestCrashAndResultPersistenceFailureAreUncertain(t *testing.T) {
 			t.Fatal("result persistence failure duplicated message")
 		}
 	})
+}
+
+func TestDeliveryHistoryRetentionAndNoReplay(t *testing.T) {
+	for _, transition := range []string{"sent", "dispatch cancellation", "configuration cancellation", "recovery"} {
+		t.Run(transition, func(t *testing.T) {
+			app, id := discordApp(t)
+			now := time.Now().UTC()
+			var history []string
+			preserved := map[string]Delivery{}
+			if err := app.store.Update(func(s *State) error {
+				integration := s.Integrations["bot"]
+				for j := 0; j < 102; j++ {
+					event := emitAlert(s, s.Servers["scuffedtards"], ServerDown, "", "historical outage", now.Add(-time.Hour).Add(time.Duration(j)*time.Second))
+					d := queueDeliveryForNewEvent(s, integration, event)
+					d.Status = DeliverySent
+					if j%2 == 0 {
+						d.Status = DeliveryFailed
+					}
+					s.Deliveries[d.ID] = d
+					history = append(history, d.ID)
+				}
+				integration.ID = "protected"
+				s.Integrations[integration.ID] = integration
+				for _, status := range []DeliveryStatus{DeliveryPending, DeliveryRetry, DeliverySending, DeliveryUncertain} {
+					d := queueDeliveryForNewEvent(s, integration, Event{ID: randomID(), Timestamp: now.Add(-24 * time.Hour), Kind: IntegrationTest})
+					d.Status, d.NextAttempt = status, now.Add(24*time.Hour)
+					s.Deliveries[d.ID], preserved[d.ID] = d, d
+				}
+				if transition == "dispatch cancellation" {
+					delete(s.Integrations, "bot")
+				}
+				if transition == "recovery" {
+					d := s.Deliveries[id]
+					d.Status = DeliverySent
+					s.Deliveries[id] = d
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			posts := 0
+			app.discordTransport = transportFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method == "GET" {
+					return discordResponse(200, `{"id":"456","guild_id":"123"}`, nil), nil
+				}
+				posts++
+				return discordResponse(200, `{}`, nil), nil
+			})
+			input := integrationFixture()
+			input.ID = ""
+			switch transition {
+			case "recovery":
+				store, err := NewStore(app.store.path, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				app.store = store
+			case "configuration cancellation":
+				input.Enabled = false
+				if res := requestJSON(t, app, "PUT", "/api/integrations/bot", integrationJSON(t, input)); res.Code != 200 {
+					t.Fatal(res.Body.String())
+				}
+			default:
+				if err := app.processDeliveries(context.Background(), now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshot := app.store.Snapshot()
+			if len(snapshot.Deliveries) != 104 {
+				t.Fatalf("retention kept %d deliveries; want 100 terminal and 4 active/uncertain", len(snapshot.Deliveries))
+			}
+			for j, oldID := range history {
+				_, exists := snapshot.Deliveries[oldID]
+				if exists != (j >= 3) {
+					t.Fatalf("historical delivery %d retained=%v; want newest terminal records", j, exists)
+				}
+			}
+			for protectedID, want := range preserved {
+				got, exists := snapshot.Deliveries[protectedID]
+				if want.Status == DeliverySending && transition != "configuration cancellation" {
+					want.Status, want.Result = DeliveryUncertain, got.Result
+				}
+				if !exists || !reflect.DeepEqual(got, want) {
+					t.Fatalf("active/uncertain delivery changed: got %+v, want %+v", got, want)
+				}
+			}
+			for reload := 0; reload < 2; reload++ {
+				store, err := NewStore(app.store.path, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				app.store = store
+				if transition != "dispatch cancellation" {
+					input.Enabled = true
+					if res := requestJSON(t, app, "PUT", "/api/integrations/bot", integrationJSON(t, input)); res.Code != 200 {
+						t.Fatal(res.Body.String())
+					}
+				}
+				if err := app.processDeliveries(context.Background(), now); err != nil {
+					t.Fatal(err)
+				}
+				if len(app.store.Snapshot().Deliveries) != 104 {
+					t.Fatal("reload or configuration update replayed historical events")
+				}
+			}
+			wantPosts := 0
+			if transition == "sent" {
+				wantPosts = 1
+			}
+			if posts != wantPosts {
+				t.Fatalf("sent %d messages; want %d without historical replay", posts, wantPosts)
+			}
+		})
+	}
 }

@@ -78,6 +78,8 @@ const (
 	DeliveryUncertain DeliveryStatus = "uncertain"
 )
 
+const terminalDeliveryHistoryLimit = 100
+
 type Delivery struct {
 	ID            string         `json:"id"`
 	IntegrationID string         `json:"integrationId"`
@@ -124,9 +126,34 @@ func (s *State) recoverAlerts() {
 		p.resetStreak()
 		s.Producers[id] = p
 	}
+	s.pruneDeliveryHistory()
 }
 
-func queueDelivery(state *State, integration DiscordIntegration, event Event) Delivery {
+func (s *State) pruneDeliveryHistory() {
+	if len(s.Deliveries) <= terminalDeliveryHistoryLimit {
+		return
+	}
+	var terminal []Delivery
+	for _, d := range s.Deliveries {
+		if d.Status == DeliverySent || d.Status == DeliveryFailed {
+			terminal = append(terminal, d)
+		}
+	}
+	if len(terminal) <= terminalDeliveryHistoryLimit {
+		return
+	}
+	sort.Slice(terminal, func(i, j int) bool {
+		if terminal[i].UpdatedAt.Equal(terminal[j].UpdatedAt) {
+			return terminal[i].ID < terminal[j].ID
+		}
+		return terminal[i].UpdatedAt.After(terminal[j].UpdatedAt)
+	})
+	for _, d := range terminal[terminalDeliveryHistoryLimit:] {
+		delete(s.Deliveries, d.ID)
+	}
+}
+
+func queueDeliveryForNewEvent(state *State, integration DiscordIntegration, event Event) Delivery {
 	sum := sha256.Sum256([]byte(event.ID + "/" + integration.ID))
 	id := hex.EncodeToString(sum[:12])
 	if existing, ok := state.Deliveries[id]; ok {
@@ -168,7 +195,7 @@ func emitAlert(state *State, server Server, kind EventKind, operation, details s
 	}
 	for _, integration := range state.Integrations {
 		if integration.Enabled && integration.Rules[kind] && slices.Contains(integration.ServerIDs, server.ID) {
-			queueDelivery(state, integration, event)
+			queueDeliveryForNewEvent(state, integration, event)
 		}
 	}
 	return event
@@ -255,7 +282,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 				return errors.New("integration not found")
 			}
 			event := Event{ID: randomID(), Timestamp: time.Now().UTC(), Kind: IntegrationTest, Message: "Discord integration test", Source: "C2 operator", Accuracy: "observed"}
-			delivery = queueDelivery(state, i, event)
+			delivery = queueDeliveryForNewEvent(state, i, event)
 			return nil
 		})
 		if err != nil {
@@ -313,6 +340,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 				state.Deliveries[id] = d
 			}
 		}
+		state.pruneDeliveryHistory()
 		return nil
 	})
 	if err != nil {
