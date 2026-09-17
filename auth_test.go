@@ -330,7 +330,7 @@ func TestOIDCRoutePolicyAndZeroEffects(t *testing.T) {
 	orchestrator := &countingOrchestrator{}
 	app.orchestrator = orchestrator
 	viewer, csrf := loginAs(t, app, issuer, "viewer")
-	routes := [][2]string{{"GET", "/api/bootstrap"}, {"GET", "/api/servers/scuffedtards/telemetry"}, {"GET", "/api/events"}, {"GET", "/api/servers/scuffedtards/logs"}, {"POST", "/api/servers"}, {"POST", "/api/servers/scuffedtards/actions/restart"}, {"POST", "/api/servers/scuffedtards/actions/update"}, {"POST", "/api/servers/scuffedtards/actions/check-update"}, {"GET", "/api/future"}, {"POST", "/api/bootstrap"}, {"GET", "/api/servers/scuffedtards/telemetry/extra"}, {"POST", "/api/session"}}
+	routes := [][2]string{{"GET", "/api/bootstrap"}, {"GET", "/api/servers/scuffedtards/telemetry"}, {"GET", "/api/events"}, {"GET", "/api/servers/scuffedtards/logs"}, {"POST", "/api/servers"}, {"POST", "/api/servers/scuffedtards/actions/restart"}, {"POST", "/api/servers/scuffedtards/actions/update"}, {"POST", "/api/servers/scuffedtards/actions/check-update"}, {"GET", "/api/future"}, {"POST", "/api/bootstrap"}, {"GET", "/api/servers/scuffedtards/telemetry/extra"}, {"POST", "/api/session"}, {"GET", "/api/image-tags"}}
 	before := app.store.Snapshot()
 	for _, route := range routes {
 		if res := authRequest(app, route[0], route[1], nil, "", "", "{"); res.Code != 401 {

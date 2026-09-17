@@ -249,3 +249,10 @@ dialog.create-server-dialog { width: min(800px,calc(100% - 32px)); }
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { animation: none!important; transition: none!important; scroll-behavior: auto!important; }
 }
+
+#server-advanced { margin-top: 20px; }
+#server-advanced summary { cursor: pointer; padding: 12px 0; font-weight: 600; }
+.resource-controls { display: flex; align-items: stretch; gap: 8px; }
+.resource-controls input { min-width: 0; width: 100%; }
+.resource-controls button { flex: 0 0 115px; white-space: normal; font-size: 12px; }
+.resource-controls input[readonly] { background: var(--color-muted); color: var(--color-muted-foreground); }

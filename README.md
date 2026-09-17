@@ -207,3 +207,11 @@ The kind test uses a private kubeconfig. It verifies authentication, empty inven
 See the [mockup refinement validation record](verification/mockup-refinement.md) for browser results and test limits. Remaining live-game telemetry and rollout-state gaps are tracked in [issue #1](https://github.com/petzkod5/rsdw-c2/issues/1).
 
 The architecture and first-draft limits are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+### Create server settings
+
+The create form shows server name, owner name, saved or manual owner EOS ID, a published image release, and player count. Advanced retains namespace, memory and CPU limits, UDP port, storage size, service exposure, server and admin passwords, administrator IDs, logging, file validation, automatic stop on update, startup arguments, and custom save import. Region was removed from new requests because it never affected chart deployment. Existing region metadata remains readable.
+
+Resource limits default to (2 + players) × 1024 MiB and 500 × players millicores for 1–64 players. Each limit can be unlocked independently.
+
+Image releases come from the configured image repository through the admin-only /api/image-tags endpoint, newest first, without an implicit latest option. Updates retain a persisted image tag even when it is no longer published.

@@ -24,8 +24,8 @@ func TestCheckUpdateRegistryBehavior(t *testing.T) {
 		name, tokenBody, tagsBody           string
 		tokenStatus, tagsStatus, wantStatus int
 	}{
-		{"authenticated", `{"token":"registry-secret"}`, `{"tags":["1.2.3","1.2.4"]}`, 200, 200, 200},
-		{"access token", `{"access_token":"registry-secret"}`, `{"tags":["1.2.3","1.2.4"]}`, 200, 200, 200},
+		{"authenticated", `{"token":"registry-secret"}`, `{"tags":["1.2.3","latest","1.2.4","nightly","1.3.0-rc1"]}`, 200, 200, 200},
+		{"access token", `{"access_token":"registry-secret"}`, `{"tags":["1.2.3","latest","1.2.4","nightly","1.3.0-rc1"]}`, 200, 200, 200},
 		{"token denied", `{}`, `{}`, 403, 200, 502},
 		{"empty token", `{}`, `{}`, 200, 200, 502},
 		{"invalid token JSON", `{`, `{}`, 200, 200, 502},
@@ -67,6 +67,14 @@ func TestCheckUpdateRegistryBehavior(t *testing.T) {
 			})}
 			t.Cleanup(func() { http.DefaultClient = original })
 			app := newTestApp(t, false)
+			t.Setenv("RSDW_IMAGE_REPOSITORY", "ghcr.io/example/server")
+			list := requestJSON(t, app, http.MethodGet, "/api/image-tags", "")
+			if list.Code != tc.wantStatus {
+				t.Fatalf("list status = %d: %s", list.Code, list.Body.String())
+			}
+			if tc.wantStatus == 200 && strings.TrimSpace(list.Body.String()) != `["1.2.4","1.2.3"]` {
+				t.Fatalf("tags = %s", list.Body.String())
+			}
 			app.orchestrator = &kubeOrchestrator{runner: &metricsRunner{}, kubectl: "kubectl", imageRepository: "ghcr.io/example/server"}
 			server := Server{ID: "world", Release: "world", CurrentImage: "example/server:1.2.3", DesiredImage: "example/server:1.2.3"}
 			if err := app.store.Update(func(s *State) error { s.Servers[server.ID] = server; return nil }); err != nil {
@@ -592,7 +600,7 @@ func TestUsersFailedPersistenceLeavesStateUnchanged(t *testing.T) {
 }
 
 func TestValidateCreate(t *testing.T) {
-	for _, limits := range []struct{ memory, cpu int }{{-1, 1000}, {255, 1000}, {65537, 1000}, {2048, -1}, {2048, 99}, {2048, 64001}} {
+	for _, limits := range []struct{ memory, cpu int }{{-1, 1000}, {255, 1000}, {67585, 1000}, {2048, -1}, {2048, 99}, {2048, 64001}} {
 		if err := validateCreate(CreateServerRequest{Name: "World", OwnerID: "0123456789abcdef0123456789abcdef", MaxPlayers: 4, MemoryLimitMiB: limits.memory, CPULimitMillis: limits.cpu}); err == nil {
 			t.Fatalf("invalid resource limits accepted: %+v", limits)
 		}
@@ -667,7 +675,7 @@ func TestDemoAPIExercisesMutations(t *testing.T) {
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "DRAGONWILDS") {
 		t.Fatalf("embedded UI status = %d, body = %s", res.Code, res.Body.String())
 	}
-	res = requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Night Shift","namespace":"dragonwilds","region":"eu-central","ownerId":"0123456789abcdef0123456789abcdef","imageTag":"0.1.1","maxPlayers":12}`)
+	res = requestJSON(t, app, http.MethodPost, "/api/servers", `{"name":"Night Shift","namespace":"dragonwilds","ownerId":"0123456789abcdef0123456789abcdef","imageTag":"0.1.1","maxPlayers":12}`)
 	if res.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", res.Code, res.Body.String())
 	}
@@ -675,7 +683,7 @@ func TestDemoAPIExercisesMutations(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &server); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(server.ID, "night-shift-") || server.Status != StatusStarting || server.MemoryLimitMiB != 2048 || server.CPULimitMillis != 1000 {
+	if !strings.HasPrefix(server.ID, "night-shift-") || server.Status != StatusStarting || server.MemoryLimitMiB != 14336 || server.CPULimitMillis != 6000 {
 		t.Fatalf("created server = %+v", server)
 	}
 	for _, action := range []struct {
@@ -926,6 +934,40 @@ func TestKubeOrchestratorUsesChartContract(t *testing.T) {
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("deployment command missing %q in:\n%s", expected, joined)
+		}
+	}
+}
+
+func TestPlayerResourceDefaults(t *testing.T) {
+	for _, tc := range []struct{ players, memory, cpu int }{{1, 3072, 500}, {4, 6144, 2000}, {64, 67584, 32000}} {
+		t.Run(fmt.Sprint(tc.players), func(t *testing.T) {
+			app := newTestApp(t, false)
+			runner := &recordingRunner{}
+			app.orchestrator = &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "chart", imageRepository: "example/server"}
+			res := requestJSON(t, app, http.MethodPost, "/api/servers", fmt.Sprintf(`{"name":"Owner","worldName":"World","ownerId":"0123456789abcdef0123456789abcdef","imageTag":"0.2.0","maxPlayers":%d}`, tc.players))
+			if res.Code != 201 {
+				t.Fatalf("create: %d %s", res.Code, res.Body.String())
+			}
+			stored, err := NewStore(app.store.path, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := serverNamed(t, stored.Snapshot(), "Owner")
+			if server.MemoryLimitMiB != tc.memory || server.CPULimitMillis != tc.cpu || server.MaxPlayers != tc.players || server.WorldName != "World" || server.Region != "" {
+				t.Fatalf("stored server: %+v", server)
+			}
+			calls := strings.Join(runner.calls, "\n")
+			for _, value := range []string{fmt.Sprintf("resources.limits.memory=%dMi", tc.memory), fmt.Sprintf("resources.limits.cpu=%dm", tc.cpu), "image.tag=0.2.0"} {
+				if !strings.Contains(calls, value) {
+					t.Fatalf("missing %s in %s", value, calls)
+				}
+			}
+		})
+	}
+	for _, players := range []int{-1, 0, 65, int(^uint(0) >> 1)} {
+		res := requestJSON(t, newTestApp(t, false), http.MethodPost, "/api/servers", fmt.Sprintf(`{"name":"Owner","ownerId":"0123456789abcdef0123456789abcdef","maxPlayers":%d}`, players))
+		if res.Code != 400 {
+			t.Fatalf("players %d accepted", players)
 		}
 	}
 }
