@@ -32,7 +32,7 @@ Each event has an immutable `id`, `kind`, `source`, `accuracy`, timestamp, serve
 | Kind | Meaning |
 | --- | --- |
 | `restart_requested` | C2 durably recorded a restart operation before issuing the Kubernetes command. This does not assert that Kubernetes accepted it. |
-| `restart_completed` | A fresh, owned runtime has the operation's Pod-template annotation, a different runtime identity, a start time at or after the request, and both Pod and engine readiness. |
+| `restart_completed` | A fresh, owned runtime has the operation's Pod-template annotation, a different runtime identity, a start time at or after the request at Kubernetes' second precision, and both Pod and engine readiness. |
 | `restart_failed` | After five minutes, a fresh definitive observation still cannot confirm a ready marked replacement. |
 | `player_joined` | An approximate increase between fresh player counts on the same healthy runtime. The message includes the count delta. No identities or exact joins are inferred. |
 | `player_limit_reached` | A fresh count crosses from below the configured limit to at least the limit. Falling below rearms the rule. Changing the configured limit establishes a new threshold baseline. |

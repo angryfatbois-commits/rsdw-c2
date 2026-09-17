@@ -221,6 +221,46 @@ func TestRestartFailureRequiresFreshDefinitiveObservation(t *testing.T) {
 	}
 }
 
+func TestRestartCompletionTimestampPrecision(t *testing.T) {
+	second := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	requested := second.Add(900 * time.Millisecond)
+	for _, tc := range []struct {
+		name, runtime, marker string
+		started               time.Time
+		want                  EventKind
+	}{
+		{"same second", "new", "op", second, RestartCompleted},
+		{"later second", "new", "op", second.Add(time.Second), RestartCompleted},
+		{"older second", "new", "op", second.Add(-time.Second), RestartFailed},
+		{"just before second", "new", "op", second.Add(-time.Nanosecond), RestartFailed},
+		{"missing start", "new", "op", time.Time{}, RestartFailed},
+		{"old runtime", "old", "op", second, RestartFailed},
+		{"missing runtime", "", "op", second, RestartFailed},
+		{"missing marker", "new", "", second, RestartFailed},
+		{"wrong marker", "new", "other", second, RestartFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, server, _ := alertFixture(t)
+			s.Producers[server.ID] = AlertProducer{Restart: &RestartOperation{ID: "op", Runtime: "old", RequestedAt: requested}}
+			o := alertSample(requested.Add(15*time.Second), "healthy", tc.runtime, -1)
+			o.runtimeStarted, o.restartOperation = tc.started, tc.marker
+			observeAlerts(s, server, o, o.at)
+			if tc.want == RestartCompleted {
+				if !slices.Equal(eventKinds(s), []EventKind{RestartCompleted}) || s.Producers[server.ID].Restart != nil || s.Servers[server.ID].Status != StatusOnline {
+					t.Fatalf("same-or-later-second marked replacement did not complete: events=%v pending=%t status=%s", eventKinds(s), s.Producers[server.ID].Restart != nil, s.Servers[server.ID].Status)
+				}
+			} else if len(s.Events) != 0 || s.Producers[server.ID].Restart == nil {
+				t.Fatalf("invalid replacement completed restart: %v", eventKinds(s))
+			}
+			o.at = requested.Add(restartTimeout)
+			observeAlerts(s, server, o, o.at)
+			if !slices.Equal(eventKinds(s), []EventKind{tc.want}) || s.Events[0].OperationID != "op" || s.Producers[server.ID].Restart != nil {
+				t.Fatalf("events=%v, want [%s] for op", eventKinds(s), tc.want)
+			}
+		})
+	}
+}
+
 func TestCollectorAlertEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name, needle, body, health string
@@ -233,6 +273,9 @@ func TestCollectorAlertEvidence(t *testing.T) {
 		{"invalid pod list", "get pods", `{}`, "", false},
 		{"invalid ReplicaSet list", "get replicasets", `{}`, "", false},
 		{"readiness changed", "get pod world-pod", strings.ReplaceAll(fixturePod(), `"ready":true`, `"ready":false`), "unhealthy", false},
+		{"pod not ready", "get pod world-pod", strings.ReplaceAll(fixturePod(), `"type":"Ready","status":"True"`, `"type":"Ready","status":"False"`), "unhealthy", false},
+		{"pod readiness unknown", "get pod world-pod", strings.ReplaceAll(fixturePod(), `"type":"Ready","status":"True"`, `"type":"Ready","status":"Unknown"`), "unhealthy", false},
+		{"pod readiness missing", "get pod world-pod", strings.ReplaceAll(fixturePod(), `"type":"Ready"`, `"type":"ContainersReady"`), "unhealthy", false},
 		{"scaled zero", "get deployment", `{"metadata":{"name":"world-rsdragonwilds","namespace":"games","uid":"deployment-uid"},"spec":{"replicas":0}}`, "unhealthy", false},
 		{"no pod", "get pods", `{"items":[]}`, "unhealthy", false},
 		{"ambiguous pods", "get pods", `{"items":[` + fixturePod() + `,` + fixturePod() + `]}`, "", false},
@@ -255,6 +298,68 @@ func TestCollectorAlertEvidence(t *testing.T) {
 			}
 			if tc.name == "healthy" && o.runtime != "pod-uid/container-id" {
 				t.Fatal("runtime identity missing", o.runtime)
+			}
+		})
+	}
+}
+
+func TestCollectorPodReadinessDrivesAlerts(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart=%t", restart), func(t *testing.T) {
+			s, server, now := alertFixture(t)
+			k, runner, target := collectorFixture()
+			podReady := true
+			runner.override = func(call string) ([]byte, error, bool) {
+				pod := strings.Replace(fixturePod(), `"metadata":{`, `"metadata":{"annotations":{"rsdw-c2/restart-operation":"op"},`, 1)
+				if strings.Contains(call, "get pods") {
+					return []byte(`{"items":[` + pod + `]}`), nil, true
+				}
+				if strings.Contains(call, "get pod world-pod") {
+					if !podReady {
+						pod = strings.ReplaceAll(pod, `"type":"Ready","status":"True"`, `"type":"Ready","status":"False"`)
+					}
+					return []byte(pod), nil, true
+				}
+				return nil, nil, false
+			}
+			server.Namespace, server.Release = target.Namespace, target.Release
+			step := func(seconds int) {
+				o := k.collectObservation(context.Background(), server, nil)
+				o.at = now.Add(time.Duration(seconds) * time.Second)
+				observeAlerts(s, server, o, o.at)
+			}
+			if restart {
+				now = time.Date(2025, 12, 31, 23, 59, 59, 0, time.UTC)
+				s.Producers[server.ID] = AlertProducer{Restart: &RestartOperation{ID: "op", Runtime: "old", RequestedAt: now}}
+			} else {
+				step(0)
+			}
+			podReady = false
+			for _, offset := range []int{15, 30, 45} {
+				step(offset)
+			}
+			want := []EventKind{ServerDown}
+			if restart {
+				want = nil
+				if s.Producers[server.ID].Restart == nil {
+					t.Fatal("Pod Ready=False completed restart")
+				}
+			}
+			if !slices.Equal(eventKinds(s), want) {
+				t.Fatalf("Pod Ready=False events=%v, want %v", eventKinds(s), want)
+			}
+			podReady = true
+			step(60)
+			if !restart && !slices.Equal(eventKinds(s), want) {
+				t.Fatal("recovery emitted before debounce", eventKinds(s))
+			}
+			step(75)
+			want = []EventKind{ServerDown, ServerRecovered}
+			if restart {
+				want = []EventKind{RestartCompleted}
+			}
+			if !slices.Equal(eventKinds(s), want) {
+				t.Fatalf("Pod Ready=True events=%v, want %v", eventKinds(s), want)
 			}
 		})
 	}

@@ -63,7 +63,11 @@ type telemetryPod struct {
 		HostNetwork bool                 `json:"hostNetwork"`
 	} `json:"spec"`
 	Status struct {
-		Phase             string `json:"phase"`
+		Phase      string `json:"phase"`
+		Conditions []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
 		ContainerStatuses []struct {
 			Name        string `json:"name"`
 			ContainerID string `json:"containerID"`
@@ -313,9 +317,16 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 			target.ready = current.Ready
 		}
 	}
+	podReady := false
+	for _, condition := range after.Status.Conditions {
+		if condition.Type == "Ready" {
+			podReady = condition.Status == "True"
+			break
+		}
+	}
 	if ready := result.metrics["engineReady"]; ready.Value != nil {
 		result.health = "unhealthy"
-		if *ready.Value == 1 && target.ready {
+		if *ready.Value == 1 && target.ready && podReady {
 			result.health = "healthy"
 		}
 		if *ready.Value == 1 {
@@ -326,7 +337,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 	} else if result.status == StatusOnline {
 		result.status = StatusAttention
 	}
-	if !target.ready {
+	if !target.ready || !podReady {
 		result.health = "unhealthy"
 	}
 	result.runtime, result.runtimeStarted = target.pod.Metadata.UID+"/"+target.containerID, target.startedAt

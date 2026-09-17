@@ -57,7 +57,8 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 		if !o.at.After(op.RequestedAt) {
 			return
 		}
-		if o.health == "healthy" && o.runtime != "" && o.runtime != op.Runtime && o.restartOperation == op.ID && !o.runtimeStarted.Before(op.RequestedAt) {
+		// Kubernetes container start times have second precision.
+		if o.health == "healthy" && o.runtime != "" && o.runtime != op.Runtime && o.restartOperation == op.ID && !o.runtimeStarted.Before(op.RequestedAt.Truncate(time.Second)) {
 			emitAlert(state, server, RestartCompleted, op.ID, "Replacement runtime is ready", o.at)
 			p.Restart, p.Runtime, p.HealthyBaseline = nil, o.runtime, true
 			current := state.Servers[server.ID]

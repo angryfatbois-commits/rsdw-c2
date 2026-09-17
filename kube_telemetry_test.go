@@ -92,7 +92,7 @@ func TestIdentityLookupFailureReason(t *testing.T) {
 }
 
 func fixturePod() string {
-	return `{"metadata":{"name":"world-pod","namespace":"games","uid":"pod-uid","ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid","controller":true}]},"spec":{"containers":[{"name":"metrics","image":"exporter","resources":{"limits":{"cpu":"100","memory":"1Ti"}}},{"name":"server","image":"example/server:1","resources":{"limits":{"cpu":"500m","memory":"2Gi"}},"volumeMounts":[{"name":"data","mountPath":"/home/steam/rsdw-dedicated"}]}]},"status":{"phase":"Running","containerStatuses":[{"name":"server","containerID":"container-id","ready":true,"state":{"running":{"startedAt":"2026-01-01T00:00:00Z"}}}]}}`
+	return `{"metadata":{"name":"world-pod","namespace":"games","uid":"pod-uid","ownerReferences":[{"kind":"ReplicaSet","uid":"rs-uid","controller":true}]},"spec":{"containers":[{"name":"metrics","image":"exporter","resources":{"limits":{"cpu":"100","memory":"1Ti"}}},{"name":"server","image":"example/server:1","resources":{"limits":{"cpu":"500m","memory":"2Gi"}},"volumeMounts":[{"name":"data","mountPath":"/home/steam/rsdw-dedicated"}]}]},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}],"containerStatuses":[{"name":"server","containerID":"container-id","ready":true,"state":{"running":{"startedAt":"2026-01-01T00:00:00Z"}}}]}}`
 }
 
 func netFixture(rx, tx uint64) string {
