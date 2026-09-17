@@ -31,6 +31,47 @@ async function run() {
   const errors = [];
   page.on('pageerror',(e) => errors.push(e.message));
   const saved = () => JSON.parse(fs.readFileSync(stateFile,'utf8'));
+  const checkDialogLayout = async (action) => {
+    for (const viewport of [{width:1440,height:1000},{width:375,height:667},{width:667,height:375}]) {
+      await page.setViewportSize(viewport);
+      await page.getByTestId(action).click();
+      const layout = await page.locator('#modal').evaluate((dialog) => {
+        const heading = dialog.querySelector('h2');
+        const bounds = dialog.getBoundingClientRect();
+        const title = heading.getBoundingClientRect();
+        return {
+          focus:document.activeElement.id,
+          headingVisible:title.top >= bounds.top && title.bottom <= bounds.bottom,
+          fits:bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight && dialog.scrollWidth <= dialog.clientWidth,
+          checkboxes:[...dialog.querySelectorAll('input[type=checkbox]')].map((input) => {
+            const box = input.getBoundingClientRect();
+            const label = input.closest('label').getBoundingClientRect();
+            return {width:box.width,height:box.height,labelWidth:label.width,labelHeight:label.height};
+          }),
+        };
+      });
+      await page.screenshot({path:path.join(output,`${action}-${viewport.width}.png`)});
+      assert.equal(layout.focus,'modal-title',JSON.stringify({action,viewport,layout}));
+      assert.equal(layout.headingVisible,true,'Initial heading must be visible without scrolling');
+      assert.equal(layout.fits,true,'Dialog must fit without horizontal scrolling');
+      assert.ok(layout.checkboxes.length > 0);
+      for (const box of layout.checkboxes) {
+        assert.ok(box.width >= 12 && box.width <= 24 && box.height >= 12 && box.height <= 24,JSON.stringify(box));
+        assert.ok(box.labelWidth > box.width && box.labelHeight >= 44,'Checkbox labels must provide a generous click target');
+      }
+      const checkbox = page.locator('input[name=integrationServer]').first();
+      const checked = await checkbox.isChecked();
+      await checkbox.locator('xpath=ancestor::label').click();
+      assert.equal(await checkbox.isChecked(),!checked,'Clicking the label toggles its checkbox');
+      await checkbox.focus();
+      await page.keyboard.press('Space');
+      assert.equal(await checkbox.isChecked(),checked,'Space toggles the native checkbox');
+      await page.screenshot({path:path.join(output,`${action}-checkboxes-${viewport.width}.png`)});
+      await page.getByTestId('cancel-modal').click();
+      assert.equal(await page.getByTestId(action).evaluate((button) => button === document.activeElement),true);
+    }
+    await page.setViewportSize({width:1440,height:1050});
+  };
   const submit = async (method,endpoint,status) => {
     const response = page.waitForResponse((r) => r.url() === base+endpoint && r.request().method() === method);
     await page.getByTestId('confirm-modal').click();
@@ -46,6 +87,7 @@ async function run() {
   await page.getByTestId('login-submit').click();
   await page.getByTestId('add-integration').waitFor();
   assert.match(await page.locator('#content').innerText(),/No Discord bots configured/);
+  await checkDialogLayout('add-integration');
   await page.getByTestId('add-integration').click();
   await page.getByTestId('integration-name').fill('<Guild & friends>');
   await page.getByTestId('integration-guild').fill('123');
@@ -62,6 +104,7 @@ async function run() {
   assert.equal(item.secretRef.name,'discord-bot');
   assert.deepEqual(saved().integrations[item.id],item);
   await page.getByTestId('edit-integration').waitFor();
+  await checkDialogLayout('edit-integration');
   assert.match(await page.locator('#content').innerText(),/<Guild & friends>/);
   assert.equal(await page.locator('#content guild').count(),0);
   await page.getByTestId('test-integration').click();
@@ -106,7 +149,7 @@ async function run() {
   assert.doesNotMatch(await page.locator('#content').innerText(),/Guild & friends|discord-rotated|Unsaved private draft/);
   assert.deepEqual(errors,[]);
   assert.ok(!logs.includes(token));
-  console.log('PASS authenticated Discord configuration, unavailable backup rules, approximate labels, associations, rotation, disable/enable, demo tests and restart deliveries, persistence, escaping, and expired-session clearing.');
+  console.log('PASS add/edit dialog focus, visible headings, checkbox layout and keyboard/label interaction at desktop/narrow/short viewports; authenticated Discord configuration, unavailable backup rules, approximate labels, associations, rotation, disable/enable, demo tests and restart deliveries, persistence, escaping, and expired-session clearing.');
   console.log(`Browser evidence: ${output}`);
 }
 

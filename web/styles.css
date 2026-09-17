@@ -33,7 +33,8 @@ p { color: var(--color-muted-foreground); }
 a { color: var(--link); text-decoration: none; }
 button,input,select { font: inherit; }
 button,select { cursor: pointer; }
-button,input,select { border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-background); color: var(--color-foreground); min-height: 44px; padding: 9px 16px; transition: background-color .15s,border-color .15s,color .15s; }
+button,input:not([type=checkbox]),select { border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-background); color: var(--color-foreground); min-height: 44px; padding: 9px 16px; transition: background-color .15s,border-color .15s,color .15s; }
+input[type=checkbox] { width: 18px; height: 18px; margin: 0; flex-shrink: 0; accent-color: var(--color-primary); }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 500; white-space: nowrap; }
 button:hover:not(:disabled) { background: var(--color-secondary); border-color: var(--color-muted-foreground); }
 button:active:not(:disabled) { background: var(--color-muted); }
@@ -178,7 +179,8 @@ dialog.create-server-dialog { width: min(800px,calc(100% - 32px)); }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 15px; min-width: 0; }
 .field.full { grid-column: 1/-1; }
-.field input,.field select { width: 100%; min-width: 0; }
+.field input:not([type=checkbox]),.field select { width: 100%; min-width: 0; }
+.field:has(input[type=checkbox]) > span { display: flex; align-items: center; gap: 10px; min-height: 44px; }
 .field small { font-size: 13px; color: var(--color-muted-foreground); }
 #modal-body > p { font-size: 15px; line-height: 1.7; margin-bottom: 20px; }
 #modal-error { margin-top: 16px; }
