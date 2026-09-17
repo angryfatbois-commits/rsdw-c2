@@ -17,6 +17,7 @@ import (
 const telemetryCommandTimeout = 1500 * time.Millisecond
 
 type kubeMetadata struct {
+	Labels            map[string]string `json:"labels"`
 	Annotations       map[string]string `json:"annotations"`
 	Name              string            `json:"name"`
 	Namespace         string            `json:"namespace"`

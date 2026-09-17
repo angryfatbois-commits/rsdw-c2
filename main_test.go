@@ -152,6 +152,26 @@ func TestShellRunnerSecretFailure(t *testing.T) {
 type secretFailureRunner struct{ token string }
 
 func (r *secretFailureRunner) Run(ctx context.Context, _ string, args ...string) ([]byte, error) {
+	if strings.Contains(strings.Join(args, " "), "get secrets,deployments") {
+		return []byte(`{"items":[]}`), nil
+	}
+	if strings.Contains(strings.Join(args, " "), "--ignore-not-found") {
+		return nil, nil
+	}
+	if len(args) == 3 && args[0] == "create" && args[1] == "-f" {
+		data, err := os.ReadFile(args[2])
+		if err != nil {
+			return nil, err
+		}
+		var secret struct {
+			StringData map[string]string `json:"stringData"`
+		}
+		if err := json.Unmarshal(data, &secret); err != nil {
+			return nil, err
+		}
+		r.token = secret.StringData["token"]
+		return nil, fmt.Errorf("simulated Secret failure: %s", r.token)
+	}
 	if len(args) > 1 && args[0] == "get" && args[1] == "namespace" {
 		return nil, nil
 	}
@@ -200,6 +220,17 @@ func requestJSON(t *testing.T, app *App, method, path, body string) *httptest.Re
 	res := httptest.NewRecorder()
 	app.ServeHTTP(res, req)
 	return res
+}
+
+func serverNamed(t *testing.T, state State, name string) Server {
+	t.Helper()
+	for _, server := range state.Servers {
+		if server.Name == name {
+			return server
+		}
+	}
+	t.Fatalf("server named %q is absent", name)
+	return Server{}
 }
 
 func TestStoreRoundTrip(t *testing.T) {
@@ -298,8 +329,8 @@ func TestUsersCRUDAndOwnerCopies(t *testing.T) {
 			userRequest(t, app, "PUT", path, `{"name":"Duplicate","playerId":"ABCDEF0123456789ABCDEF0123456789"}`, 409)
 			userRequest(t, app, "POST", "/api/servers", `{"name":"Copied owner","ownerId":"0123456789ABCDEF0123456789ABCDEF","maxPlayers":4}`, 201)
 			before := app.store.Snapshot()
-			if before.Servers["copied-owner"].OwnerID != user.PlayerID {
-				t.Fatalf("server owner was not canonical: %+v", before.Servers["copied-owner"])
+			if serverNamed(t, before, "Copied owner").OwnerID != user.PlayerID {
+				t.Fatal("server owner was not canonical")
 			}
 			res = userRequest(t, app, "PUT", path, `{"name":"Renamed","playerId":"11111111111111111111111111111111"}`, 200)
 			want := User{ID: user.ID, Name: "Renamed", PlayerID: "11111111111111111111111111111111"}
@@ -587,7 +618,7 @@ func TestCreatePersistsResourceLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := reloaded.Snapshot().Servers["resource-test"]
+	server := serverNamed(t, reloaded.Snapshot(), "Resource test")
 	if server.MemoryLimitMiB != 1536 || server.CPULimitMillis != 750 || server.MaxPlayers != 6 {
 		t.Fatalf("limits not persisted: %+v", server)
 	}
@@ -610,8 +641,8 @@ func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
 			t.Fatal("password exposed outside Secret command")
 		}
 	}
-	server := app.store.Snapshot().Servers["public-name"]
-	if server.WorldName != "Separate world" || server.GamePort != 7780 || server.PasswordSecret != "public-name-settings" || server.ServerPassword != "" || server.AdminPassword != "" {
+	server := serverNamed(t, app.store.Snapshot(), "Public name")
+	if server.WorldName != "Separate world" || server.GamePort != 7780 || server.PasswordSecret != server.ID+"-settings" || server.ServerPassword != "" || server.AdminPassword != "" {
 		t.Fatalf("settings not preserved or credentials retained: %+v", server)
 	}
 	var helmCall string
@@ -620,7 +651,7 @@ func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
 			helmCall = call
 		}
 	}
-	for _, want := range []string{"RSDW_WORLD_NAME=Separate world", "RSDW_ADMINS=admin-1,admin-2", "RSDW_ADDITIONAL_ARGS=-log -ini:Game:[/Script/Engine.GameSession]:MaxPlayers=6", "RSDW_AUTO_STOP_ON_UPDATE=true", "DEBUG=3", "STEAMAPPVALIDATE=1", "server.port=7780,service.port=7780,persistence.size=2Gi,service.type=NodePort", "resources.limits.memory=1536Mi", "resources.limits.cpu=750m", "valueFrom.secretKeyRef.name=public-name-settings"} {
+	for _, want := range []string{"RSDW_WORLD_NAME=Separate world", "RSDW_ADMINS=admin-1,admin-2", "RSDW_ADDITIONAL_ARGS=-log -ini:Game:[/Script/Engine.GameSession]:MaxPlayers=6", "RSDW_AUTO_STOP_ON_UPDATE=true", "DEBUG=3", "STEAMAPPVALIDATE=1", "server.port=7780,service.port=7780,persistence.size=2Gi,service.type=NodePort", "resources.limits.memory=1536Mi", "resources.limits.cpu=750m", "valueFrom.secretKeyRef.name=" + server.PasswordSecret} {
 		if !strings.Contains(helmCall, want) {
 			t.Fatalf("missing chart setting %q", want)
 		}
@@ -644,32 +675,32 @@ func TestDemoAPIExercisesMutations(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &server); err != nil {
 		t.Fatal(err)
 	}
-	if server.ID != "night-shift" || server.Status != StatusStarting || server.MemoryLimitMiB != 2048 || server.CPULimitMillis != 1000 {
+	if !strings.HasPrefix(server.ID, "night-shift-") || server.Status != StatusStarting || server.MemoryLimitMiB != 2048 || server.CPULimitMillis != 1000 {
 		t.Fatalf("created server = %+v", server)
 	}
 	for _, action := range []struct {
 		path string
 		body string
 	}{
-		{"/api/servers/night-shift/actions/restart", ""},
-		{"/api/servers/night-shift/actions/update", `{"imageTag":"0.1.2"}`},
-		{"/api/servers/night-shift/actions/check-update", ""},
+		{"/api/servers/" + server.ID + "/actions/restart", ""},
+		{"/api/servers/" + server.ID + "/actions/update", `{"imageTag":"0.1.2"}`},
+		{"/api/servers/" + server.ID + "/actions/check-update", ""},
 	} {
 		res = requestJSON(t, app, http.MethodPost, action.path, action.body)
 		if res.Code != http.StatusOK {
 			t.Fatalf("%s status = %d, body = %s", action.path, res.Code, res.Body.String())
 		}
 	}
-	if res = requestJSON(t, app, http.MethodGet, "/api/servers/night-shift/logs?tail=10", ""); res.Code != http.StatusOK {
+	if res = requestJSON(t, app, http.MethodGet, "/api/servers/"+server.ID+"/logs?tail=10", ""); res.Code != http.StatusOK {
 		t.Fatalf("logs status = %d", res.Code)
 	}
-	if res = requestJSON(t, app, http.MethodGet, "/api/servers/night-shift/telemetry?range=60s", ""); res.Code != http.StatusOK {
+	if res = requestJSON(t, app, http.MethodGet, "/api/servers/"+server.ID+"/telemetry?range=60s", ""); res.Code != http.StatusOK {
 		t.Fatalf("telemetry status = %d", res.Code)
 	}
-	if res = requestJSON(t, app, http.MethodGet, "/api/events?query=update&category=update&serverId=night-shift", ""); res.Code != http.StatusOK {
+	if res = requestJSON(t, app, http.MethodGet, "/api/events?query=update&category=update&serverId="+server.ID, ""); res.Code != http.StatusOK {
 		t.Fatalf("events status = %d", res.Code)
 	}
-	if res = requestJSON(t, app, http.MethodPost, "/api/servers/night-shift/actions/update", `{"imageTag":"bad tag"}`); res.Code != http.StatusBadRequest {
+	if res = requestJSON(t, app, http.MethodPost, "/api/servers/"+server.ID+"/actions/update", `{"imageTag":"bad tag"}`); res.Code != http.StatusBadRequest {
 		t.Fatalf("invalid update status = %d", res.Code)
 	}
 }
@@ -744,6 +775,12 @@ type recordingRunner struct {
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
 	r.calls = append(r.calls, call)
+	if strings.Contains(call, "get secrets,deployments") {
+		return []byte(`{"items":[]}`), nil
+	}
+	if strings.Contains(call, "--ignore-not-found") {
+		return nil, nil
+	}
 	if strings.Contains(call, "get namespace") || strings.Contains(call, "get secret") {
 		return nil, errors.New("not found")
 	}

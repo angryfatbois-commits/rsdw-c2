@@ -28,6 +28,7 @@ func finiteMetric(value *float64) *float64 {
 }
 
 type ViewerServer struct {
+	WorldName        string                  `json:"worldName"`
 	ID               string                  `json:"id"`
 	Name             string                  `json:"name"`
 	Status           Status                  `json:"status"`
@@ -43,7 +44,7 @@ func viewerServer(server Server) ViewerServer {
 	case StatusOnline, StatusStarting, StatusAttention, StatusStopped:
 		status = server.Status
 	}
-	return ViewerServer{ID: server.ID, Name: server.Name, Status: status, MaxPlayers: server.MaxPlayers, LastSeen: server.LastSeen, Metrics: viewerMetrics(server.Metrics), MetricsAvailable: server.MetricsAvailable}
+	return ViewerServer{ID: server.ID, Name: server.Name, WorldName: server.WorldName, Status: status, MaxPlayers: server.MaxPlayers, LastSeen: server.LastSeen, Metrics: viewerMetrics(server.Metrics), MetricsAvailable: server.MetricsAvailable}
 }
 
 func viewerMetricStatus(status string) string {

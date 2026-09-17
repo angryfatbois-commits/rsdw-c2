@@ -340,6 +340,9 @@ func (k *kubeOrchestrator) cleanupSeed(ctx context.Context, claim string, pendin
 }
 
 func (a *App) cleanupSeed(claim string) {
+	if a.store.writable() != nil {
+		return
+	}
 	root, err := a.seedRoot()
 	if err != nil {
 		return
@@ -353,6 +356,18 @@ func (a *App) cleanupSeed(claim string) {
 	pending, ok := a.store.Snapshot().PendingSeeds[claim]
 	if !ok {
 		return
+	}
+	for _, record := range a.store.Snapshot().Deletions {
+		for _, world := range record.Plan.World {
+			if world.Namespace == pending.Namespace && world.Name == claim {
+				return
+			}
+		}
+		for _, seed := range record.Plan.Seeds {
+			if seed.Namespace == pending.Namespace && seed.Name == claim {
+				return
+			}
+		}
 	}
 	k, ok := a.orchestrator.(*kubeOrchestrator)
 	if !ok {
@@ -370,7 +385,7 @@ func (a *App) runSeedCleanup(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
-		if a.createMu.TryLock() {
+		if a.lifecycleMu.TryLock() {
 			snapshot := a.store.Snapshot()
 			for claim := range snapshot.PendingSeeds {
 				a.cleanupSeed(claim)
@@ -380,7 +395,7 @@ func (a *App) runSeedCleanup(ctx context.Context) {
 					a.cleanupSeed(server.SaveSeed.Claim)
 				}
 			}
-			a.createMu.Unlock()
+			a.lifecycleMu.Unlock()
 		}
 		select {
 		case <-ctx.Done():

@@ -42,6 +42,7 @@ const (
 )
 
 type Server struct {
+	OwnershipToken   string `json:"ownershipToken,omitempty"`
 	RestartOperation string `json:"-"`
 	ServerSettings
 	SaveSeed              *SaveSeed                `json:"saveSeed,omitempty"`
@@ -110,6 +111,7 @@ type Event struct {
 }
 
 type State struct {
+	Deletions      map[string]deletionRecord     `json:"deletions,omitempty"`
 	Integrations   map[string]DiscordIntegration `json:"integrations"`
 	Producers      map[string]AlertProducer      `json:"alertProducers"`
 	Deliveries     map[string]Delivery           `json:"deliveries"`
@@ -185,9 +187,10 @@ type LogLine struct {
 }
 
 type Store struct {
-	mu    sync.RWMutex
-	path  string
-	state State
+	writeErr error
+	mu       sync.RWMutex
+	path     string
+	state    State
 }
 
 func NewStore(path string, demo bool) (*Store, error) {
@@ -225,8 +228,23 @@ func (s *Store) Snapshot() State {
 	return s.state.clone()
 }
 
+func (s *Store) writable() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.writeErr
+}
+
 func (s State) clone() State {
 	next := s
+	next.Deletions = maps.Clone(s.Deletions)
+	for id, record := range next.Deletions {
+		record.Plan.Resources = append([]resourceIdentity(nil), record.Plan.Resources...)
+		record.Plan.World = append([]resourceIdentity(nil), record.Plan.World...)
+		record.Plan.Secrets = append([]resourceIdentity(nil), record.Plan.Secrets...)
+		record.Plan.RetainedSecrets = append([]resourceIdentity(nil), record.Plan.RetainedSecrets...)
+		record.Plan.Seeds = append([]resourceIdentity(nil), record.Plan.Seeds...)
+		next.Deletions[id] = record
+	}
 	next.Servers, next.Users, next.PendingSeeds = maps.Clone(s.Servers), maps.Clone(s.Users), maps.Clone(s.PendingSeeds)
 	next.Events = append([]Event(nil), s.Events...)
 	for id, server := range next.Servers {
@@ -267,6 +285,9 @@ func (s State) clone() State {
 func (s *Store) Update(fn func(*State) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.writeErr != nil {
+		return s.writeErr
+	}
 	next := s.state.clone()
 	if err := fn(&next); err != nil {
 		return err
@@ -308,12 +329,14 @@ func (s *Store) Update(fn func(*State) error) error {
 	}
 	directory, err := os.Open(filepath.Dir(s.path))
 	if err != nil {
-		return fmt.Errorf("open state directory: %w", err)
+		s.writeErr = fmt.Errorf("state replacement durability is uncertain; restart C2 to reload state: %w", err)
+		return s.writeErr
 	}
 	err = directory.Sync()
 	directory.Close()
 	if err != nil {
-		return fmt.Errorf("sync state directory: %w", err)
+		s.writeErr = fmt.Errorf("state replacement durability is uncertain; restart C2 to reload state: %w", err)
+		return s.writeErr
 	}
 	s.state = next
 	return nil
@@ -473,20 +496,35 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 		}
 	}
 	secret := server.Release + "-api"
-	if server.PasswordSecret != "" && (server.ServerPassword != "" || server.AdminPassword != "") {
-		if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "get", "secret", server.PasswordSecret); err != nil {
-			if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "create", "secret", "generic", server.PasswordSecret, "--from-literal=serverPassword="+server.ServerPassword, "--from-literal=adminPassword="+server.AdminPassword); err != nil {
-				return errors.New("could not create server password Secret")
+	if server.OwnershipToken != "" {
+		token, err := randomToken()
+		if err != nil {
+			return err
+		}
+		if err := k.ensureOwnedSecret(ctx, server, secret, map[string]string{"token": token}); err != nil {
+			return fmt.Errorf("create API token Secret: %w", err)
+		}
+		if server.PasswordSecret != "" && (server.ServerPassword != "" || server.AdminPassword != "") {
+			if err := k.ensureOwnedSecret(ctx, server, server.PasswordSecret, map[string]string{"serverPassword": server.ServerPassword, "adminPassword": server.AdminPassword}); err != nil {
+				return err
 			}
 		}
-	}
-	if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "get", "secret", secret); err != nil {
-		token, tokenErr := randomToken()
-		if tokenErr != nil {
-			return tokenErr
+	} else {
+		if server.PasswordSecret != "" && (server.ServerPassword != "" || server.AdminPassword != "") {
+			if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "get", "secret", server.PasswordSecret); err != nil {
+				if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "create", "secret", "generic", server.PasswordSecret, "--from-literal=serverPassword="+server.ServerPassword, "--from-literal=adminPassword="+server.AdminPassword); err != nil {
+					return errors.New("could not create server password Secret")
+				}
+			}
 		}
-		if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "create", "secret", "generic", secret, "--from-literal=token="+token); err != nil {
-			return fmt.Errorf("create API token Secret: %w", err)
+		if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "get", "secret", secret); err != nil {
+			token, tokenErr := randomToken()
+			if tokenErr != nil {
+				return tokenErr
+			}
+			if _, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "create", "secret", "generic", secret, "--from-literal=token="+token); err != nil {
+				return fmt.Errorf("create API token Secret: %w", err)
+			}
 		}
 	}
 	args := []string{"upgrade", "--install", server.Release, k.chart, "--namespace", server.Namespace, "--create-namespace", "--set-literal", "server.env.RSDW_OWNER_ID=" + server.OwnerID, "--set-literal", "server.env.RSDW_SERVER_NAME=" + server.Name, "--set-string", "image.repository=" + k.imageRepository, "--set-string", "image.tag=" + imageTag(server.DesiredImage), "--set-string", "api.bearerTokenSecret.name=" + secret}
@@ -660,14 +698,15 @@ func newerVersion(candidate, current [3]int) bool {
 type App struct {
 	deliveryMu       sync.Mutex
 	discordTransport http.RoundTripper
-	createMu         sync.Mutex
-	store            *Store
-	orchestrator     Orchestrator
-	demo             bool
-	auth             *Auth
-	imageRepo        string
-	telemetryOnce    sync.Once
-	telemetry        *telemetryStore
+	// ponytail: one C2 writer serializes lifecycle changes; use durable coordination before multiple replicas.
+	lifecycleMu   sync.Mutex
+	store         *Store
+	orchestrator  Orchestrator
+	demo          bool
+	auth          *Auth
+	imageRepo     string
+	telemetryOnce sync.Once
+	telemetry     *telemetryStore
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -723,7 +762,7 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	for _, server := range snapshot.Servers {
 		servers = append(servers, a.telemetryFor(server, "60s").Server)
 	}
-	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
+	sort.Slice(servers, func(i, j int) bool { return worldLabel(servers[i]) < worldLabel(servers[j]) })
 	mode := "kubernetes"
 	if a.demo {
 		mode = "demo"
@@ -737,7 +776,8 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"servers": servers, "events": recentEvents(snapshot.Events, 20), "mode": mode, "cluster": map[string]any{"name": envOr("RSDW_CLUSTER_NAME", "local-cluster"), "region": envOr("RSDW_CLUSTER_REGION", "eu-central"), "uptimeSeconds": int64(time.Since(startedAt).Seconds())},
+		"deletions": snapshot.Deletions,
+		"servers":   servers, "events": recentEvents(snapshot.Events, 20), "mode": mode, "cluster": map[string]any{"name": envOr("RSDW_CLUSTER_NAME", "local-cluster"), "region": envOr("RSDW_CLUSTER_REGION", "eu-central"), "uptimeSeconds": int64(time.Since(startedAt).Seconds())},
 		"capabilities": capabilities(RoleAdmin),
 	})
 }
@@ -841,11 +881,15 @@ func (a *App) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
-	if !a.createMu.TryLock() {
-		writeError(w, http.StatusConflict, "another server creation is in progress; try again shortly")
+	if !a.lifecycleMu.TryLock() {
+		writeError(w, http.StatusConflict, "another server lifecycle operation is in progress; try again shortly")
 		return
 	}
-	defer a.createMu.Unlock()
+	defer a.lifecycleMu.Unlock()
+	if err := a.store.writable(); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	request, upload, err := decodeCreate(w, r)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -866,13 +910,24 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.OwnerID, _ = normalizePlayerID(request.OwnerID)
-	release := slugify(request.Name)
-	if release == "" {
-		writeError(w, http.StatusBadRequest, "name must include a letter or number")
+	if upload != nil && os.Getenv("RSDW_SAVE_UPLOADS_ENABLED") == "false" {
+		writeError(w, http.StatusServiceUnavailable, "save upload requires persistent C2 state storage")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	release, err := a.newServerID(ctx, request)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	server := Server{ID: release, Name: strings.TrimSpace(request.Name), Namespace: defaultValue(request.Namespace, "dragonwilds"), Release: release, Region: defaultValue(request.Region, "eu-central"), OwnerID: request.OwnerID, CurrentImage: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server") + ":" + defaultValue(request.ImageTag, envOr("RSDW_DEFAULT_IMAGE_TAG", "0.1.1")), MaxPlayers: request.MaxPlayers, Status: StatusStarting, LastRestart: time.Now().UTC().Format(time.RFC3339), LastSeen: time.Now().UTC().Format(time.RFC3339), Endpoint: release + ".dragonwilds.local:7777"}
 	server.DesiredImage = server.CurrentImage
+	server.OwnershipToken, err = randomToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not allocate server ownership")
+		return
+	}
 	server.MemoryLimitMiB = request.MemoryLimitMiB
 	server.CPULimitMillis = request.CPULimitMillis
 	server.ServerSettings = request.ServerSettings
@@ -891,18 +946,6 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if !a.demo {
 		server.Endpoint = ""
 	}
-	if snapshot := a.store.Snapshot(); snapshot.Servers[server.ID].ID != "" {
-		writeError(w, http.StatusConflict, "a server with this name already exists")
-		return
-	}
-	for _, pending := range a.store.Snapshot().PendingSeeds {
-		if pending.Release == release {
-			writeError(w, http.StatusConflict, "this server has an unfinished save deployment; its seed storage must be reconciled before retrying")
-			return
-		}
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
 	if upload != nil {
 		if os.Getenv("RSDW_SAVE_UPLOADS_ENABLED") == "false" {
 			writeError(w, http.StatusServiceUnavailable, "save upload requires persistent C2 state storage")
@@ -978,7 +1021,19 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serverID := parts[0]
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		a.handleDelete(w, r, serverID)
+		return
+	}
 	snapshot := a.store.Snapshot()
+	if len(parts) == 2 && parts[1] == "deletion" && r.Method == http.MethodGet {
+		if record, ok := snapshot.Deletions[serverID]; ok {
+			writeJSON(w, http.StatusOK, record)
+		} else {
+			writeError(w, http.StatusNotFound, "deletion receipt not found")
+		}
+		return
+	}
 	server, ok := snapshot.Servers[serverID]
 	if !ok {
 		writeError(w, http.StatusNotFound, "server not found")
@@ -1022,6 +1077,11 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server) {
+	server, ok := a.lockServer(w, server.ID)
+	if !ok {
+		return
+	}
+	defer a.lifecycleMu.Unlock()
 	var request UpdateServerRequest
 	if err := decodeJSON(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1058,6 +1118,11 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server
 }
 
 func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server Server) {
+	server, ok := a.lockServer(w, server.ID)
+	if !ok {
+		return
+	}
+	defer a.lifecycleMu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	refreshed, err := a.orchestrator.CheckUpdate(ctx, server)
@@ -1087,7 +1152,7 @@ func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server S
 }
 
 func appendEvent(state *State, server Server, category, severity, message, details string) {
-	state.Events = append(state.Events, Event{ID: randomID(), Timestamp: time.Now().UTC(), ServerID: server.ID, ServerName: server.Name, Category: category, Severity: severity, Message: message, Details: details})
+	state.Events = append(state.Events, Event{ID: randomID(), Timestamp: time.Now().UTC(), ServerID: server.ID, ServerName: worldLabel(server), Category: category, Severity: severity, Message: message, Details: details})
 	if len(state.Events) > 500 {
 		state.Events = state.Events[len(state.Events)-500:]
 	}

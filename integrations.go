@@ -188,7 +188,7 @@ func emitAlert(state *State, server Server, kind EventKind, operation, details s
 	if kind == RestartFailed || kind == ServerDown {
 		severity = "error"
 	}
-	event := Event{ID: randomID(), Timestamp: at, ServerID: server.ID, ServerName: server.Name, Category: category, Severity: severity, Message: rule.Label, Details: details, Kind: kind, Source: rule.Source, Accuracy: rule.Accuracy, OperationID: operation}
+	event := Event{ID: randomID(), Timestamp: at, ServerID: server.ID, ServerName: worldLabel(server), Category: category, Severity: severity, Message: rule.Label, Details: details, Kind: kind, Source: rule.Source, Accuracy: rule.Accuracy, OperationID: operation}
 	state.Events = append(state.Events, event)
 	if len(state.Events) > 500 {
 		state.Events = state.Events[len(state.Events)-500:]
@@ -220,7 +220,7 @@ func validateIntegration(i DiscordIntegration, state State) error {
 	}
 	seen := map[string]bool{}
 	for _, id := range i.ServerIDs {
-		if _, ok := state.Servers[id]; !ok || seen[id] {
+		if _, ok := state.Servers[id]; !ok || state.deleting(id) || seen[id] {
 			return errors.New("server associations must be unique existing server IDs")
 		}
 		seen[id] = true

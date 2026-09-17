@@ -53,13 +53,18 @@ test('fixture importer rejects escaped symlinks, traversal, directories, and uns
   } finally { fs.rmSync(root, {recursive:true,force:true}); }
 });
 
-test('rendered C2 RBAC limits cleanup deletion to pods and PVCs', () => {
+test('rendered C2 RBAC limits deletion to managed runtime, Secrets, and PVCs', () => {
   const result = spawnSync('helm', ['template', 'save-test', 'charts/rsdw-c2', '--set','auth.adminTokenSecret.name=admin', '--show-only','templates/rbac.yaml'], {encoding:'utf8'});
   assert.equal(result.status, 0, result.stderr);
   const deleteRules = result.stdout.split(/\n  - apiGroups:/).filter(rule => /^\s+verbs:.*"delete"/m.test(rule));
-  assert.equal(deleteRules.length, 1);
-  assert.match(deleteRules[0], /resources: \["pods", "persistentvolumeclaims"\]/);
+  assert.equal(deleteRules.length, 2);
+  assert.match(deleteRules[0], /resources: \["pods", "persistentvolumeclaims", "services", "secrets", "configmaps"\]/);
   assert.match(deleteRules[0], /verbs: \["delete"\]/);
+  assert.match(deleteRules[1], /resources: \["deployments"\]/);
+  assert.match(deleteRules[1], /verbs: \["delete"\]/);
+  for (const rule of deleteRules) assert.doesNotMatch(rule, /"namespaces"|"persistentvolumes"|"statefulsets"|"daemonsets"|"jobs"|"cronjobs"/);
+  assert.match(result.stdout, /resources: \["statefulsets", "daemonsets"\]\s+verbs: \["list"\]/);
+  assert.match(result.stdout, /resources: \["jobs", "cronjobs"\]\s+verbs: \["list"\]/);
   assert.doesNotMatch(result.stdout, /"\*"|"deletecollection"/);
 });
 

@@ -159,6 +159,14 @@ func (a *App) collectTelemetry(ctx context.Context) {
 					result = k.collectObservation(ctx, server, previous)
 				}
 				result.at = time.Now().UTC()
+				if !a.lifecycleMu.TryLock() {
+					continue
+				}
+				current := a.store.Snapshot()
+				if _, ok := current.Servers[server.ID]; !ok || current.deleting(server.ID) {
+					a.lifecycleMu.Unlock()
+					continue
+				}
 				cache.mu.Lock()
 				history = cache.history[server.ID]
 				first := 0
@@ -182,6 +190,7 @@ func (a *App) collectTelemetry(ctx context.Context) {
 				}); err != nil {
 					log.Print("could not persist alert observations")
 				}
+				a.lifecycleMu.Unlock()
 			}
 		}()
 	}
