@@ -96,6 +96,27 @@ async function run() {
   assert.equal(await page.getByTestId('server-owner').isEditable(), true);
   await page.getByTestId('server-name').fill('Saved owner world');
   await page.getByTestId('server-world-name').fill('Saved world');
+  const upload = page.getByTestId('server-save');
+  assert.equal(await upload.getAttribute('accept'), '.sav');
+  assert.match(await page.locator('#save-help').innerText(), /32 MiB/);
+  for (const [name, buffer, message] of [
+    ['world.zip', Buffer.from('not a save'), /Select a .sav file/],
+    ['world.sav', Buffer.alloc(0), /must not be empty/],
+    ['world.sav', Buffer.alloc(32 * 1024 * 1024 + 1), /at most 32 MiB/],
+  ]) {
+    await upload.setInputFiles({name, mimeType:'application/octet-stream', buffer});
+    await page.getByTestId('confirm-modal').click();
+    await page.locator('#modal-error').waitFor({state:'visible'});
+    assert.match(await page.locator('#modal-error').innerText(), message);
+    assert.equal(saved().servers['saved-owner-world'], undefined);
+    assert.equal(await page.getByTestId('confirm-modal').isEnabled(), true);
+  }
+  await upload.setInputFiles({name:'World.sav',mimeType:'application/octet-stream',buffer:Buffer.from('GVAS\0browser-save-fixture')});
+  await submit('POST', '/api/servers', 503);
+  assert.equal(await page.locator('#modal-error').innerText(), 'save upload requires Kubernetes storage');
+  assert.equal(saved().servers['saved-owner-world'], undefined);
+  await page.screenshot({path:path.join(output, 'save-upload.png'),fullPage:true});
+  await upload.setInputFiles([]);
   const created = await submit('POST', '/api/servers', 201);
   assert.equal(created.ownerId, playerID);
   assert.equal(saved().servers['saved-owner-world'].ownerId, playerID);
@@ -160,7 +181,7 @@ async function run() {
   assert.deepEqual((await api('GET', '/api/users')).data, {users:[]});
   assert.deepEqual(errors, []);
   assert.ok(!logs.includes(playerID) && !logs.includes(changedID) && !logs.includes(manualID));
-  console.log('PASS authenticated Saved IDs CRUD, duplicate and validation errors, selection, manual entry, persisted owner copies, cancel, retry, and expired-token handling.');
+  console.log('PASS authenticated Saved IDs CRUD, save type/size errors, multipart upload rejection in demo mode, empty-world creation, selection, manual entry, persisted owner copies, cancel, retry, and expired-token handling.');
   console.log(`Browser evidence: ${output}`);
 }
 

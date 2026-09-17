@@ -10,6 +10,7 @@ go vet ./...
 python3 verification/check-tick-evidence.py verification/tick-live-observations.json
 node --check web/app.js
 node --test web/app.test.cjs
+node --test verification/save-import.test.cjs
 bash scripts/verify-auth-chart.sh
 node <<'NODE'
 const fs = require('fs');

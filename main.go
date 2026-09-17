@@ -43,6 +43,7 @@ const (
 
 type Server struct {
 	ServerSettings
+	SaveSeed              *SaveSeed                `json:"saveSeed,omitempty"`
 	Metrics               map[string]MetricReading `json:"metrics"`
 	PasswordSecret        string                   `json:"passwordSecret,omitempty"`
 	ServerPassword        string                   `json:"-"`
@@ -104,9 +105,10 @@ type Event struct {
 }
 
 type State struct {
-	Servers map[string]Server `json:"servers"`
-	Events  []Event           `json:"events"`
-	Users   map[string]User   `json:"users"`
+	Servers      map[string]Server      `json:"servers"`
+	Events       []Event                `json:"events"`
+	Users        map[string]User        `json:"users"`
+	PendingSeeds map[string]PendingSeed `json:"pendingSeeds,omitempty"`
 }
 
 type User struct {
@@ -210,7 +212,7 @@ func (s *Store) Snapshot() State {
 }
 
 func (s State) clone() State {
-	return State{Servers: maps.Clone(s.Servers), Users: maps.Clone(s.Users), Events: append([]Event(nil), s.Events...)}
+	return State{Servers: maps.Clone(s.Servers), Users: maps.Clone(s.Users), Events: append([]Event(nil), s.Events...), PendingSeeds: maps.Clone(s.PendingSeeds)}
 }
 
 func (s *Store) Update(fn func(*State) error) error {
@@ -441,6 +443,9 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 		args = append(args, "--set-literal", setting)
 	}
 	args = append(args, "--set", fmt.Sprintf("server.port=%d,service.port=%d,persistence.size=%dGi,service.type=%s", server.GamePort, server.GamePort, server.StorageGiB, server.ServiceType))
+	if server.SaveSeed != nil {
+		args = append(args, "--set-literal", "saveSeed.existingClaim="+server.SaveSeed.Claim, "--set-literal", "saveSeed.path="+server.SaveSeed.Path)
+	}
 	if server.PasswordSecret != "" {
 		for i, entry := range []struct{ name, key string }{{"RSDW_PASSWORD", "serverPassword"}, {"RSDW_ADMIN_PASSWORD", "adminPassword"}} {
 			args = append(args, "--set-string", fmt.Sprintf("server.extraEnv[%d].name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.key=%s", i, entry.name, i, server.PasswordSecret, i, entry.key))
@@ -590,6 +595,7 @@ func newerVersion(candidate, current [3]int) bool {
 }
 
 type App struct {
+	createMu      sync.Mutex
 	store         *Store
 	orchestrator  Orchestrator
 	demo          bool
@@ -766,9 +772,18 @@ func (a *App) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
-	var request CreateServerRequest
-	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if !a.createMu.TryLock() {
+		writeError(w, http.StatusConflict, "another server creation is in progress; try again shortly")
+		return
+	}
+	defer a.createMu.Unlock()
+	request, upload, err := decodeCreate(w, r)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errSaveTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	if request.MemoryLimitMiB == 0 {
@@ -811,10 +826,40 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "a server with this name already exists")
 		return
 	}
+	for _, pending := range a.store.Snapshot().PendingSeeds {
+		if pending.Release == release {
+			writeError(w, http.StatusConflict, "this server has an unfinished save deployment; its seed storage must be reconciled before retrying")
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
+	if upload != nil {
+		if os.Getenv("RSDW_SAVE_UPLOADS_ENABLED") == "false" {
+			writeError(w, http.StatusServiceUnavailable, "save upload requires persistent C2 state storage")
+			return
+		}
+		k, ok := a.orchestrator.(*kubeOrchestrator)
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, "save upload requires Kubernetes storage")
+			return
+		}
+		seed, err := a.prepareSeed(ctx, k, server, upload)
+		if seed.Claim != "" {
+			defer a.cleanupSeed(seed.Claim)
+		}
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "could not stage the save; cleanup will retry automatically")
+			return
+		}
+		server.SaveSeed = &seed
+	}
 	if err := a.orchestrator.Deploy(ctx, server); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+		if server.SaveSeed != nil {
+			writeError(w, http.StatusBadGateway, "save deployment failed; storage remains owned until Kubernetes confirms it is unused")
+		} else {
+			writeError(w, http.StatusBadGateway, err.Error())
+		}
 		return
 	}
 	if a.demo {
@@ -823,10 +868,13 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	server.ServerPassword, server.AdminPassword = "", ""
 	if err := a.store.Update(func(state *State) error {
 		state.Servers[server.ID] = server
+		if server.SaveSeed != nil {
+			delete(state.PendingSeeds, server.SaveSeed.Claim)
+		}
 		appendEvent(state, server, "system", "success", "Server created", "Helm release accepted")
 		return nil
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "could not persist the server; any seed storage remains owned for recovery")
 		return
 	}
 	writeJSON(w, http.StatusCreated, server)
@@ -1185,6 +1233,7 @@ func main() {
 		orchestrator = demoOrchestrator{}
 	}
 	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth}
+	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}

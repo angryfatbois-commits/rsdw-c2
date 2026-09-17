@@ -5,6 +5,7 @@ RSDW C2 is a Kubernetes command and control console for RuneScape Dragonwilds de
 The console supports these operations:
 
 - Create a server with the `rsdragonwilds-helm` chart.
+- Import an optional `.sav` file when creating a server. See [custom saves](docs/custom-saves.md) for upload limits and storage cleanup.
 - Save named player IDs and select one when creating a server.
 - Read live server health, player count, uptime, and logs; show resource metrics when a metrics source is available.
 - Restart a server after confirmation.

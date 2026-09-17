@@ -1,9 +1,12 @@
+{{- $seed := .Values.saveSeed | default dict }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ .Release.Name }}-rsdragonwilds
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       fixture: {{ .Release.Name }}
@@ -15,6 +18,27 @@ spec:
         app.kubernetes.io/name: rsdragonwilds
     spec:
       automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+      {{- if $seed.existingClaim }}
+      initContainers:
+        - name: import-save
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: Never
+          command: [bash, /fixture-import/seed-save.sh]
+          args: [/seed, {{ $seed.path | quote }}, /home/steam/rsdw-dedicated/RSDragonwilds/Saved/SaveGames]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - {name: data, mountPath: /home/steam/rsdw-dedicated}
+            - {name: seed, mountPath: /seed, readOnly: true}
+            - {name: import-script, mountPath: /fixture-import, readOnly: true}
+      {{- end }}
       containers:
         - name: server
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -52,12 +76,38 @@ spec:
           secret:
             secretName: {{ .Values.api.bearerTokenSecret.name }}
         - name: data
+          {{- if $seed.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-world
+        - name: seed
+          persistentVolumeClaim:
+            claimName: {{ $seed.existingClaim }}
+            readOnly: true
+        - name: import-script
+          configMap:
+            name: {{ .Release.Name }}-fixture
+          {{- else }}
           emptyDir: {}
+          {{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}-fixture
 data:
+  seed-save.sh: |
+    {{- .Files.Get "files/seed-save.sh" | nindent 4 }}
   health: '{"engineReady":true,"uptimeSeconds":120}'
   players: '{"count":2,"players":[]}'
+{{- if $seed.existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-world
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 64Mi
+{{- end }}

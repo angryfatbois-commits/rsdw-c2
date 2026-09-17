@@ -86,7 +86,8 @@ async function api(path, options = {}) {
   if (state.authMode !== 'oidc') {
     try { token = sessionStorage.getItem(tokenKey) || ''; } catch {}
   }
-  const response = await fetch(path, {credentials:'same-origin', ...options, headers:{'Accept':'application/json', ...(token ? {'Authorization':`Bearer ${token}`} : {}), ...(state.csrfToken ? {'X-CSRF-Token':state.csrfToken} : {}), ...(options.body ? {'Content-Type':'application/json'} : {}), ...options.headers}});
+  const multipart = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const response = await fetch(path, {credentials:'same-origin', ...options, headers:{'Accept':'application/json', ...(token ? {'Authorization':`Bearer ${token}`} : {}), ...(state.csrfToken ? {'X-CSRF-Token':state.csrfToken} : {}), ...(options.body && !multipart ? {'Content-Type':'application/json'} : {}), ...options.headers}});
   const text = await response.text();
   if (epoch !== state.epoch || options.signal?.aborted) throw staleRequest();
   if (state.authMode === 'oidc' && path !== '/api/auth' && response.ok && identity && response.headers.get('X-RSDW-Session') && response.headers.get('X-RSDW-Session') !== identity) {
@@ -483,6 +484,7 @@ function openModal(action, userId = '') {
     $('#modal-body').innerHTML = `<p><strong>${escapeHTML(server.name)}</strong> will ${action === 'restart' ? 'restart' : 'restart with the selected image'}. Active players will be disconnected. Wait for a quiet moment before continuing.</p>${action === 'update' ? '<label class="field">Container image tag<input name="imageTag" data-testid="update-image-tag" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="e.g. latest" title="A valid container image tag"><small>Enter the tag to deploy from the configured image repository.</small></label>' : ''}`;
   }
   if (action === 'add-server') {
+    $('#modal-body .form-grid').insertAdjacentHTML('beforeend', '<label class="field full">Custom save (optional)<input type="file" name="save" accept=".sav" data-testid="server-save" aria-describedby="save-help"><small id="save-help">Select one .sav file, up to 32 MiB. Leave empty to create a new world. The save is imported only into an empty world.</small></label>');
     $('#modal-body .form-grid').insertAdjacentHTML('beforeend', '<label class="field">Memory limit (MiB)<input name="memoryLimitMiB" data-testid="server-memory-limit" type="number" min="256" max="65536" value="2048" required><small>2048 MiB = 2 GiB. Exceeding this limit can restart the server.</small></label><label class="field">CPU limit (millicores)<input name="cpuLimitMillis" data-testid="server-cpu-limit" type="number" min="100" max="64000" value="1000" required><small>1000 millicores = 1 CPU core. CPU is throttled at this limit.</small></label><p class="field full inline-note">Kubernetes reserves 256 MiB and 100 millicores per game container. Limits are ceilings, not guaranteed capacity. The game may require more memory to start. Player-limit enforcement depends on the game build.</p>');
     $('[data-testid="server-image"]').value = '0.1.1';
     $('[data-testid="server-owner"]').parentElement.firstChild.textContent = 'Owner EOS player ID';
@@ -499,6 +501,17 @@ function closeModal() {
   if (state.modalBusy) return;
   $('#modal').close();
   modalOpener?.focus();
+}
+function createRequestBody(values) {
+  const {save, ...settings} = values;
+  if (!save?.name) return JSON.stringify(settings);
+  if (!save.name.endsWith('.sav') || save.name.startsWith('.') || /[/\\\x00-\x1f\x7f]/.test(save.name)) throw new Error('Select a .sav file with a plain filename.');
+  if (save.size === 0) throw new Error('Save file must not be empty.');
+  if (save.size > 32 * 1024 * 1024) throw new Error('Save file must be at most 32 MiB.');
+  const body = new FormData();
+  body.append('request', JSON.stringify(settings));
+  body.append('save', save);
+  return body;
 }
 async function submitModal(event) {
   event.preventDefault();
@@ -530,7 +543,7 @@ async function submitModal(event) {
   $('#modal-error').hidden = true;
   $('#modal').querySelectorAll('[data-action="close-modal"]').forEach((button) => { button.disabled = true; });
   try {
-    await api(path,{method,body:body ? JSON.stringify(body) : undefined});
+    await api(path,{method,body:action === 'add-server' ? createRequestBody(body) : body ? JSON.stringify(body) : undefined});
     if (epoch !== state.epoch) return;
     state.modalBusy = false;
     closeModal();

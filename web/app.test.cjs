@@ -177,6 +177,37 @@ assert.doesNotMatch(context.ui.dashboard(), /data-action="add-server"/);
 console.log('Viewer capability rendering checks passed.');
 
 const test = require('node:test');
+test('create uploads one save with settings and preserves authentication headers', async () => {
+  const requests = [];
+  const sandbox = vm.createContext({FormData, DOMException, sessionStorage:{getItem(){return 'admin-token';}}, fetch:async(path,options) => {
+    requests.push({path,options});
+    return {ok:true,status:201,headers:{get(){return 'session-csrf';}},text:async()=>'{}'};
+  }});
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, api, createRequestBody};', sandbox);
+  const {state, api, createRequestBody} = sandbox.ui;
+  const content = Uint8Array.from([71,86,65,83,0,255]);
+  const save = new File([content], 'World.sav');
+  const body = createRequestBody({name:'World',ownerId:'0123456789abcdef0123456789abcdef',maxPlayers:4,save});
+  assert.deepEqual([...body.keys()], ['request','save']);
+  assert.deepEqual(JSON.parse(body.get('request')), {name:'World',ownerId:'0123456789abcdef0123456789abcdef',maxPlayers:4});
+  assert.deepEqual(new Uint8Array(await body.get('save').arrayBuffer()), content);
+  await api('/api/servers', {method:'POST',body});
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer admin-token');
+  assert.equal(requests[0].options.headers['Content-Type'], undefined);
+  state.authMode = 'oidc'; state.csrfToken = 'session-csrf';
+  await api('/api/servers', {method:'POST',body});
+  assert.equal(requests[1].options.headers['X-CSRF-Token'], 'session-csrf');
+  assert.equal(requests[1].options.headers.Authorization, undefined);
+  assert.equal(requests[1].options.credentials, 'same-origin');
+  const empty = createRequestBody({name:'Empty world', save:new File([], '')});
+  assert.deepEqual(JSON.parse(empty), {name:'Empty world'});
+  await api('/api/servers', {method:'POST',body:empty});
+  assert.equal(requests[2].options.headers['Content-Type'], 'application/json');
+  for (const [file, error] of [[{name:'world.zip',size:4},/Select a .sav/],[{name:'../world.sav',size:4},/plain filename/],[{name:'world.sav',size:0},/must not be empty/],[{name:'world.sav',size:32*1024*1024+1},/at most 32 MiB/]]) {
+    assert.throws(()=>createRequestBody({name:'World',save:file}), error);
+  }
+});
+
 test('identity changes clear protected data and reject late API and log responses', async () => {
   const elements = new Map();
   const element = (selector) => {
