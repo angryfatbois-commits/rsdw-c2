@@ -328,8 +328,6 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 		result.health = "unhealthy"
 		if *ready.Value == 1 && target.ready && podReady {
 			result.health = "healthy"
-		}
-		if *ready.Value == 1 {
 			result.status = StatusOnline
 		} else {
 			result.status = StatusStarting

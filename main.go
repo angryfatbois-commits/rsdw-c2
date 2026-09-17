@@ -1038,10 +1038,14 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	server.CurrentImage = server.DesiredImage
-	server.UpdateAvailable = false
+	if a.demo {
+		server.CurrentImage = server.DesiredImage
+		server.UpdateAvailable = false
+		server.LastSeen = time.Now().UTC().Format(time.RFC3339)
+	} else {
+		server = a.telemetryFor(server, "60s").Server
+	}
 	server.Status = StatusStarting
-	server.LastSeen = time.Now().UTC().Format(time.RFC3339)
 	if err := a.store.Update(func(state *State) error {
 		state.Servers[server.ID] = server
 		appendEvent(state, server, "update", "success", "Image update requested", server.DesiredImage)

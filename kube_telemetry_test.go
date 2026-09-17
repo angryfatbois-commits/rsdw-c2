@@ -195,6 +195,36 @@ func TestCollectRealSourceContract(t *testing.T) {
 	}
 }
 
+func TestReadinessStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name, before, after, health string
+		status                      Status
+	}{
+		{"ready", "", "", "healthy", StatusOnline},
+		{"container unready", `"ready":true`, `"ready":false`, "unhealthy", StatusStarting},
+		{"Pod unready", `"type":"Ready","status":"True"`, `"type":"Ready","status":"False"`, "unhealthy", StatusStarting},
+		{"Pod readiness unknown", `"type":"Ready","status":"True"`, `"type":"Ready","status":"Unknown"`, "unhealthy", StatusStarting},
+		{"Pod readiness missing", `"type":"Ready"`, `"type":"ContainersReady"`, "unhealthy", StatusStarting},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k, runner, server := collectorFixture()
+			runner.override = func(call string) ([]byte, error, bool) {
+				if tc.before != "" && strings.Contains(call, "get pod world-pod") {
+					return []byte(strings.ReplaceAll(fixturePod(), tc.before, tc.after)), nil, true
+				}
+				return nil, nil, false
+			}
+			observed := k.collectObservation(context.Background(), server, nil)
+			observed.at = time.Now()
+			visible := joinObservation(server, observed, observed.at)
+			if observed.health != tc.health || visible.Status != tc.status {
+				t.Fatalf("health=%s status=%s, want health=%s status=%s", observed.health, visible.Status, tc.health, tc.status)
+			}
+			expectMetric(t, visible.Metrics, "engineReady", "available", number(1))
+		})
+	}
+}
+
 func TestMetricsFailuresAreIndependent(t *testing.T) {
 	for _, tc := range []struct {
 		name, replace, with, key, status string

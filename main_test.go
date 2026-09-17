@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type registryTransport func(*http.Request) (*http.Response, error)
@@ -86,6 +87,50 @@ func TestCheckUpdateRegistryBehavior(t *testing.T) {
 				}
 			} else if !reflect.DeepEqual(state.Servers[server.ID], server) || len(state.Events) != 0 {
 				t.Fatalf("failed check changed state: %+v", state)
+			}
+		})
+	}
+}
+
+func TestUpdateReturnsObservedImage(t *testing.T) {
+	t.Setenv("RSDW_IMAGE_REPOSITORY", "example/server")
+	for _, tc := range []struct {
+		name, observed, wantImage string
+		demo                      bool
+	}{
+		{"observed", "example/server:1", "example/server:1", false},
+		{"unobserved", "", "", false},
+		{"demo", "", "example/server:2", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newTestApp(t, tc.demo)
+			server := Server{ID: "world", Release: "world", CurrentImage: "example/server:stored", DesiredImage: "example/server:stored"}
+			if err := app.store.Update(func(s *State) error { s.Servers[server.ID] = server; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			observedAt := time.Now().UTC().Add(-time.Second)
+			if tc.observed != "" {
+				app.observations().history[server.ID] = []observation{{at: observedAt, image: tc.observed, status: StatusOnline, metrics: emptyMetrics()}}
+			}
+			res := requestJSON(t, app, http.MethodPost, "/api/servers/world/actions/update", `{"imageTag":"2"}`)
+			if res.Code != http.StatusOK {
+				t.Fatalf("update = %d: %s", res.Code, res.Body.String())
+			}
+			var got Server
+			if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.CurrentImage != tc.wantImage || got.DesiredImage != "example/server:2" || got.Status != StatusStarting {
+				t.Fatalf("update current=%q desired=%q status=%s", got.CurrentImage, got.DesiredImage, got.Status)
+			}
+			if !tc.demo {
+				wantSeen := ""
+				if tc.observed != "" {
+					wantSeen = observedAt.Format(time.RFC3339Nano)
+				}
+				if got.LastSeen != wantSeen || got.UpdateAvailable != (tc.observed != "") {
+					t.Fatalf("update lastSeen=%q updateAvailable=%t", got.LastSeen, got.UpdateAvailable)
+				}
 			}
 		})
 	}
