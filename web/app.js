@@ -541,29 +541,62 @@ function openModal(action, userId = '') {
   } else if (action === 'add-server') {
     $('#modal-title').textContent = 'Create a server';
     $('#modal-submit').textContent = 'Deploy server';
-    $('#modal-body').innerHTML = '<p>A new Dragonwilds world, deployed to your Kubernetes cluster.</p><div class="form-grid"><label class="field full">Owner Name<input name="name" data-testid="server-name" required maxlength="48" placeholder="Owner display name" autocomplete="off" autofocus></label><label class="field">Namespace<input name="namespace" data-testid="server-namespace" required maxlength="63" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" value="dragonwilds" title="Lowercase letters, numbers, and hyphens; start and end with a letter or number"><small>Lowercase letters, numbers, and hyphens.</small></label><label class="field">Region<input name="region" data-testid="server-region" required maxlength="63" value="local"></label><label class="field full">Owner ID<input name="ownerId" data-testid="server-owner" required maxlength="128" autocomplete="off" placeholder="Your game account ID"><small>The account that owns this world.</small></label><label class="field">Image tag<input name="imageTag" data-testid="server-image" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" value="latest" title="A valid container image tag"></label><label class="field">Max players<input name="maxPlayers" data-testid="server-max-players" type="number" min="1" max="64" value="4" required></label></div>';
+    $('#modal-body').innerHTML = `<p>A new Dragonwilds world, deployed to your Kubernetes cluster.</p><div class="form-grid"><label class="field full">Server name<input name="worldName" data-testid="server-world-name" required maxlength="128" placeholder="My Dragonwilds server" autofocus></label><label class="field full">Owner name<input name="name" data-testid="server-name" required maxlength="48" placeholder="Owner display name" autocomplete="off"></label><label class="field full">Owner EOS player ID<input name="ownerId" data-testid="server-owner" required maxlength="128" autocomplete="off" placeholder="Your game account ID"></label><div class="field full"><label for="create-image-tag">Image tag</label><select id="create-image-tag" name="imageTag" data-testid="server-image" required disabled></select><small id="image-tags-status" role="status"></small><button type="button" data-action="retry-image-tags" hidden>Retry image tags</button></div><label class="field full">Max players<input name="maxPlayers" data-testid="server-max-players" type="number" min="1" max="64" value="4" required></label></div><details id="server-advanced"><summary>Advanced</summary><div class="form-grid"><label class="field">Namespace<input name="namespace" data-testid="server-namespace" required maxlength="63" pattern="[a-z0-9](([a-z0-9]|-)*[a-z0-9])?" value="dragonwilds" title="Lowercase letters, numbers, and hyphens; start and end with a letter or number"></label></div></details>`;
   } else {
     const server = selectedServer();
     $('#modal-title').textContent = action === 'restart' ? 'Restart this server?' : 'Update server image';
     $('#modal-submit').textContent = action === 'restart' ? 'Confirm restart' : 'Confirm update';
-    $('#modal-body').innerHTML = `<p><strong>${escapeHTML(serverLabel(server))}</strong> will ${action === 'restart' ? 'restart' : 'restart with the selected image'}. Active players will be disconnected. Wait for a quiet moment before continuing.</p>${action === 'update' ? '<label class="field">Container image tag<input name="imageTag" data-testid="update-image-tag" required pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" placeholder="e.g. latest" title="A valid container image tag"><small>Enter the tag to deploy from the configured image repository.</small></label>' : ''}`;
+    $('#modal-body').innerHTML = `<p><strong>${escapeHTML(serverLabel(server))}</strong> will ${action === 'restart' ? 'restart' : 'restart with the selected image'}. Active players will be disconnected. Wait for a quiet moment before continuing.</p>${action === 'update' ? '<div class="field"><label for="update-image-tag">Container image tag</label><select id="update-image-tag" name="imageTag" data-testid="update-image-tag" required disabled></select><small id="image-tags-status" role="status"></small><button type="button" data-action="retry-image-tags" hidden>Retry image tags</button></div>' : ''}`;
   }
   if (action === 'add-server') {
-    $('#modal-body .form-grid').insertAdjacentHTML('beforeend', '<label class="field full">Custom save (optional)<input type="file" name="save" accept=".sav" data-testid="server-save" aria-describedby="save-help"><small id="save-help">Select one .sav file, up to 32 MiB. Leave empty to create a new world. The save is imported only into an empty world.</small></label>');
-    $('#modal-body .form-grid').insertAdjacentHTML('beforeend', '<label class="field">Memory limit (MiB)<input name="memoryLimitMiB" data-testid="server-memory-limit" type="number" min="256" max="65536" value="2048" required><small>2048 MiB = 2 GiB. Exceeding this limit can restart the server.</small></label><label class="field">CPU limit (millicores)<input name="cpuLimitMillis" data-testid="server-cpu-limit" type="number" min="100" max="64000" value="1000" required><small>1000 millicores = 1 CPU core. CPU is throttled at this limit.</small></label><p class="field full inline-note">Kubernetes reserves 256 MiB and 100 millicores per game container. Limits are ceilings, not guaranteed capacity. The game may require more memory to start. Player-limit enforcement depends on the game build.</p>');
-    $('[data-testid="server-image"]').value = '0.1.1';
-    $('[data-testid="server-owner"]').parentElement.firstChild.textContent = 'Owner EOS player ID';
+    $('#server-advanced .form-grid').insertAdjacentHTML('beforeend', '<label class="field full">Custom save (optional)<input type="file" name="save" accept=".sav" data-testid="server-save" aria-describedby="save-help"><small id="save-help">Select one .sav file, up to 32 MiB. Leave empty to create a new world. The save is imported only into an empty world.</small></label>');
+    $('#server-advanced .form-grid').insertAdjacentHTML('beforeend', `<div class="field"><label for="memoryLimitMiB">Memory limit (MiB)</label><div class="resource-controls"><input id="memoryLimitMiB" name="memoryLimitMiB" data-testid="server-memory-limit" type="number" min="256" max="67584" value="6144" required readonly><button type="button" data-action="toggle-resource" data-field="memoryLimitMiB" aria-controls="memoryLimitMiB" aria-pressed="true" aria-label="Lock memory to player count">Locked to player count</button></div><small>2 GiB plus 1 GiB per player. Exceeding this limit can restart the server.</small></div><div class="field"><label for="cpuLimitMillis">CPU limit (millicores)</label><div class="resource-controls"><input id="cpuLimitMillis" name="cpuLimitMillis" data-testid="server-cpu-limit" type="number" min="100" max="64000" value="2000" required readonly><button type="button" data-action="toggle-resource" data-field="cpuLimitMillis" aria-controls="cpuLimitMillis" aria-pressed="true" aria-label="Lock CPU to player count">Locked to player count</button></div><small>500 millicores per player. 1000 millicores = 1 CPU core.</small></div><p class="field full inline-note">Kubernetes reserves 256 MiB and 100 millicores per game container. Limits are ceilings, not guaranteed capacity. Player-limit enforcement depends on the game build.</p>`);
     $('[data-testid="server-owner"]').pattern = '[0-9a-fA-F]{32}';
     $('[data-testid="server-owner"]').title = 'Exactly 32 hexadecimal characters, without spaces or separators';
     $('[data-testid="server-owner"]').parentElement.insertAdjacentHTML('beforebegin', `<label class="field full">Saved player ID<select id="saved-user" data-testid="saved-user"><option value="">Enter an ID manually</option>${state.users.map((user) => `<option value="${escapeHTML(user.id)}">${escapeHTML(user.name)} (${escapeHTML(user.playerId)})</option>`).join('')}</select><small>Select a saved ID to copy it into the editable owner ID field.</small></label>`);
-    $('#modal-body .form-grid').insertAdjacentHTML('beforeend', `<label class="field full">Server Name<input name="worldName" data-testid="server-world-name" required maxlength="128" placeholder="My Dragonwilds server"><small>Stored separately from the owner name.</small></label><label class="field">Game UDP port<input name="gamePort" type="number" min="1024" max="65535" value="7777" required></label><label class="field">World storage (GiB)<input name="storageGiB" type="number" min="1" max="2048" value="40" required></label><label class="field full">Service exposure<select name="serviceType"><option value="NodePort">NodePort (local kind testing)</option><option value="ClusterIP">ClusterIP (cluster network only)</option><option value="LoadBalancer">LoadBalancer (requires a provider)</option></select></label><label class="field">Server password<input name="serverPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Empty allows passwordless joins.</small></label><label class="field">Admin password<input name="adminPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Stored in a Kubernetes Secret.</small></label><label class="field full">Administrator EOS IDs<input name="adminIds" maxlength="2048" placeholder="Comma-separated EOS player IDs"></label><label class="field">Logging<select name="debugLevel"><option value="0">Normal</option><option value="1">SteamCMD debug</option><option value="2">Game debug</option><option value="3">SteamCMD and game debug</option></select></label><label class="field">Validate game files<select name="validateGameFiles"><option value="false">No</option><option value="true">Yes (slower startup)</option></select></label><label class="field full">Stop on game update<select name="autoStopOnUpdate"><option value="false">Disabled</option><option value="true">Enabled (game-build dependent)</option></select></label><label class="field full">Additional startup arguments<input name="additionalArgs" maxlength="2048" placeholder="Optional Unreal startup arguments"><small>The player-count override is appended automatically. API authentication is configured automatically.</small></label>`);
+    $('#server-advanced .form-grid').insertAdjacentHTML('beforeend', `<label class="field">Game UDP port<input name="gamePort" type="number" min="1024" max="65535" value="7777" required></label><label class="field">World storage (GiB)<input name="storageGiB" type="number" min="1" max="2048" value="40" required></label><label class="field full">Service exposure<select name="serviceType"><option value="NodePort">NodePort (local kind testing)</option><option value="ClusterIP">ClusterIP (cluster network only)</option><option value="LoadBalancer">LoadBalancer (requires a provider)</option></select></label><label class="field">Server password<input name="serverPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Empty allows passwordless joins.</small></label><label class="field">Admin password<input name="adminPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Stored in a Kubernetes Secret.</small></label><label class="field full">Administrator EOS IDs<input name="adminIds" maxlength="2048" placeholder="Comma-separated EOS player IDs"></label><label class="field">Logging<select name="debugLevel"><option value="0">Normal</option><option value="1">SteamCMD debug</option><option value="2">Game debug</option><option value="3">SteamCMD and game debug</option></select></label><label class="field">Validate game files<select name="validateGameFiles"><option value="false">No</option><option value="true">Yes (slower startup)</option></select></label><label class="field full">Stop on game update<select name="autoStopOnUpdate"><option value="false">Disabled</option><option value="true">Enabled (game-build dependent)</option></select></label><label class="field full">Additional startup arguments<input name="additionalArgs" maxlength="2048" placeholder="Optional Unreal startup arguments"><small>The player-count override is appended automatically. API authentication is configured automatically.</small></label>`);
   }
   $('#modal').showModal();
+  if (action === 'add-server' || action === 'update') loadImageTags();
   if (action === 'add-integration' || action === 'edit-integration') {
     $('#modal-title').tabIndex = -1;
     $('#modal-title').focus();
   } else if (action === 'add-user' || action === 'edit-user') $('[data-testid="user-name"]').focus();
   else if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
+}
+async function loadImageTags() {
+  const select = $('#modal [name="imageTag"]');
+  const status = $('#image-tags-status');
+  const retry = $('[data-action="retry-image-tags"]');
+  const current = state.modalAction === 'update' ? (selectedServer()?.currentImage || selectedServer()?.desiredImage || '').split(':').pop() : '';
+  select.disabled = true;
+  $('#modal-submit').disabled = true;
+  status.textContent = 'Loading published image tags…';
+  retry.hidden = true;
+  const epoch = state.epoch;
+  try {
+    const tags = await api('/api/image-tags');
+    if (!select.isConnected || !$('#modal').open || epoch !== state.epoch) return;
+    if (!tags.length && !current) throw new Error('No published image releases are available.');
+    select.innerHTML = tags.map((tag) => `<option value="${escapeHTML(tag)}">${escapeHTML(tag)}</option>`).join('');
+    if (current && !tags.includes(current)) select.insertAdjacentHTML('beforeend', `<option value="${escapeHTML(current)}">${escapeHTML(current)} (current, unavailable)</option>`);
+    if (current) select.value = current;
+    select.disabled = false;
+    $('#modal-submit').disabled = false;
+    status.textContent = current && !tags.includes(current) ? 'The current tag is no longer published. Choose a release to change it.' : 'Published image releases, newest first.';
+  } catch (error) {
+    if (!select.isConnected || !$('#modal').open || epoch !== state.epoch) return;
+    status.textContent = error.message;
+    retry.hidden = false;
+  }
+}
+function updateResources() {
+  const players = Number($('#modal [name="maxPlayers"]').value);
+  if (!Number.isInteger(players) || players < 1 || players > 64) return;
+  for (const [name, value] of [['memoryLimitMiB', (2 + players) * 1024], ['cpuLimitMillis', 500 * players]]) {
+    const input = $(`[name="${name}"]`);
+    if (input.readOnly) input.value = value;
+  }
 }
 function closeModal() {
   if (state.modalBusy) return;
@@ -671,6 +704,15 @@ async function handleAction(event) {
       case 'login': if (state.authMode === 'oidc') location.assign('/api/auth/login'); else requireLogin(); break;
       case 'logout': await logout(); break;
       case 'close-login': closeLogin(); break;
+      case 'retry-image-tags': loadImageTags(); break;
+      case 'toggle-resource': {
+        const input = $(`[name="${button.dataset.field}"]`);
+        input.readOnly = !input.readOnly;
+        button.setAttribute('aria-pressed', String(input.readOnly));
+        button.textContent = input.readOnly ? 'Locked to player count' : 'Manual override';
+        updateResources();
+        break;
+      }
       case 'add-server': case 'restart': case 'update': openModal(action); break;
       case 'delete': openModal(action, button.dataset.id); break;
       case 'add-user': case 'edit-user': case 'delete-user': openModal(action, button.dataset.id); break;
@@ -738,12 +780,17 @@ $('#refresh').innerHTML = icon('refresh');
 $('#refresh').addEventListener('click',refresh);
 $('#pause').addEventListener('click',() => { state.paused = !state.paused; connection(); if (!state.paused) refresh(); });
 $('#server-filter').addEventListener('change',(event) => { state.serverId = event.target.value; state.telemetry = null; state.logs = ''; state.selectedEventId = ''; refresh(); });
+$('#modal-form').addEventListener('invalid', (event) => {
+  const advanced = event.target.closest('details');
+  if (advanced) advanced.open = true;
+}, true);
 $('#modal-form').addEventListener('submit',submitModal);
 $('#login-form').addEventListener('submit',submitLogin);
 $('#login-dialog').addEventListener('cancel',(event) => { event.preventDefault(); closeLogin(); });
 $('#modal').addEventListener('cancel',(event) => { event.preventDefault(); closeModal(); });
 document.addEventListener('click',handleAction);
 document.addEventListener('input',(event) => {
+  if (event.target.name === 'maxPlayers') updateResources();
   if (event.target.name === 'ownerId') $('#saved-user').value = '';
   if (event.target.id === 'admin-token') event.target.removeAttribute('aria-invalid');
   if (event.target.id === 'event-search') {

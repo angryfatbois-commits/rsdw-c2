@@ -161,7 +161,6 @@ type CreateServerRequest struct {
 	AdminPassword  string `json:"adminPassword"`
 	Name           string `json:"name"`
 	Namespace      string `json:"namespace"`
-	Region         string `json:"region"`
 	OwnerID        string `json:"ownerId"`
 	ImageTag       string `json:"imageTag"`
 	MaxPlayers     int    `json:"maxPlayers"`
@@ -630,71 +629,84 @@ func (k *kubeOrchestrator) CheckUpdate(ctx context.Context, server Server) (Serv
 	return refreshed, nil
 }
 
-func (k *kubeOrchestrator) latestImageTag(ctx context.Context) (string, error) {
-	parts := strings.SplitN(strings.TrimPrefix(k.imageRepository, "https://"), "/", 2)
+func availableImageTags(ctx context.Context, repository string) ([]string, error) {
+	parts := strings.SplitN(strings.TrimPrefix(repository, "https://"), "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", errors.New("image repository must include a registry host")
+		return nil, errors.New("image repository must include a registry host")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+parts[0]+"/v2/"+parts[1]+"/tags/list", nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if response.StatusCode == http.StatusUnauthorized && parts[0] == "ghcr.io" {
 		response.Body.Close()
 		query := url.Values{"service": {"ghcr.io"}, "scope": {"repository:" + parts[1] + ":pull"}}
 		tokenRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://ghcr.io/token?"+query.Encode(), nil)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		tokenResponse, err := http.DefaultClient.Do(tokenRequest)
 		if err != nil {
-			return "", fmt.Errorf("registry authentication: %w", err)
+			return nil, fmt.Errorf("registry authentication: %w", err)
 		}
 		defer tokenResponse.Body.Close()
 		if tokenResponse.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("registry authentication returned %s", tokenResponse.Status)
+			return nil, fmt.Errorf("registry authentication returned %s", tokenResponse.Status)
 		}
 		var credentials struct {
 			Token       string `json:"token"`
 			AccessToken string `json:"access_token"`
 		}
 		if err := json.NewDecoder(io.LimitReader(tokenResponse.Body, 1<<20)).Decode(&credentials); err != nil {
-			return "", errors.New("invalid registry authentication response")
+			return nil, errors.New("invalid registry authentication response")
 		}
 		token := defaultValue(credentials.Token, credentials.AccessToken)
 		if token == "" {
-			return "", errors.New("registry authentication returned an empty token")
+			return nil, errors.New("registry authentication returned an empty token")
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
 		response, err = http.DefaultClient.Do(request)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("registry returned %s", response.Status)
+		return nil, fmt.Errorf("registry returned %s", response.Status)
 	}
 	var payload struct {
 		Tags []string `json:"tags"`
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
+		return nil, err
+	}
+	tags := []string{}
+	for _, tag := range payload.Tags {
+		if _, ok := semverTag(tag); ok {
+			tags = append(tags, tag)
+		}
+	}
+	sort.Slice(tags, func(i, j int) bool {
+		left, _ := semverTag(tags[i])
+		right, _ := semverTag(tags[j])
+		if left == right {
+			return tags[i] < tags[j]
+		}
+		return newerVersion(left, right)
+	})
+	return tags, nil
+}
+
+func (k *kubeOrchestrator) latestImageTag(ctx context.Context) (string, error) {
+	tags, err := availableImageTags(ctx, k.imageRepository)
+	if err != nil || len(tags) == 0 {
 		return "", err
 	}
-	best := ""
-	var bestVersion [3]int
-	for _, tag := range payload.Tags {
-		version, ok := semverTag(tag)
-		if !ok || (best != "" && !newerVersion(version, bestVersion)) {
-			continue
-		}
-		best, bestVersion = tag, version
-	}
-	return best, nil
+	return tags[0], nil
 }
 
 func semverTag(tag string) ([3]int, bool) {
@@ -756,6 +768,17 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/image-tags" && r.Method == http.MethodGet {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		tags, err := availableImageTags(ctx, envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server"))
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "Could not load published image tags. Try again.")
+			return
+		}
+		writeJSON(w, http.StatusOK, tags)
+		return
+	}
 	if r.URL.Path == "/api/integrations" || strings.HasPrefix(r.URL.Path, "/api/integrations/") {
 		a.handleIntegrations(w, r)
 		return
@@ -926,15 +949,15 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, err.Error())
 		return
 	}
-	if request.MemoryLimitMiB == 0 {
-		request.MemoryLimitMiB = 2048
-	}
-	if request.CPULimitMillis == 0 {
-		request.CPULimitMillis = 1000
-	}
 	if err := validateCreate(request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if request.MemoryLimitMiB == 0 {
+		request.MemoryLimitMiB = (2 + request.MaxPlayers) * 1024
+	}
+	if request.CPULimitMillis == 0 {
+		request.CPULimitMillis = 500 * request.MaxPlayers
 	}
 	request.OwnerID, _ = normalizePlayerID(request.OwnerID)
 	if upload != nil && os.Getenv("RSDW_SAVE_UPLOADS_ENABLED") == "false" {
@@ -948,7 +971,7 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	server := Server{ID: release, Name: strings.TrimSpace(request.Name), Namespace: defaultValue(request.Namespace, "dragonwilds"), Release: release, Region: defaultValue(request.Region, "eu-central"), OwnerID: request.OwnerID, CurrentImage: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server") + ":" + defaultValue(request.ImageTag, envOr("RSDW_DEFAULT_IMAGE_TAG", "0.1.1")), MaxPlayers: request.MaxPlayers, Status: StatusStarting, LastRestart: time.Now().UTC().Format(time.RFC3339), LastSeen: time.Now().UTC().Format(time.RFC3339), Endpoint: release + ".dragonwilds.local:7777"}
+	server := Server{ID: release, Name: strings.TrimSpace(request.Name), Namespace: defaultValue(request.Namespace, "dragonwilds"), Release: release, OwnerID: request.OwnerID, CurrentImage: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server") + ":" + defaultValue(request.ImageTag, envOr("RSDW_DEFAULT_IMAGE_TAG", "0.1.1")), MaxPlayers: request.MaxPlayers, Status: StatusStarting, LastRestart: time.Now().UTC().Format(time.RFC3339), LastSeen: time.Now().UTC().Format(time.RFC3339), Endpoint: release + ".dragonwilds.local:7777"}
 	server.DesiredImage = server.CurrentImage
 	server.OwnershipToken, err = randomToken()
 	if err != nil {
@@ -1236,8 +1259,8 @@ func validateCreate(request CreateServerRequest) error {
 			return fmt.Errorf("%s must be a single line of at most 2048 characters", field)
 		}
 	}
-	if request.MemoryLimitMiB != 0 && (request.MemoryLimitMiB < 256 || request.MemoryLimitMiB > 65536) {
-		return errors.New("memoryLimitMiB must be between 256 and 65536")
+	if request.MemoryLimitMiB != 0 && (request.MemoryLimitMiB < 256 || request.MemoryLimitMiB > 67584) {
+		return errors.New("memoryLimitMiB must be between 256 and 67584")
 	}
 	if request.CPULimitMillis != 0 && (request.CPULimitMillis < 100 || request.CPULimitMillis > 64000) {
 		return errors.New("cpuLimitMillis must be between 100 and 64000")
