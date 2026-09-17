@@ -8,9 +8,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -169,10 +171,24 @@ func newOIDCAuth(ctx context.Context, settings oidcSettings, transport http.Roun
 		return nil, errors.New("OIDC requires an HTTPS issuer, HTTPS public origin without a path, client ID, client secret and groups claim")
 	}
 	origin, _ := url.Parse(settings.Origin)
-	origin.Host = strings.ToLower(origin.Host)
-	if origin.Port() == "443" {
-		origin.Host = strings.TrimSuffix(origin.Host, ":443")
+	host := strings.ToLower(origin.Hostname())
+	if strings.Contains(host, ":") {
+		address, err := netip.ParseAddr(host)
+		if err != nil || address.Zone() != "" || address.Is4In6() {
+			return nil, errors.New("OIDC public origin requires an unscoped IPv6 address without an embedded IPv4 address")
+		}
+		host = "[" + address.String() + "]"
 	}
+	if port := origin.Port(); port != "" {
+		number, err := strconv.ParseUint(port, 10, 16)
+		if err != nil {
+			return nil, errors.New("OIDC public origin has an invalid port")
+		}
+		if number != 443 {
+			host += ":" + strconv.FormatUint(number, 10)
+		}
+	}
+	origin.Host = host
 	settings.Origin = origin.String()
 	count := 0
 	for _, entries := range [][]string{settings.Policy.AdminSubjects, settings.Policy.ViewerSubjects, settings.Policy.AdminGroups, settings.Policy.ViewerGroups} {

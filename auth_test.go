@@ -554,6 +554,9 @@ func TestOIDCConfigurationFailsClosed(t *testing.T) {
 		"http origin":   func(s *oidcSettings) { s.Origin = "http://console.example" },
 		"origin path":   func(s *oidcSettings) { s.Origin += "/path" },
 		"origin query":  func(s *oidcSettings) { s.Origin += "?x=1" },
+		"origin port":   func(s *oidcSettings) { s.Origin = "https://console.example:65536" },
+		"origin zone":   func(s *oidcSettings) { s.Origin = "https://[fe80::1%25eth0]" },
+		"mapped ipv6":   func(s *oidcSettings) { s.Origin = "https://[::ffff:127.0.0.1]" },
 		"client":        func(s *oidcSettings) { s.ClientID = "" },
 		"secret":        func(s *oidcSettings) { s.ClientSecret = "" },
 		"policy":        func(s *oidcSettings) { s.Policy = rolePolicy{} },
@@ -616,6 +619,10 @@ func TestOIDCCanonicalPublicOrigin(t *testing.T) {
 		{"https://CONSOLE.Example:443", "https://console.example"},
 		{"https://CONSOLE.Example:8443", "https://console.example:8443"},
 		{"https://[::1]:443", "https://[::1]"},
+		{"https://console.example:0443", "https://console.example"},
+		{"https://console.example:08443", "https://console.example:8443"},
+		{"https://[0:0:0:0:0:0:0:1]", "https://[::1]"},
+		{"https://[0:0:0:0:0:0:0:1]:08443", "https://[::1]:8443"},
 	} {
 		settings := app.auth.settings
 		settings.Origin = tc.configured
