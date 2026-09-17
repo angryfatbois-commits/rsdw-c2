@@ -26,9 +26,11 @@ const pages = {
   events: ['Events', 'Search every server event in one place.'],
   maintenance: ['Maintenance', 'Make safe changes to your servers.'],
   users: ['Saved IDs', 'Manage reusable Dragonwilds player IDs.'],
+  integrations: ['Integrations', 'Send selected server alerts to Discord.'],
 };
 const state = {
   page: 'dashboard', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
+  integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   query: '', category: '', range: '60s', telemetry: null, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
   modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, request: null,
@@ -39,7 +41,7 @@ let searchTimer;
 let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
-const can = (capability) => state.capabilities[({users:'create', 'add-user':'create', 'edit-user':'create', 'delete-user':'create'})[capability] || capability] === true;
+const can = (capability) => state.capabilities[({users:'create', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations'})[capability] || capability] === true;
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
 
 function number(value, suffix = '') {
@@ -110,6 +112,7 @@ function clearProtectedState() {
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
   Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, identity:'', csrfToken:'', capabilities:{}, role:'denied'});
+  Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:''});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
   $('#modal-error').textContent = '';
@@ -350,6 +353,25 @@ function usersPage() {
   if (!can('users')) return dashboard();
   return `<section class="panel"><div class="panel-heading"><h2>Saved player IDs</h2><button class="primary" data-action="add-user" data-testid="add-user">${icon('plus')}Add saved ID</button></div><p class="inline-note">Use a saved ID when creating a server. Editing or deleting it leaves existing servers unchanged.</p>${state.users.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Player ID</th><th>Actions</th></tr></thead><tbody>${state.users.map((user) => `<tr><td>${escapeHTML(user.name)}</td><td class="mono">${escapeHTML(user.playerId)}</td><td class="actions"><button data-action="edit-user" data-id="${escapeHTML(user.id)}" data-testid="edit-user" aria-label="Edit ${escapeHTML(user.name)}">Edit</button><button class="danger" data-action="delete-user" data-id="${escapeHTML(user.id)}" data-testid="delete-user" aria-label="Delete ${escapeHTML(user.name)}">Delete</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No player IDs saved yet. Manual ID entry is always available when creating a server.</p>'}</section>`;
 }
+function integrationsPage() {
+  if (!can('integrations')) return dashboard();
+  return `<section class="panel"><div class="panel-heading"><h2>Discord bots</h2><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add Discord bot</button></div>
+    ${Object.entries(state.pendingRestarts).map(([id,op]) => `<p class="inline-note">Restart ${escapeHTML(op.id)} for ${escapeHTML(state.servers.find((s) => s.id === id)?.name || id)} awaits a fresh observation. Requested ${escapeHTML(date(op.requestedAt))}.${op.commandUncertain ? ' Command outcome is unknown.' : ''}</p>`).join('')}
+    <p class="inline-note">${state.integrationsDemo ? 'Demo mode simulates deliveries and restarts. No Discord messages are sent. ' : ''}Choose events for each bot. Player joined alerts are approximate count increases, with no player identities. Backup alerts are unavailable until a backup producer exists.</p>
+    ${state.integrations.length ? `<div class="table-wrap"><table><thead><tr><th>Bot</th><th>Target</th><th>Servers</th><th>Rules</th><th>Actions</th></tr></thead><tbody>${state.integrations.map((item) => `<tr><td>${escapeHTML(item.name)}<br>${item.enabled ? 'Enabled' : 'Disabled'}<br><small>Secret ${escapeHTML(item.secretRef.name)} / ${escapeHTML(item.secretRef.key)}</small></td><td>Guild ${escapeHTML(item.guildId)}<br>Channel ${escapeHTML(item.channelId)}</td><td>${item.serverIds.map((id) => escapeHTML(state.servers.find((server) => server.id === id)?.name || id)).join('<br>') || 'No servers'}</td><td>${state.alertRules.filter((rule) => item.rules[rule.kind]).map((rule) => escapeHTML(rule.label)).join('<br>') || 'No rules enabled'}</td><td class="actions"><button data-action="edit-integration" data-id="${escapeHTML(item.id)}" data-testid="edit-integration">Configure</button><button data-action="test-integration" data-id="${escapeHTML(item.id)}" data-testid="test-integration">Send test</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No Discord bots configured yet.</p>'}</section>
+    <section class="panel section-gap"><div class="panel-heading"><h2>Recent deliveries</h2></div><p class="inline-note">Uncertain means a message may have been sent. Check Discord before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>${state.deliveries.length ? `<div class="table-wrap"><table><thead><tr><th>Event</th><th>Bot</th><th>Delivery ID</th><th>Status</th><th>Result</th></tr></thead><tbody>${state.deliveries.map((d) => `<tr><td>${escapeHTML(d.event.message)}<br>${escapeHTML(d.event.serverName)}</td><td>${escapeHTML(state.integrations.find((i) => i.id === d.integrationId)?.name || d.integrationId)}</td><td class="mono">${escapeHTML(d.id)}</td><td>${escapeHTML(d.status)}<br>${d.attempts} attempts</td><td>${escapeHTML(d.result)}${d.status === 'retry' ? `<br>Next attempt ${escapeHTML(date(d.nextAttempt))}` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
+}
+function integrationForm(item) {
+  return `<p>Reference a pre-created Kubernetes Secret in the C2 namespace. Never enter a bot token here. Change the Secret name or key to rotate the reference. Sending a test also works while disabled.</p><div class="form-grid">
+    <label class="field">Display name<input name="name" data-testid="integration-name" required maxlength="80" value="${escapeHTML(item?.name || '')}"></label>
+    <label class="field">Alerts<select name="enabled" data-testid="integration-enabled"><option value="true" ${item?.enabled !== false ? 'selected' : ''}>Enabled</option><option value="false" ${item?.enabled === false ? 'selected' : ''}>Disabled</option></select></label>
+    <label class="field">Guild ID<input name="guildId" data-testid="integration-guild" required pattern="[0-9]{1,20}" value="${escapeHTML(item?.guildId || '')}"></label>
+    <label class="field">Channel ID<input name="channelId" data-testid="integration-channel" required pattern="[0-9]{1,20}" value="${escapeHTML(item?.channelId || '')}"></label>
+    <label class="field">Secret name<input name="secretName" data-testid="integration-secret-name" required maxlength="253" value="${escapeHTML(item?.secretRef.name || '')}" autocomplete="off"></label>
+    <label class="field">Secret key<input name="secretKey" data-testid="integration-secret-key" required maxlength="253" value="${escapeHTML(item?.secretRef.key || 'token')}" autocomplete="off"></label></div>
+    <fieldset><legend>Connected servers</legend>${state.servers.map((server) => `<label class="field"><span><input type="checkbox" name="integrationServer" value="${escapeHTML(server.id)}" ${item?.serverIds.includes(server.id) ? 'checked' : ''}> ${escapeHTML(server.name)}</span></label>`).join('') || '<p>No servers available.</p>'}</fieldset>
+    <fieldset><legend>Alert rules</legend>${state.alertRules.map((rule) => `<label class="field"><span><input type="checkbox" name="integrationRule" value="${escapeHTML(rule.kind)}" ${rule.available ? '' : 'disabled'} ${item?.rules[rule.kind] && rule.available ? 'checked' : ''}> ${escapeHTML(rule.label)}</span><small>${escapeHTML(rule.source)}</small></label>`).join('')}</fieldset>`;
+}
 function render() {
   if (state.authRequired) { lockedState(); return; }
   if (!can(state.page)) state.page = 'dashboard';
@@ -366,8 +388,8 @@ function render() {
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(server.name)}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
   $('#server-filter').disabled = !state.servers.length;
-  $('#server-filter').hidden = state.page === 'users';
-  $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance,users:usersPage})[state.page]();
+  $('#server-filter').hidden = ['users','integrations'].includes(state.page);
+  $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage})[state.page]();
   for (const key of openCharts) {
     const disclosure = document.querySelector(`details[data-chart="${CSS.escape(key)}"]`);
     if (disclosure) disclosure.open = true;
@@ -429,6 +451,7 @@ async function refresh() {
     const server = selectedServer();
     const requests = [eventsPromise];
     if (can('users')) requests.push(api('/api/users',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.users = result.users; }));
+    if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
     if (state.page === 'telemetry' && server) {
       requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(state.range)}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.telemetry = result; }));
       if (can('logs')) requests.push(loadLogs(controller.signal));
@@ -465,7 +488,14 @@ function openModal(action, userId = '') {
   $('#modal-submit').disabled = false;
   $('#modal-submit').classList.toggle('danger',action === 'restart' || action === 'delete-user');
   $('#modal-submit').classList.toggle('primary',action !== 'restart' && action !== 'delete-user');
-  if (['add-user','edit-user','delete-user'].includes(action)) {
+  if (action === 'add-integration' || action === 'edit-integration') {
+    const item = state.integrations.find((i) => i.id === userId);
+    if (action === 'edit-integration' && !item) throw new Error('This integration no longer exists. Refresh the list.');
+    state.modalIntegrationId = userId;
+    $('#modal-title').textContent = action === 'add-integration' ? 'Add Discord bot' : 'Configure Discord bot';
+    $('#modal-submit').textContent = 'Save integration';
+    $('#modal-body').innerHTML = integrationForm(item);
+  } else if (['add-user','edit-user','delete-user'].includes(action)) {
     const user = state.users.find((item) => item.id === userId);
     if (action !== 'add-user' && !user) throw new Error('This saved ID no longer exists. Refresh the list.');
     $('#modal-title').textContent = action === 'delete-user' ? 'Delete saved ID?' : action === 'edit-user' ? 'Edit saved ID' : 'Add saved ID';
@@ -521,6 +551,14 @@ async function submitModal(event) {
   const action = state.modalAction;
   let body, path, method = 'POST', message;
   switch (action) {
+    case 'add-integration': case 'edit-integration': {
+      const fields = new FormData($('#modal-form'));
+      body = {name:values.name,enabled:values.enabled === 'true',guildId:values.guildId,channelId:values.channelId,secretRef:{name:values.secretName,key:values.secretKey},serverIds:fields.getAll('integrationServer'),rules:Object.fromEntries(fields.getAll('integrationRule').map((kind) => [kind,true]))};
+      path = action === 'add-integration' ? '/api/integrations' : `/api/integrations/${encodeURIComponent(state.modalIntegrationId)}`;
+      method = action === 'add-integration' ? 'POST' : 'PUT';
+      message = 'Discord integration saved.';
+      break;
+    }
     case 'add-user': case 'edit-user':
       body = {name:values.name, playerId:values.playerId};
       path = action === 'add-user' ? '/api/users' : `/api/users/${encodeURIComponent(state.modalUserId)}`;
@@ -590,6 +628,14 @@ async function handleAction(event) {
       case 'close-login': closeLogin(); break;
       case 'add-server': case 'restart': case 'update': openModal(action); break;
       case 'add-user': case 'edit-user': case 'delete-user': openModal(action, button.dataset.id); break;
+      case 'add-integration': case 'edit-integration': openModal(action, button.dataset.id); break;
+      case 'test-integration':
+        if (!can('integrations')) return;
+        button.disabled = true;
+        await api(`/api/integrations/${encodeURIComponent(button.dataset.id)}/test`,{method:'POST',body:'{}'});
+        await refresh();
+        notice('Test queued. Check its delivery status below.');
+        break;
       case 'close-modal': closeModal(); break;
       case 'retry': await refresh(); break;
       case 'fleet-filter': state.fleetFilter = button.dataset.value; render(); break;

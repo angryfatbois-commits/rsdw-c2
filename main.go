@@ -42,6 +42,7 @@ const (
 )
 
 type Server struct {
+	RestartOperation string `json:"-"`
 	ServerSettings
 	SaveSeed              *SaveSeed                `json:"saveSeed,omitempty"`
 	Metrics               map[string]MetricReading `json:"metrics"`
@@ -94,21 +95,29 @@ func (s Server) MarshalJSON() ([]byte, error) {
 }
 
 type Event struct {
-	ID         string    `json:"id"`
-	Timestamp  time.Time `json:"timestamp"`
-	ServerID   string    `json:"serverId"`
-	ServerName string    `json:"serverName"`
-	Category   string    `json:"category"`
-	Severity   string    `json:"severity"`
-	Message    string    `json:"message"`
-	Details    string    `json:"details"`
+	Kind        EventKind `json:"kind,omitempty"`
+	Source      string    `json:"source,omitempty"`
+	Accuracy    string    `json:"accuracy,omitempty"`
+	OperationID string    `json:"operationId,omitempty"`
+	ID          string    `json:"id"`
+	Timestamp   time.Time `json:"timestamp"`
+	ServerID    string    `json:"serverId"`
+	ServerName  string    `json:"serverName"`
+	Category    string    `json:"category"`
+	Severity    string    `json:"severity"`
+	Message     string    `json:"message"`
+	Details     string    `json:"details"`
 }
 
 type State struct {
-	Servers      map[string]Server      `json:"servers"`
-	Events       []Event                `json:"events"`
-	Users        map[string]User        `json:"users"`
-	PendingSeeds map[string]PendingSeed `json:"pendingSeeds,omitempty"`
+	Integrations   map[string]DiscordIntegration `json:"integrations"`
+	Producers      map[string]AlertProducer      `json:"alertProducers"`
+	Deliveries     map[string]Delivery           `json:"deliveries"`
+	DiscordRetryAt time.Time                     `json:"discordRetryAt,omitempty"`
+	Servers        map[string]Server             `json:"servers"`
+	Events         []Event                       `json:"events"`
+	Users          map[string]User               `json:"users"`
+	PendingSeeds   map[string]PendingSeed        `json:"pendingSeeds,omitempty"`
 }
 
 type User struct {
@@ -183,6 +192,7 @@ type Store struct {
 
 func NewStore(path string, demo bool) (*Store, error) {
 	s := &Store{path: path, state: State{Servers: map[string]Server{}, Users: map[string]User{}}}
+	s.state.initIntegrations()
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := json.Unmarshal(data, &s.state); err != nil {
@@ -193,6 +203,10 @@ func NewStore(path string, demo bool) (*Store, error) {
 			}
 			if s.state.Users == nil {
 				s.state.Users = map[string]User{}
+			}
+			s.state.initIntegrations()
+			if err := s.Update(func(state *State) error { state.recoverAlerts(); return nil }); err != nil {
+				return nil, err
 			}
 			return s, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -212,7 +226,42 @@ func (s *Store) Snapshot() State {
 }
 
 func (s State) clone() State {
-	return State{Servers: maps.Clone(s.Servers), Users: maps.Clone(s.Users), Events: append([]Event(nil), s.Events...), PendingSeeds: maps.Clone(s.PendingSeeds)}
+	next := s
+	next.Servers, next.Users, next.PendingSeeds = maps.Clone(s.Servers), maps.Clone(s.Users), maps.Clone(s.PendingSeeds)
+	next.Events = append([]Event(nil), s.Events...)
+	for id, server := range next.Servers {
+		server.Metrics = maps.Clone(server.Metrics)
+		for key, reading := range server.Metrics {
+			if reading.Value != nil {
+				value := *reading.Value
+				reading.Value = &value
+			}
+			if reading.ObservedAt != nil {
+				at := *reading.ObservedAt
+				reading.ObservedAt = &at
+			}
+			server.Metrics[key] = reading
+		}
+		if server.SaveSeed != nil {
+			seed := *server.SaveSeed
+			server.SaveSeed = &seed
+		}
+		next.Servers[id] = server
+	}
+	next.Integrations, next.Producers, next.Deliveries = maps.Clone(s.Integrations), maps.Clone(s.Producers), maps.Clone(s.Deliveries)
+	for id, integration := range next.Integrations {
+		integration.ServerIDs = append([]string{}, integration.ServerIDs...)
+		integration.Rules = maps.Clone(integration.Rules)
+		next.Integrations[id] = integration
+	}
+	for id, producer := range next.Producers {
+		if producer.Restart != nil {
+			restart := *producer.Restart
+			producer.Restart = &restart
+		}
+		next.Producers[id] = producer
+	}
+	return next
 }
 
 func (s *Store) Update(fn func(*State) error) error {
@@ -247,11 +296,24 @@ func (s *Store) Update(fn func(*State) error) error {
 		tmp.Close()
 		return fmt.Errorf("protect state temp file: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync state: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close state temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, s.path); err != nil {
 		return fmt.Errorf("replace state: %w", err)
+	}
+	directory, err := os.Open(filepath.Dir(s.path))
+	if err != nil {
+		return fmt.Errorf("open state directory: %w", err)
+	}
+	err = directory.Sync()
+	directory.Close()
+	if err != nil {
+		return fmt.Errorf("sync state directory: %w", err)
 	}
 	s.state = next
 	return nil
@@ -458,7 +520,8 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 }
 
 func (k *kubeOrchestrator) Restart(ctx context.Context, server Server) error {
-	_, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "rollout", "restart", "deployment/"+deploymentName(server.Release))
+	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"annotations": map[string]string{restartAnnotation: server.RestartOperation}}}}})
+	_, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "patch", "deployment/"+deploymentName(server.Release), "--type=merge", "-p", string(patch))
 	return err
 }
 
@@ -595,14 +658,16 @@ func newerVersion(candidate, current [3]int) bool {
 }
 
 type App struct {
-	createMu      sync.Mutex
-	store         *Store
-	orchestrator  Orchestrator
-	demo          bool
-	auth          *Auth
-	imageRepo     string
-	telemetryOnce sync.Once
-	telemetry     *telemetryStore
+	deliveryMu       sync.Mutex
+	discordTransport http.RoundTripper
+	createMu         sync.Mutex
+	store            *Store
+	orchestrator     Orchestrator
+	demo             bool
+	auth             *Auth
+	imageRepo        string
+	telemetryOnce    sync.Once
+	telemetry        *telemetryStore
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -625,6 +690,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/integrations" || strings.HasPrefix(r.URL.Path, "/api/integrations/") {
+		a.handleIntegrations(w, r)
+		return
+	}
 	if r.URL.Path == "/api/bootstrap" && r.Method == http.MethodGet {
 		a.handleBootstrap(w, r)
 		return
@@ -952,27 +1021,6 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "route not found")
 }
 
-func (a *App) handleRestart(w http.ResponseWriter, r *http.Request, server Server) {
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	if err := a.orchestrator.Restart(ctx, server); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	server.Status = StatusStarting
-	server.LastRestart = time.Now().UTC().Format(time.RFC3339)
-	server.LastSeen = time.Now().UTC().Format(time.RFC3339)
-	if err := a.store.Update(func(state *State) error {
-		state.Servers[server.ID] = server
-		appendEvent(state, server, "system", "warning", "Restart requested", "The server is restarting")
-		return nil
-	}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, server)
-}
-
 func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server) {
 	var request UpdateServerRequest
 	if err := decodeJSON(r, &request); err != nil {
@@ -1235,6 +1283,7 @@ func main() {
 	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth}
 	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
+	go app.runDeliveries(context.Background())
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	listener, err := net.Listen("tcp", addr)

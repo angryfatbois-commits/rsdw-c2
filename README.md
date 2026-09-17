@@ -164,6 +164,8 @@ The checks cover Go tests, signed-token OIDC flows and rejection cases, the buil
 
 With Playwright and Chromium available, run `node tests/users-browser.cjs` after `bash scripts/verify.sh` for the authenticated Saved IDs browser flow. Set `NODE_PATH` if Playwright is installed outside the project, and `RSDW_TEST_CHROMIUM` to use a specific Chromium executable. The test uses temporary state and demo mode without a Kubernetes cluster.
 
+Admins can configure Discord bots in Integrations with Kubernetes Secret references, server associations, and event rules. See [Discord alerts](docs/integrations.md) for setup, event definitions, and delivery guarantees. Run `node tests/integrations-browser.cjs` for its demo configuration and delivery flow.
+
 The workflow has additional offline regression tests for its own publication logic. These use fake registry commands, real local Helm packaging, and the configured release-notes generator with a literal `feat(chart)` commit. They do not create Git tags, contact GHCR, or publish anything.
 
 ```sh

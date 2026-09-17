@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"math"
 	"sync"
 	"time"
@@ -90,11 +91,15 @@ func freshMetrics(metrics map[string]MetricReading, now time.Time) map[string]Me
 }
 
 type observation struct {
-	at      time.Time
-	metrics map[string]MetricReading
-	status  Status
-	image   string
-	network *networkCounters
+	runtime          string
+	runtimeStarted   time.Time
+	restartOperation string
+	health           string
+	at               time.Time
+	metrics          map[string]MetricReading
+	status           Status
+	image            string
+	network          *networkCounters
 }
 
 type telemetryStore struct {
@@ -169,6 +174,14 @@ func (a *App) collectTelemetry(ctx context.Context) {
 				retained[len(history)] = result
 				cache.history[server.ID] = retained
 				cache.mu.Unlock()
+				if err := a.store.Update(func(state *State) error {
+					if current, ok := state.Servers[server.ID]; ok {
+						observeAlerts(state, current, result, time.Now().UTC())
+					}
+					return nil
+				}); err != nil {
+					log.Print("could not persist alert observations")
+				}
 			}
 		}()
 	}

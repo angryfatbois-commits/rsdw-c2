@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
 
@@ -227,20 +227,27 @@ test('identity changes clear protected data and reject late API and log response
   vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.authUI = {state, api, loadLogs, applyAuth, logout, discoverAuth, refresh};', sandbox);
   const ui = sandbox.authUI;
   ui.applyAuth({mode:'oidc',authenticated:true,subject:'operator',role:'admin',csrfToken:'admin-session',required:true,capabilities:{dashboard:true,telemetry:true,logs:true,events:true}});
-  Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], users:[{id:'saved', name:'Alice', playerId:'0123456789abcdef0123456789abcdef'}], telemetry:{secret:true}, selectedEventId:'secret', modalAction:'edit-user', modalUserId:'saved', modalServerId:'world'});
+  Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], users:[{id:'saved', name:'Alice', playerId:'0123456789abcdef0123456789abcdef'}], integrations:[{name:'private bot'}], deliveries:[{id:'private delivery'}], alertRules:[{kind:'server_down'}], pendingRestarts:{world:{id:'operation'}}, modalIntegrationId:'private bot', telemetry:{secret:true}, selectedEventId:'secret', modalAction:'edit-user', modalUserId:'saved', modalServerId:'world'});
   element('#modal-body').innerHTML = 'secret settings';
   const logs = ui.loadLogs();
   const events = ui.api('/api/events');
   const users = ui.api('/api/users');
+  const integrations = ui.api('/api/integrations');
   const logRejected = assert.rejects(logs, {name:'AbortError'});
   const eventsRejected = assert.rejects(events, {name:'AbortError'});
   const usersRejected = assert.rejects(users, {name:'AbortError'});
+  const integrationsRejected = assert.rejects(integrations, {name:'AbortError'});
   ui.applyAuth({mode:'oidc',authenticated:true,subject:'reader',role:'viewer',csrfToken:'viewer-session',required:true,capabilities:{dashboard:true,telemetry:true}});
   for (const request of requests) request.resolve({status:200,ok:true,headers:{get:()=> 'admin-session'},text:async()=>JSON.stringify({lines:['late secret'],events:[{message:'late secret'}]})});
-  await Promise.all([logRejected, eventsRejected, usersRejected]);
+  await Promise.all([logRejected, eventsRejected, usersRejected, integrationsRejected]);
   assert.equal(ui.state.logs, '');
   assert.equal(ui.state.events.length, 0);
   assert.equal(ui.state.users.length, 0);
+  assert.equal(ui.state.integrations.length, 0);
+  assert.equal(ui.state.deliveries.length, 0);
+  assert.equal(ui.state.alertRules.length, 0);
+  assert.equal(Object.keys(ui.state.pendingRestarts).length, 0);
+  assert.equal(ui.state.modalIntegrationId, '');
   assert.equal(ui.state.modalUserId, '');
   assert.equal(ui.state.servers.length, 0);
   assert.equal(ui.state.telemetry, null);

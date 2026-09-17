@@ -196,8 +196,26 @@ func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
 		}
 	}
 	after, _ := os.ReadFile(app.store.path)
-	if string(before) != string(after) {
-		t.Fatal("collection or reads changed persisted settings")
+	var beforeState, afterState State
+	if json.Unmarshal(before, &beforeState) != nil || json.Unmarshal(after, &afterState) != nil {
+		t.Fatal("invalid state")
+	}
+	if !reflect.DeepEqual(beforeState.Servers, afterState.Servers) || !reflect.DeepEqual(beforeState.Events, afterState.Events) {
+		t.Fatal("collection or reads changed persisted settings or emitted baseline events")
+	}
+	if !afterState.Producers[server.ID].HealthyBaseline {
+		t.Fatal("collection did not persist the alert baseline")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/bootstrap", nil)
+	request.Header.Set("Authorization", "Bearer admin-token")
+	response := httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatal(response.Body.String())
+	}
+	afterRead, _ := os.ReadFile(app.store.path)
+	if string(afterRead) != string(after) {
+		t.Fatal("browser read mutated state")
 	}
 	restarted := &App{store: app.store, orchestrator: app.orchestrator}
 	fresh := restarted.telemetryFor(server, "1h")
