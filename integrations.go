@@ -17,17 +17,18 @@ import (
 type EventKind string
 
 const (
-	RestartRequested   EventKind = "restart_requested"
-	RestartCompleted   EventKind = "restart_completed"
-	RestartFailed      EventKind = "restart_failed"
-	PlayerJoined       EventKind = "player_joined"
-	PlayerLimitReached EventKind = "player_limit_reached"
-	ServerDown         EventKind = "server_down"
-	ServerRecovered    EventKind = "server_recovered"
-	BackupStarted      EventKind = "backup_started"
-	BackupCompleted    EventKind = "backup_completed"
-	BackupFailed       EventKind = "backup_failed"
-	IntegrationTest    EventKind = "integration_test"
+	RestartRequested      EventKind = "restart_requested"
+	RestartCompleted      EventKind = "restart_completed"
+	RestartFailed         EventKind = "restart_failed"
+	PlayerJoined          EventKind = "player_joined"
+	PlayerLimitReached    EventKind = "player_limit_reached"
+	ServerDown            EventKind = "server_down"
+	ServerRecovered       EventKind = "server_recovered"
+	BackupStarted         EventKind = "backup_started"
+	BackupCompleted       EventKind = "backup_completed"
+	BackupFailed          EventKind = "backup_failed"
+	IntegrationTest       EventKind = "integration_test"
+	RebootScheduleChanged EventKind = "reboot_schedule_changed"
 )
 
 type AlertRule struct {
@@ -189,10 +190,7 @@ func emitAlert(state *State, server Server, kind EventKind, operation, details s
 		severity = "error"
 	}
 	event := Event{ID: randomID(), Timestamp: at, ServerID: server.ID, ServerName: worldLabel(server), Category: category, Severity: severity, Message: rule.Label, Details: details, Kind: kind, Source: rule.Source, Accuracy: rule.Accuracy, OperationID: operation}
-	state.Events = append(state.Events, event)
-	if len(state.Events) > 500 {
-		state.Events = state.Events[len(state.Events)-500:]
-	}
+	addEvent(state, event)
 	for _, integration := range state.Integrations {
 		if integration.Enabled && integration.Rules[kind] && slices.Contains(integration.ServerIDs, server.ID) {
 			queueDeliveryForNewEvent(state, integration, event)
