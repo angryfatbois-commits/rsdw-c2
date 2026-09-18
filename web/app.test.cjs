@@ -480,7 +480,7 @@ test('stopped telemetry does not fetch logs or show a stale-data error', async (
   const response = (body, status = 200) => ({status, ok:status >= 200 && status < 300, headers:{get:()=>null}, text:async()=>JSON.stringify(body)});
   const sandbox = vm.createContext({
     DOMException, AbortController, URLSearchParams, clearTimeout, setTimeout,
-    document:{querySelector:element}, sessionStorage:{getItem:()=>'', removeItem(){}},
+    document:{querySelector:element}, sessionStorage:{getItem:()=>'', removeItem(){}}, location:{hash:'#dashboard'},
     fetch: async (path) => {
       paths.push(path);
       if (path === '/api/auth') return response(auth);
