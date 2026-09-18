@@ -6,7 +6,7 @@ const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
 vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
-state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
+state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, stop:true, start:true, update:true, logs:true, updateCheck:true};
 
 state.servers = [{id:'world', name:'Test world', status:'online', players:2, maxPlayers:4, metricsAvailable:false}];
 state.telemetry = {samples:[], healthChecks:[], metricDefinitions:[{metric:'tick_rate', description:'Ticks <per> second'}]};
@@ -121,7 +121,13 @@ assert.match(html, /Recent changes/);
 assert.match(html, /Audit trail/);
 assert.match(html, /Image updated/);
 assert.doesNotMatch(html, /Other world restarted|Backup then restart|Create window/);
-for (const id of ['restart-server','update-image','check-update','maintenance-events']) assert.ok(html.includes(`data-testid="${id}"`));
+for (const id of ['restart-server','update-image','check-update','maintenance-events','stop-server']) assert.ok(html.includes(`data-testid="${id}"`));
+assert.doesNotMatch(html, /data-testid="start-server"/);
+state.servers[0].status = 'stopped';
+html = maintenance();
+assert.ok(html.includes('data-testid="start-server"'));
+assert.doesNotMatch(html, /data-testid="(?:restart-server|update-image|check-update|stop-server)"/);
+state.servers[0].status = 'online';
 state.displayTimezone = 'America/New_York';
 state.reboots = [{id:'schedule-1', serverId:'world', serverName:'Test world', mode:'daily', dailyTimes:['05:00','17:00'], executionTimezone:'UTC', enabled:true, nextRun:'2026-09-16T12:00:00Z', lastResult:'awaiting_reconciliation', lastReason:'Waiting for telemetry'}];
 html = context.ui.rebootsPage();
@@ -294,6 +300,7 @@ for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance, 
   html = render();
   assert.doesNotMatch(html, /Alice|0123456789abcdef|data-action="(?:add-user|edit-user|delete-user)"/);
   assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output|event-search|event-range|export-events|load-older-events)"/);
+  assert.doesNotMatch(html, /data-testid="(?:stop-server|start-server)"/);
 }
 html = telemetry();
 assert.match(html, /data-testid="export-telemetry"/);
