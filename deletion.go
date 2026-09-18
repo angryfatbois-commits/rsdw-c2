@@ -180,6 +180,11 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 	if err := a.store.Update(func(state *State) error {
 		delete(state.Servers, id)
 		delete(state.Producers, id)
+		for scheduleID, schedule := range state.RebootSchedules {
+			if schedule.Definition.ServerID == id {
+				delete(state.RebootSchedules, scheduleID)
+			}
+		}
 		for key, integration := range state.Integrations {
 			integration.ServerIDs = slices.DeleteFunc(integration.ServerIDs, func(value string) bool { return value == id })
 			state.Integrations[key] = integration

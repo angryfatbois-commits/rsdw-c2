@@ -73,6 +73,8 @@ spec:
               value: {{ .Values.cluster.region | quote }}
             - name: RSDW_STATE_FILE
               value: /var/lib/rsdw-c2/state.json
+            - name: RSDW_STATE_PERSISTENT
+              value: {{ .Values.state.persistence.enabled | quote }}
             - name: RSDW_SAVE_UPLOADS_ENABLED
               value: {{ .Values.state.persistence.enabled | quote }}
             - name: RSDW_AUTH_MODE

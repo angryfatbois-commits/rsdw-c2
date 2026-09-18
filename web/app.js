@@ -7,6 +7,7 @@ const icons = {
   telemetry: '<path d="M4 20V13m5 7V7m6 13V3m5 17V10"/>',
   events: '<rect x="4" y="4" width="16" height="17" rx="2"/><path d="M8 2v4m8-4v4M4 10h16m-12 4h8m-8 3h5"/>',
   maintenance: '<path d="m14 6 4 4m-2-7a6 6 0 0 0-7 8L3 17a3 3 0 0 0 4 4l6-6a6 6 0 0 0 8-7l-4 4-5-5Z"/>',
+  reboots: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2M5 4l-2 2m16-2 2 2"/>',
   server: '<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/>',
   pulse: '<path d="M2 12h5l3-8 4 16 3-8h5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',
@@ -27,11 +28,13 @@ const pages = {
   maintenance: ['Maintenance', 'Make safe changes to your servers.'],
   users: ['Saved IDs', 'Manage reusable Dragonwilds player IDs.'],
   integrations: ['Integrations', 'Send selected server alerts to Discord.'],
+  reboots: ['Reboots', 'Schedule per-server restarts with predictable timezone rules.'],
 };
 const state = {
   deletions: {},
   page: 'dashboard', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
+  reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
   query: '', category: '', range: '60s', telemetry: null, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
   modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, modalInitialSettings: {}, request: null,
@@ -42,7 +45,7 @@ let searchTimer;
 let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
-const can = (capability) => state.capabilities[({users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations'})[capability] || capability] === true;
+const can = (capability) => state.capabilities[({users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
 
 function number(value, suffix = '') {
@@ -65,7 +68,46 @@ function duration(value) {
 function date(value, timeOnly = false) {
   if (!value) return '—';
   const parsed = new Date(value);
-  return Number.isNaN(parsed.valueOf()) ? '—' : timeOnly ? parsed.toLocaleTimeString() : parsed.toLocaleString();
+  if (Number.isNaN(parsed.valueOf())) return '—';
+  const timeZone = validDisplayTimezone() || undefined;
+  const options = timeZone ? {timeZone} : undefined;
+  return timeOnly ? parsed.toLocaleTimeString(undefined, options) : parsed.toLocaleString(undefined, options);
+}
+function validTimezone(value) {
+  if (!value) return false;
+  try { new Intl.DateTimeFormat(undefined, {timeZone:value}).format(); return true; } catch { return false; }
+}
+function validDisplayTimezone() { return validTimezone(state.displayTimezone) ? state.displayTimezone : ''; }
+function browserTimezone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+function timezoneOptions(selected = state.displayTimezone || browserTimezone()) {
+  let zones = ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Europe/Berlin', 'Asia/Tokyo', 'Australia/Sydney'];
+  try { if (typeof Intl.supportedValuesOf === 'function') zones = ['UTC', ...Intl.supportedValuesOf('timeZone')]; } catch {}
+  if (selected && !zones.includes(selected)) zones.unshift(selected);
+  return [...new Set(zones)].sort((a, b) => a === selected ? -1 : b === selected ? 1 : a.localeCompare(b));
+}
+function displayPreferenceKey() { return `rsdw-display-timezone:${state.authMode}:${state.authSubject || 'unknown'}`; }
+function loadDisplayTimezone() {
+  const fallback = browserTimezone();
+  let saved = '';
+  try { saved = localStorage.getItem(displayPreferenceKey()) || ''; } catch {}
+  state.displayTimezone = validTimezone(saved) ? saved : validTimezone(fallback) ? fallback : '';
+}
+function saveDisplayTimezone(value) {
+  if (!validTimezone(value)) return;
+  state.displayTimezone = value;
+  try { localStorage.setItem(displayPreferenceKey(), value); } catch {}
+}
+function zonedDate(value, zone) {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf())) return '—';
+  const selected = validTimezone(zone) ? zone : validDisplayTimezone() || 'UTC';
+  let formatted;
+  try { formatted = parsed.toLocaleString(undefined, {timeZone:selected, timeZoneName:'shortOffset'}); }
+  catch { formatted = parsed.toLocaleString(undefined, {timeZone:selected}); }
+  return `${formatted} (${selected})`;
 }
 function status(value = 'unknown') {
   const known = ['online', 'starting', 'attention', 'stopped', 'unknown', 'warning', 'critical', 'error', 'success', 'healthy'];
@@ -110,7 +152,12 @@ async function api(path, options = {}) {
   }
   let data;
   try { data = text ? JSON.parse(text) : {}; } catch { throw new Error('The server returned an unreadable response. Please try again.'); }
-  if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : `Request failed (${response.status}). Please try again.`);
+  if (!response.ok) {
+    const error = new Error(typeof data.error === 'string' ? data.error : `Request failed (${response.status}). Please try again.`);
+    error.status = response.status;
+    error.fields = data && typeof data.fields === 'object' ? data.fields : {};
+    throw error;
+  }
   return data;
 }
 function clearProtectedState() {
@@ -119,8 +166,8 @@ function clearProtectedState() {
   state.request?.abort();
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, identity:'', csrfToken:'', capabilities:{}, role:'denied'});
-  Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:''});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0});
+  Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:'', reboots:[], rebootHistory:[], rebootsAvailable:true, rebootsDemo:false});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
   $('#modal-error').textContent = '';
@@ -161,14 +208,16 @@ function requireLogin(openDialog = true) {
 }
 function applyAuth(auth) {
   const identity = auth.authenticated ? `${auth.mode}:${auth.subject}:${auth.role}:${auth.csrfToken}` : '';
-  if (state.identity !== identity) clearProtectedState();
+  const changed = state.identity !== identity;
+  if (changed) clearProtectedState();
   state.authMode = auth.mode;
   if (auth.mode === 'oidc') {
     try { sessionStorage.removeItem(tokenKey); } catch {}
     $('#login-dialog').close();
   }
   if (!auth.authenticated) { requireLogin(false); return false; }
-  Object.assign(state, {identity, csrfToken:auth.csrfToken || '', role:auth.role, capabilities:auth.capabilities || {}, authRequired:false});
+  Object.assign(state, {identity, authSubject:auth.subject || (auth.mode === 'token' ? 'token-admin' : ''), csrfToken:auth.csrfToken || '', role:auth.role, capabilities:auth.capabilities || {}, authRequired:false});
+  if (changed || !validDisplayTimezone()) loadDisplayTimezone();
   $('.page-controls').hidden = false;
   $('#session-controls').hidden = !auth.required;
   $('#session-role').textContent = auth.role === 'admin' ? 'Admin' : 'Viewer';
@@ -347,7 +396,7 @@ function eventsPage() {
   const selected = state.events.find((event) => event.id === state.selectedEventId);
   const warnings = state.events.filter((event) => event.severity === 'warning').length;
   const critical = state.events.filter((event) => event.severity === 'critical' || event.severity === 'error').length;
-  return `<div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search events</span><input type="search" id="event-search" data-testid="event-search" placeholder="Search events…" value="${escapeHTML(state.query)}"></label><button data-action="export-events" data-testid="export-events">${icon('download')}Export CSV</button></div><div class="stats">${stat('Matching events',state.events.length,'events')}${stat('Warnings',warnings,'warning','amber')}${stat('Critical',critical,'pulse',critical?'red':'')}${stat('Last event',state.events[0] ? new Date(state.events[0].timestamp).toLocaleTimeString() : '—','clock')}</div><div class="split"><section class="panel"><div class="panel-heading"><h2>Event stream</h2></div><div class="toolbar chips" aria-label="Event category">${[['','All'],['system','System'],['player','Players'],['health','Health'],['update','Updates']].map(([value,label])=>`<button data-action="event-category" data-value="${value}" data-testid="category-${value || 'all'}" aria-pressed="${state.category===value}">${label}</button>`).join('')}</div>${eventTable(state.events,true)}</section><section class="panel"><div class="panel-heading"><h2>Event details</h2></div>${selected ? `<dl class="detail-list"><div><dt>Event</dt><dd>${escapeHTML(selected.message)}</dd></div><div><dt>Server</dt><dd>${escapeHTML(eventServerLabel(selected))}</dd></div><div><dt>Severity</dt><dd>${status(selected.severity || 'info')}</dd></div><div><dt>Time</dt><dd>${escapeHTML(date(selected.timestamp))}</dd></div></dl><pre class="event-json" tabindex="0" aria-label="Event details JSON">${escapeHTML(typeof selected.details === 'string' ? selected.details : JSON.stringify(selected.details || {},null,2))}</pre><button data-action="copy-event" data-testid="copy-event">Copy event JSON</button>` : '<p class="no-results">Select an event to inspect its details.</p>'}</section></div>`;
+  return `<div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search events</span><input type="search" id="event-search" data-testid="event-search" placeholder="Search events…" value="${escapeHTML(state.query)}"></label><button data-action="export-events" data-testid="export-events">${icon('download')}Export CSV</button></div><div class="stats">${stat('Matching events',state.events.length,'events')}${stat('Warnings',warnings,'warning','amber')}${stat('Critical',critical,'pulse',critical?'red':'')}${stat('Last event',state.events[0] ? date(state.events[0].timestamp,true) : '—','clock')}</div><div class="split"><section class="panel"><div class="panel-heading"><h2>Event stream</h2></div><div class="toolbar chips" aria-label="Event category">${[['','All'],['system','System'],['player','Players'],['health','Health'],['update','Updates']].map(([value,label])=>`<button data-action="event-category" data-value="${value}" data-testid="category-${value || 'all'}" aria-pressed="${state.category===value}">${label}</button>`).join('')}</div>${eventTable(state.events,true)}</section><section class="panel"><div class="panel-heading"><h2>Event details</h2></div>${selected ? `<dl class="detail-list"><div><dt>Event</dt><dd>${escapeHTML(selected.message)}</dd></div><div><dt>Server</dt><dd>${escapeHTML(eventServerLabel(selected))}</dd></div><div><dt>Severity</dt><dd>${status(selected.severity || 'info')}</dd></div><div><dt>Time</dt><dd>${escapeHTML(date(selected.timestamp))}</dd></div></dl><pre class="event-json" tabindex="0" aria-label="Event details JSON">${escapeHTML(typeof selected.details === 'string' ? selected.details : JSON.stringify(selected.details || {},null,2))}</pre><button data-action="copy-event" data-testid="copy-event">Copy event JSON</button>` : '<p class="no-results">Select an event to inspect its details.</p>'}</section></div>`;
 }
 function maintenance() {
   if (!can('maintenance')) return dashboard();
@@ -395,6 +444,123 @@ function integrationForm(item) {
     <fieldset><legend>Connected servers</legend>${state.servers.map((server) => `<label class="field"><span><input type="checkbox" name="integrationServer" value="${escapeHTML(server.id)}" ${item?.serverIds.includes(server.id) ? 'checked' : ''}> ${escapeHTML(serverLabel(server))}</span></label>`).join('') || '<p>No servers available.</p>'}</fieldset>
     <fieldset><legend>Alert rules</legend>${state.alertRules.map((rule) => `<label class="field"><span><input type="checkbox" name="integrationRule" value="${escapeHTML(rule.kind)}" ${rule.available ? '' : 'disabled'} ${item?.rules[rule.kind] && rule.available ? 'checked' : ''}> ${escapeHTML(rule.label)}</span><small>${escapeHTML(rule.source)}</small></label>`).join('')}</fieldset>`;
 }
+function rebootResultLabel(result) {
+  return ({awaiting_reconciliation:'Awaiting reconciliation', completed:'Completed', failed:'Failed', skipped:'Skipped', missed:'Missed during downtime', uncertain:'Uncertain'})[result] || 'No execution yet';
+}
+function rebootResult(result) {
+  const tone = ({completed:'success',failed:'error',skipped:'warning',missed:'warning',uncertain:'unknown',awaiting_reconciliation:'warning'})[result] || 'unknown';
+  return `<span class="result result-${tone}">${escapeHTML(rebootResultLabel(result))}</span>`;
+}
+function rebootTimingLabel(schedule) {
+  if (schedule.mode === 'cron') return `Cron <span class="mono">${escapeHTML(schedule.cron)}</span>`;
+  if (schedule.mode === 'interval') return `Every ${escapeHTML(schedule.intervalValue)} ${escapeHTML(schedule.intervalUnit)}`;
+  return `Daily ${escapeHTML((schedule.dailyTimes || []).join(', '))}`;
+}
+function timezoneSelect(name, selected, testId) {
+  return `<select name="${name}" id="${name}" data-testid="${testId || name}" required>${timezoneOptions(selected).map((zone) => `<option value="${escapeHTML(zone)}" ${zone === selected ? 'selected' : ''}>${escapeHTML(zone)}</option>`).join('')}</select>`;
+}
+function dailyTimeRow(value, index) {
+  return `<div class="daily-time-row"><label class="field"><span>Time ${index + 1}</span><input type="time" name="dailyTime" data-testid="reboot-daily-time" value="${escapeHTML(value)}" required aria-describedby="dailyTimes-error"></label><button type="button" class="subtle" data-action="remove-daily-time" aria-label="Remove time ${index + 1}">Remove</button></div>`;
+}
+function updateDailyTimeControls() {
+  const rows = Array.from(document.querySelectorAll('#dailyTimes .daily-time-row'));
+  rows.forEach((row, index) => {
+    row.querySelector('span').textContent = `Time ${index + 1}`;
+    row.querySelector('button').disabled = rows.length === 1;
+    row.querySelector('button').setAttribute('aria-label', `Remove time ${index + 1}`);
+  });
+}
+function addDailyTime() {
+  const container = $('#dailyTimes');
+  if (!container) return;
+  container.insertAdjacentHTML('beforeend', dailyTimeRow('', container.querySelectorAll('.daily-time-row').length));
+  updateDailyTimeControls();
+  container.lastElementChild.querySelector('input')?.focus();
+}
+function removeDailyTime(button) {
+  const container = $('#dailyTimes');
+  if (!container || container.querySelectorAll('.daily-time-row').length === 1) return;
+  button.closest('.daily-time-row')?.remove();
+  updateDailyTimeControls();
+}
+function rebootsPage() {
+  const selected = state.displayTimezone || browserTimezone();
+  const availability = state.rebootsAvailable ? '' : '<p class="notice info" role="status">Scheduled execution is disabled for this deployment. Existing schedules remain visible so you can inspect, disable, or delete them.</p>';
+  const demo = state.rebootsDemo ? '<p class="notice info">Demo mode simulates scheduled restarts. No Kubernetes operation is sent.</p>' : '';
+  const schedules = state.reboots || [];
+  const history = state.rebootHistory || [];
+  return `${availability}${demo}<section class="panel"><div class="panel-heading"><div><h2>Scheduled reboots</h2><p>Each schedule targets one server. A claimed restart can no longer be canceled.</p></div><div class="page-controls"><label class="field timezone-control">Display timezone${timezoneSelect('display-timezone', selected, 'display-timezone')}</label>${can('reboots') && state.rebootsAvailable ? `<button class="primary" data-action="add-reboot" data-testid="add-reboot">${icon('plus')}Add schedule</button>` : ''}</div></div><p class="inline-note">Connected players may be disconnected. An unknown player count is never treated as zero. Preview and execution use the schedule's execution timezone; this preference only formats the console.</p>${schedules.length ? `<div class="table-wrap"><table><thead><tr><th>Server</th><th>Timing</th><th>Execution zone</th><th>State</th><th>Next run</th><th>Last result</th><th>Actions</th></tr></thead><tbody>${schedules.map((schedule) => `<tr><td><strong>${escapeHTML(schedule.serverName || schedule.serverId)}</strong><small class="mono">${escapeHTML(schedule.serverId)}</small></td><td>${rebootTimingLabel(schedule)}</td><td class="mono">${escapeHTML(schedule.executionTimezone)}</td><td>${schedule.enabled ? '<span class="result result-success">Enabled</span>' : '<span class="result result-unknown">Disabled</span>'}</td><td class="mono">${schedule.nextRun ? escapeHTML(zonedDate(schedule.nextRun, selected)) : '—'}</td><td>${rebootResult(schedule.lastResult)}${schedule.lastReason ? `<small>${escapeHTML(schedule.lastReason)}</small>` : ''}</td><td class="actions"><button data-action="edit-reboot" data-id="${escapeHTML(schedule.id)}" data-testid="edit-reboot">Edit</button><button class="danger" data-action="delete-reboot" data-id="${escapeHTML(schedule.id)}" data-testid="delete-reboot">Delete</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><div class="empty-icon">'+icon('clock')+'</div><h3>No reboot schedules</h3><p>Create a per-server schedule. Saving never triggers an immediate restart.</p></div>'}</section><section class="panel section-gap"><div class="panel-heading"><div><h2>Execution history</h2><p>History is retained for audit and distinguishes requested work from observed completion.</p></div></div>${history.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Server</th><th>Occurrence</th><th>Result</th><th>Operation</th><th>Details</th></tr></thead><tbody>${history.map((execution) => `<tr><td class="mono">${escapeHTML(zonedDate(execution.recordedAt, selected))}</td><td>${escapeHTML(execution.serverName || execution.serverId)}</td><td class="mono">${escapeHTML(zonedDate(execution.occurrenceAt, selected))}<small>${escapeHTML(execution.occurrenceId || execution.id || '')}</small></td><td>${rebootResult(execution.result)}</td><td class="mono">${escapeHTML(execution.operationId || '—')}</td><td>${escapeHTML(execution.reason || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No scheduled reboot executions recorded yet.</p>'}</section>`;
+}
+function rebootForm(item) {
+  const zone = item?.executionTimezone || state.displayTimezone || browserTimezone();
+  const enabled = item?.enabled !== false;
+  const mode = item?.mode || 'daily';
+  const dailyTimes = item?.dailyTimes?.length ? item.dailyTimes : ['05:00'];
+  const dailyRows = dailyTimes.map((value, index) => dailyTimeRow(value, index)).join('');
+  return `<p>Choose exactly one timing mode. The first run is strictly after this save. Editing the target, timing, or execution timezone starts a new schedule anchor.</p><div class="error-summary" id="reboot-error-summary" role="alert" tabindex="-1" hidden><h3>Check the schedule</h3><ul></ul></div><div class="form-grid reboot-form"><label class="field">Server<select name="serverId" id="serverId" data-testid="reboot-server" required>${state.servers.map((server) => `<option value="${escapeHTML(server.id)}" ${server.id === (item?.serverId || state.modalServerId) ? 'selected' : ''}>${escapeHTML(serverLabel(server))}</option>`).join('')}</select><small id="serverId-error" data-reboot-error></small></label><label class="field">Execution timezone${timezoneSelect('executionTimezone', zone, 'reboot-timezone')}<small id="executionTimezone-error" data-reboot-error>Stored with this schedule; it is not changed by the display preference.</small></label><label class="field">Timing mode<select name="mode" id="reboot-mode" data-testid="reboot-mode" aria-describedby="mode-error" required><option value="cron" ${mode === 'cron' ? 'selected' : ''}>Cron expression</option><option value="interval" ${mode === 'interval' ? 'selected' : ''}>Elapsed interval</option><option value="daily" ${mode === 'daily' ? 'selected' : ''}>Daily wall-clock times</option></select><small id="mode-error" data-reboot-error></small></label><span></span><label class="field full" data-reboot-field="cron" ${mode === 'cron' ? '' : 'hidden'}>Cron expression<input name="cron" id="cron" data-testid="reboot-cron" value="${escapeHTML(item?.cron || '0 5 * * *')}" placeholder="minute hour day-of-month month day-of-week" aria-describedby="cron-error"><small id="cron-error" data-reboot-error>Five fields. Sunday is 0 or SUN; day-of-month and day-of-week use standard cron OR semantics. No seconds, descriptors, or timezone prefixes.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Every<input type="number" name="intervalValue" id="intervalValue" data-testid="reboot-interval-value" min="1" max="8760" value="${escapeHTML(item?.intervalValue || 12)}" aria-describedby="intervalValue-error"><small id="intervalValue-error" data-reboot-error>Hours: 1–8760. Days: 1–365. A day is exactly 24 elapsed hours.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Unit<select name="intervalUnit" id="intervalUnit" data-testid="reboot-interval-unit" aria-describedby="intervalUnit-error"><option value="hours" ${item?.intervalUnit !== 'days' ? 'selected' : ''}>hours</option><option value="days" ${item?.intervalUnit === 'days' ? 'selected' : ''}>days</option></select><small id="intervalUnit-error" data-reboot-error></small></label><div class="field full" data-reboot-field="daily" ${mode === 'daily' ? '' : 'hidden'}><span>Daily times</span><div id="dailyTimes" class="daily-times" aria-describedby="dailyTimes-error">${dailyRows}</div><button type="button" class="subtle" data-action="add-daily-time" data-testid="add-daily-time">Add another time</button><small id="dailyTimes-error" data-reboot-error>Use the native time controls. Times must be unique HH:mm values; they are sorted before execution.</small></div><label class="field full checkbox-field"><span><input type="checkbox" name="enabled" ${enabled ? 'checked' : ''}> Enable this schedule</span><small>A disabled schedule keeps its history and next run is cleared.</small></label><label class="field full checkbox-field"><span><input type="checkbox" name="acknowledgeDisconnect" id="acknowledgeDisconnect" aria-describedby="acknowledgeDisconnect-error"> I understand that an enabled scheduled reboot may disconnect connected players.</span><small id="acknowledgeDisconnect-error" data-reboot-error>Required every time an enabled schedule is saved.</small></label><div class="field full"><button type="button" class="subtle" data-action="preview-reboot" data-testid="preview-reboot">Preview next five runs</button><div id="reboot-preview" class="preview-results" aria-live="polite"></div></div></div>`;
+}
+const rebootErrorControls = {mode:'reboot-mode', serverId:'serverId', executionTimezone:'executionTimezone', cron:'cron', intervalValue:'intervalValue', intervalUnit:'intervalUnit', dailyTimes:'dailyTimes', enabled:'enabled', acknowledgeDisconnect:'acknowledgeDisconnect'};
+function clearRebootErrors() {
+  const summary = $('#reboot-error-summary');
+  if (summary) { summary.hidden = true; summary.querySelector('ul').innerHTML = ''; }
+  document.querySelectorAll('[data-reboot-error]').forEach((element) => {
+    if (element.dataset.defaultText === undefined) element.dataset.defaultText = element.textContent;
+    element.textContent = element.dataset.defaultText;
+    element.classList.remove('field-error');
+  });
+  Object.values(rebootErrorControls).forEach((id) => document.getElementById(id)?.removeAttribute('aria-invalid'));
+}
+function showRebootErrors(fields) {
+  clearRebootErrors();
+  const summary = $('#reboot-error-summary');
+  if (!summary) return;
+  const entries = Object.entries(fields);
+  summary.querySelector('ul').innerHTML = entries.map(([field, message]) => {
+    const controlId = rebootErrorControls[field] || field;
+    document.getElementById(controlId)?.setAttribute('aria-invalid', 'true');
+    const inline = document.getElementById(`${field}-error`) || document.getElementById(`${controlId}-error`);
+    if (inline) { inline.textContent = message; inline.classList.add('field-error'); }
+    return `<li><a href="#${escapeHTML(controlId)}">${escapeHTML(message)}</a></li>`;
+  }).join('');
+  summary.hidden = false;
+  summary.focus();
+}
+function rebootRequestFromForm() {
+  const fields = new FormData($('#modal-form'));
+  const values = Object.fromEntries(fields);
+  const body = {serverId:values.serverId, enabled:values.enabled === 'on', mode:values.mode, executionTimezone:values.executionTimezone, acknowledgeDisconnect:values.acknowledgeDisconnect === 'on'};
+  if (values.mode === 'cron') body.cron = values.cron;
+  if (values.mode === 'interval') { body.intervalValue = Number(values.intervalValue); body.intervalUnit = values.intervalUnit; }
+  if (values.mode === 'daily') body.dailyTimes = fields.getAll('dailyTime').map((value) => value.trim()).filter(Boolean);
+  return body;
+}
+function syncRebootModeFields() {
+  const mode = $('#reboot-mode')?.value;
+  document.querySelectorAll('[data-reboot-field]').forEach((field) => {
+    const active = field.dataset.rebootField === mode;
+    field.hidden = !active;
+    field.querySelectorAll('input,select,button').forEach((input) => { input.disabled = !active; });
+  });
+}
+async function previewReboot() {
+  if (!can('reboots') || state.modalBusy) return;
+  const body = rebootRequestFromForm();
+  const sequence = ++state.previewSequence;
+  const button = $('[data-action="preview-reboot"]');
+  if (button) button.disabled = true;
+  try {
+    const result = await api('/api/reboots/preview', {method:'POST', body:JSON.stringify(body)});
+    if (sequence !== state.previewSequence) return;
+    const displayZone = validDisplayTimezone() || browserTimezone();
+    $('#reboot-preview').innerHTML = `<p class="preview-heading">Next five runs in ${escapeHTML(displayZone)} (execution zone ${escapeHTML(result.executionTimezone)}):</p><ol>${(result.runs || []).map((run) => `<li class="mono">${escapeHTML(zonedDate(run, displayZone))}</li>`).join('')}</ol>`;
+  } catch (error) {
+    if (sequence !== state.previewSequence || error.name === 'AbortError') return;
+    if (error.fields && Object.keys(error.fields).length) showRebootErrors(error.fields);
+    $('#reboot-preview').innerHTML = `<p class="notice error" role="alert">${escapeHTML(error.message)}</p>`;
+  } finally {
+    if (button?.isConnected) button.disabled = false;
+  }
+}
 function render() {
   if (state.authRequired) { lockedState(); return; }
   if (!can(state.page)) state.page = 'dashboard';
@@ -411,8 +577,8 @@ function render() {
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(serverLabel(server))}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
   $('#server-filter').disabled = !state.servers.length;
-  $('#server-filter').hidden = ['users','integrations'].includes(state.page);
-  $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage})[state.page]();
+  $('#server-filter').hidden = ['users','integrations','reboots'].includes(state.page);
+  $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage,reboots:rebootsPage})[state.page]();
   for (const key of openCharts) {
     const disclosure = document.querySelector(`details[data-chart="${CSS.escape(key)}"]`);
     if (disclosure) disclosure.open = true;
@@ -436,7 +602,7 @@ function render() {
 function connection(failed = !$('#error-banner').hidden) {
   $('#connection-status').textContent = failed ? 'Connection issue · data may be stale' : state.paused ? 'Updates paused' : 'Connected · refreshes every 10s';
   $('#connection-status').classList.toggle('connected',!failed && !state.paused);
-  $('#updated-at').textContent = state.lastUpdated ? `Updated ${state.lastUpdated.toLocaleTimeString()}` : 'Waiting for first update';
+  $('#updated-at').textContent = state.lastUpdated ? `Updated ${date(state.lastUpdated,true)}` : 'Waiting for first update';
   $('#pause').textContent = state.paused ? 'Resume updates' : 'Pause updates';
   $('#pause').setAttribute('aria-pressed',String(state.paused));
 }
@@ -480,6 +646,7 @@ async function refresh() {
     const requests = [eventsPromise];
     if (can('users')) requests.push(api('/api/users',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.users = result.users; }));
     if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
+    if (can('reboots')) requests.push(api('/api/reboots',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{reboots:result.schedules || [], rebootHistory:result.history || [], rebootsAvailable:result.available !== false, rebootsDemo:result.demo === true}); }));
     if (state.page === 'telemetry' && server) {
       requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(state.range)}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.telemetry = result; }));
       if (can('logs')) requests.push(loadLogs(controller.signal));
@@ -525,11 +692,23 @@ function openModal(action, userId = '') {
   state.modalServerId = selectedServer()?.id || '';
   if (action === 'delete' && userId) state.modalServerId = userId;
   state.modalUserId = userId;
+  state.modalRebootId = userId;
   $('#modal-error').hidden = true;
   $('#modal-submit').disabled = false;
   $('#modal-submit').classList.toggle('danger',['restart','delete-user','delete'].includes(action));
   $('#modal-submit').classList.toggle('primary',!['restart','delete-user','delete'].includes(action));
-  if (action === 'add-integration' || action === 'edit-integration') {
+  if (action === 'add-reboot' || action === 'edit-reboot' || action === 'delete-reboot') {
+    const item = state.reboots.find((schedule) => schedule.id === userId);
+    if (action !== 'add-reboot' && !item) throw new Error('This reboot schedule no longer exists. Refresh the list.');
+    $('#modal').classList.remove('create-server-dialog');
+    $('#modal-title').textContent = action === 'delete-reboot' ? 'Delete reboot schedule?' : action === 'add-reboot' ? 'Add reboot schedule' : 'Edit reboot schedule';
+    $('#modal-submit').textContent = action === 'delete-reboot' ? 'Delete schedule' : 'Save schedule';
+    $('#modal-submit').classList.toggle('danger', action === 'delete-reboot');
+    $('#modal-submit').classList.toggle('primary', action !== 'delete-reboot');
+    $('#modal-body').innerHTML = action === 'delete-reboot'
+      ? `<p>Delete the schedule for <strong>${escapeHTML(item.serverName || item.serverId)}</strong>? This removes future claims, but a restart already claimed by C2 cannot be canceled and remains in history.</p>`
+      : rebootForm(item);
+  } else if (action === 'add-integration' || action === 'edit-integration') {
     const item = state.integrations.find((i) => i.id === userId);
     if (action === 'edit-integration' && !item) throw new Error('This integration no longer exists. Refresh the list.');
     state.modalIntegrationId = userId;
@@ -577,12 +756,14 @@ function openModal(action, userId = '') {
     $('#server-advanced .form-grid').insertAdjacentHTML('beforeend', `<label class="field">Game UDP port<input name="gamePort" type="number" min="1024" max="65535" value="7777" required></label><label class="field">World storage (GiB)<input name="storageGiB" type="number" min="1" max="2048" value="40" required></label><label class="field full">Service exposure<select name="serviceType"><option value="NodePort">NodePort (local kind testing)</option><option value="ClusterIP">ClusterIP (cluster network only)</option><option value="LoadBalancer">LoadBalancer (requires a provider)</option></select></label><label class="field">Server password<input name="serverPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Empty allows passwordless joins.</small></label><label class="field">Admin password<input name="adminPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Stored in a Kubernetes Secret.</small></label><label class="field full">Administrator EOS IDs<input name="adminIds" maxlength="2048" placeholder="Comma-separated EOS player IDs"></label><label class="field">Logging<select name="debugLevel"><option value="0">Normal</option><option value="1">SteamCMD debug</option><option value="2">Game debug</option><option value="3">SteamCMD and game debug</option></select></label><label class="field">Validate game files<select name="validateGameFiles"><option value="false">No</option><option value="true">Yes (slower startup)</option></select></label><label class="field full">Stop on game update<select name="autoStopOnUpdate"><option value="false">Disabled</option><option value="true">Enabled (game-build dependent)</option></select></label><label class="field full">Additional startup arguments<input name="additionalArgs" maxlength="2048" placeholder="Optional Unreal startup arguments"><small>The player-count override is appended automatically. API authentication is configured automatically.</small></label>`);
   }
   $('#modal').showModal();
+  if (action === 'add-reboot' || action === 'edit-reboot') $('#modal-form input[name="enabled"]')?.setAttribute('id', 'enabled');
   if (action === 'add-server' || action === 'update') loadImageTags();
   if (action === 'add-integration' || action === 'edit-integration') {
     $('#modal-title').tabIndex = -1;
     $('#modal-title').focus();
   } else if (action === 'edit-settings') $('[data-testid="edit-name"]').focus();
   else if (action === 'add-user' || action === 'edit-user') $('[data-testid="user-name"]').focus();
+  else if (action === 'add-reboot' || action === 'edit-reboot') { syncRebootModeFields(); updateDailyTimeControls(); $('[data-testid="reboot-server"]')?.focus(); }
   else if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
 }
 async function loadImageTags() {
@@ -642,8 +823,21 @@ async function submitModal(event) {
   const epoch = state.epoch;
   const values = Object.fromEntries(new FormData($('#modal-form')));
   const action = state.modalAction;
+  if (action === 'add-reboot' || action === 'edit-reboot') clearRebootErrors();
   let body, path, method = 'POST', message;
   switch (action) {
+    case 'add-reboot': case 'edit-reboot': {
+      body = rebootRequestFromForm();
+      path = action === 'add-reboot' ? '/api/reboots' : `/api/reboots/${encodeURIComponent(state.modalRebootId)}`;
+      method = action === 'add-reboot' ? 'POST' : 'PUT';
+      message = 'Reboot schedule saved.';
+      break;
+    }
+    case 'delete-reboot':
+      path = `/api/reboots/${encodeURIComponent(state.modalRebootId)}`;
+      method = 'DELETE';
+      message = 'Reboot schedule deleted.';
+      break;
     case 'edit-settings':
       body = editSettingsPatch(state.modalInitialSettings, values);
       if (!body) { closeModal(); notice('No settings changed. No rollout requested.'); return; }
@@ -706,7 +900,13 @@ async function submitModal(event) {
     $('#modal-error').textContent = error.message;
     $('#modal-error').hidden = false;
     if (action === 'edit-settings') $('#edit-status').textContent = 'Apply failed. Review the error, inspect the release if needed, then retry or cancel.';
-    $('#modal-error').focus();
+    let focusedSummary = false;
+    if ((action === 'add-reboot' || action === 'edit-reboot') && error.fields && Object.keys(error.fields).length) {
+      showRebootErrors(error.fields);
+      $('#modal-error').hidden = true;
+      focusedSummary = true;
+    }
+    if (!focusedSummary) $('#modal-error').focus();
   } finally {
     state.modalBusy = false;
     $('#modal-form').setAttribute('aria-busy','false');
@@ -734,7 +934,7 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
-  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs'}[action];
+  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots'}[action];
   if (permission && !can(permission)) return;
   try {
     switch (action) {
@@ -752,6 +952,10 @@ async function handleAction(event) {
       }
       case 'add-server': case 'restart': case 'update': case 'edit-settings': openModal(action); break;
       case 'delete': openModal(action, button.dataset.id); break;
+      case 'add-reboot': case 'edit-reboot': case 'delete-reboot': openModal(action, button.dataset.id || ''); break;
+      case 'add-daily-time': addDailyTime(); break;
+      case 'remove-daily-time': removeDailyTime(button); break;
+      case 'preview-reboot': await previewReboot(); break;
       case 'add-user': case 'edit-user': case 'delete-user': openModal(action, button.dataset.id); break;
       case 'add-integration': case 'edit-integration': openModal(action, button.dataset.id); break;
       case 'test-integration':
@@ -812,6 +1016,8 @@ function handleChange(event) {
     if (user) $('[data-testid="server-owner"]').value = user.playerId;
   }
   if (event.target.id === 'telemetry-range') { state.range = event.target.value; state.telemetry = null; refresh(); }
+  if (event.target.id === 'reboot-mode') { syncRebootModeFields(); updateDailyTimeControls(); }
+  if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
 }
 $('#refresh').innerHTML = icon('refresh');
 $('#refresh').addEventListener('click',refresh);

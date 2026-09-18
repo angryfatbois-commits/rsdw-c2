@@ -18,7 +18,18 @@ Server {
 
 Event {
   id, timestamp, serverId, serverName,
-  category, severity, message, details
+  category, severity, message, details,
+  actor, scheduleId, occurrenceId, operationId
+}
+
+RebootSchedule {
+  id, definition, enabled, revision, createdAt, updatedAt,
+  intervalAnchor, nextRun, lastOccurrenceAt, lastResult, lastReason
+}
+
+RebootExecution {
+  id, occurrenceId, scheduleId, revision, serverId, occurrenceAt, recordedAt,
+  operationId, result, reason
 }
 
 ServerSpec {
@@ -30,7 +41,7 @@ ServerSpec {
 
 ## Runtime boundaries
 
-`StateStore` reads and writes the JSON document. It serializes writes behind one mutex and writes a temporary file before renaming it into place.
+`StateStore` reads and writes the JSON document. It serializes writes behind one mutex and writes a temporary file before renaming it into place. A post-rename directory-sync failure poisons the store until restart so a later mutation cannot overwrite a claim whose durable status is uncertain.
 
 `Orchestrator` owns Helm and `kubectl` execution. The demo implementation updates the local state without starting a cluster process. The Kubernetes implementation creates the namespace and API token Secret, then runs `helm upgrade --install` with the chart values required by `rsdragonwilds-helm`. Refresh reads Deployment readiness and image state, then queries the game container's authenticated `/api/health` and `/api/players` endpoints for live readiness, uptime, and player count. Resource metrics remain unavailable until a Kubernetes metrics source is connected.
 
@@ -58,13 +69,18 @@ POST /api/servers/:id/actions/restart
 POST /api/servers/:id/actions/update
 POST /api/servers/:id/actions/check-update
 GET  /api/events
+GET  /api/reboots
+POST /api/reboots
+PUT  /api/reboots/:id
+DELETE /api/reboots/:id
+POST /api/reboots/preview
 ```
 
-The service emits an `Event` for every mutating action. Restart and update require an explicit confirmation in the browser before the browser sends the request. The server checks the target ID and request body at the HTTP boundary.
+The service emits an `Event` for every mutating action. Restart and update require an explicit confirmation in the browser before the browser sends the request. Scheduled reboots use one polling loop and atomically persist the due occurrence, next-run cursor, linked restart operation, and audit event before dispatching the existing orchestrator command. Preview and execution share one cron/daily civil-time calculator; nonexistent wall-clock minutes are skipped and repeated minutes use their first UTC occurrence. See [scheduled reboots](docs/reboots.md) for the timing, recovery, and single-replica contract.
 
 ## First-draft scope
 
-The console includes Dashboard, Telemetry, Events, and Maintenance. It leaves backups and integrations out of the navigation. Every visible button, selector, filter, chip, and modal maps to a working local state change or an API call. Export buttons download the current filtered records as CSV.
+The console includes Dashboard, Telemetry, Events, Maintenance, Saved IDs, Integrations, and Reboots. Every visible button, selector, filter, chip, and modal maps to a working local state change or an API call. Export buttons download the current filtered records as CSV. Reboot execution is intentionally best effort across process downtime: startup skips overdue occurrences, uncertain external commands are not retried, and a claimed operation cannot be canceled by editing or deleting its schedule.
 
 The first update check refreshes deployment/game state and makes a best-effort anonymous OCI Registry tag-list request for semver tags. It marks a server when the newest visible tag differs from the running image. Private registries can still rely on the desired-image drift check until registry credentials are added.
 
