@@ -244,6 +244,7 @@ func NewStore(path string, demo bool) (*Store, error) {
 			}
 			s.state.initIntegrations()
 			s.state.initReboots()
+			s.state.Events = pruneEvents(s.state.Events)
 			if err := s.Update(func(state *State) error { state.recoverAlerts(); state.recoverReboots(time.Now().UTC()); return nil }); err != nil {
 				return nil, err
 			}
@@ -1147,28 +1148,6 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, server)
 }
 
-func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
-	snapshot := a.store.Snapshot()
-	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("query")))
-	category := r.URL.Query().Get("category")
-	serverID := r.URL.Query().Get("serverId")
-	events := make([]Event, 0)
-	for _, event := range snapshot.Events {
-		if category != "" && category != "all" && event.Category != category {
-			continue
-		}
-		if serverID != "" && serverID != "all" && event.ServerID != serverID {
-			continue
-		}
-		if query != "" && !strings.Contains(strings.ToLower(event.Message+" "+event.Details+" "+event.ServerName), query) {
-			continue
-		}
-		events = append(events, event)
-	}
-	sort.Slice(events, func(i, j int) bool { return events[i].Timestamp.After(events[j].Timestamp) })
-	writeJSON(w, http.StatusOK, map[string]any{"events": events, "total": len(events)})
-}
-
 func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/servers/"), "/")
 	if len(parts) < 1 || parts[0] == "" {
@@ -1307,13 +1286,6 @@ func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server S
 		return
 	}
 	writeJSON(w, http.StatusOK, refreshed)
-}
-
-func appendEvent(state *State, server Server, category, severity, message, details string) {
-	state.Events = append(state.Events, Event{ID: randomID(), Timestamp: time.Now().UTC(), ServerID: server.ID, ServerName: worldLabel(server), Category: category, Severity: severity, Message: message, Details: details})
-	if len(state.Events) > 500 {
-		state.Events = state.Events[len(state.Events)-500:]
-	}
 }
 
 func parseLogs(raw string) []LogLine {

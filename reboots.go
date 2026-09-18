@@ -548,10 +548,7 @@ func sameRebootDefinition(a, b rebootDefinition) bool {
 }
 
 func appendRebootAudit(state *State, server Server, actor, scheduleID, message, details string) {
-	state.Events = append(state.Events, Event{ID: randomID(), Timestamp: time.Now().UTC(), ServerID: server.ID, ServerName: server.Name, Category: "maintenance", Severity: "success", Message: message, Details: details, Kind: EventKind("reboot_schedule_changed"), Source: "C2 operator", Accuracy: "observed", ScheduleID: scheduleID, Actor: actor})
-	if len(state.Events) > 500 {
-		state.Events = state.Events[len(state.Events)-500:]
-	}
+	addEvent(state, Event{ID: randomID(), Timestamp: time.Now().UTC(), ServerID: server.ID, ServerName: server.Name, Category: "maintenance", Severity: "success", Message: message, Details: details, Kind: RebootScheduleChanged, Source: "C2 operator", Accuracy: "observed", ScheduleID: scheduleID, Actor: actor})
 }
 
 func rebootDefinitionSummary(definition rebootDefinition) string {

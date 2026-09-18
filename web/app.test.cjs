@@ -104,6 +104,13 @@ html = eventsPage();
 assert.match(html, /data-id="one" data-testid="event-row" aria-pressed="true"/);
 assert.match(html, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
 assert.match(html, /data-testid="copy-event"/);
+assert.match(html, /data-testid="event-range"/);
+assert.match(html, /data-testid="export-events"/);
+assert.doesNotMatch(html, /data-testid="load-older-events"/);
+state.eventTotal = state.events.length + 1;
+assert.match(eventsPage(), /data-testid="load-older-events"/);
+state.eventTotal = state.events.length;
+assert.doesNotMatch(eventsPage(), /data-testid="load-older-events"/);
 html = maintenance();
 assert.match(html, /Endpoint unavailable\. Ask your cluster operator for the server address and game port\./);
 state.servers[0].endpoint = 'game.example:7777';
@@ -286,7 +293,7 @@ state.logs = 'SECRET LOG';
 for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance, context.ui.usersPage]) {
   html = render();
   assert.doesNotMatch(html, /Alice|0123456789abcdef|data-action="(?:add-user|edit-user|delete-user)"/);
-  assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output)"/);
+  assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output|event-search|event-range|export-events|load-older-events)"/);
 }
 html = telemetry();
 assert.match(html, /data-testid="export-telemetry"/);
@@ -510,10 +517,10 @@ test('connected players show labeled escaped fields, preserve duplicates, and di
   assert.match(html, /Character name unavailable/);
 });
 
-function refreshFixture(admin = false) {
+function refreshFixture(admin = false, extraCapabilities = {}) {
   const elements = new Map();
   const element = (selector) => {
-    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, open:false, close(){this.open=false;}, setAttribute(){}, classList:{remove(){}, toggle(){}}});
+    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, open:false, close(){this.open=false;}, setAttribute(){}, insertAdjacentHTML(){}, classList:{remove(){}, toggle(){}}});
     return elements.get(selector);
   };
   const requests = [];
@@ -533,7 +540,7 @@ function refreshFixture(admin = false) {
   });
   vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, logout, navigate, render};', sandbox);
   const ui = sandbox.ui;
-  const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin}};
+  const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin,...extraCapabilities}};
   ui.applyAuth(auth);
   Object.assign(ui.state, {page:'telemetry', loaded:true, serverId:'a', servers:[{id:'a',name:'World A',maxPlayers:4},{id:'b',name:'World B',maxPlayers:4}]});
   const reply = (path, body, status=200) => {
@@ -552,6 +559,19 @@ function refreshFixture(admin = false) {
   };
   return {ui, element, requests, reply, flush, discover, clock, timers, sandbox, advanceMonotonic:(delta)=>{monotonicNow += delta;}};
 }
+
+test('maintenance event preview is scoped to the fallback selected server', async () => {
+  const f = refreshFixture(false, {events:true,maintenance:true});
+  f.ui.state.page = 'maintenance';
+  f.ui.state.serverId = '';
+  const pending = f.ui.refresh();
+  await f.discover();
+  const eventRequest = f.requests.find((request) => request.path.startsWith('/api/events?'));
+  assert.ok(eventRequest);
+  assert.equal(eventRequest.path, '/api/events?serverId=a&limit=50&offset=0');
+  f.reply(eventRequest.path, {events:[]});
+  await pending;
+});
 
 test('switching servers clears rendered names immediately and aborts before auth discovery', async () => {
   const f = refreshFixture();

@@ -62,7 +62,7 @@ During a tracked restart, C2 suppresses player and down/recovered alerts. Comple
 
 ## Delivery reference
 
-The queue is independent of the 500-event display history. Each event and integration pair has one stable 24-character delivery ID derived from their IDs. The queue stores an immutable event copy and guild/channel target, never a token. C2 retains the newest 100 sent or failed deliveries, plus every pending, retrying, sending, or uncertain delivery. The API displays the most recent 100 records. C2 queues new events only; pruning completed history does not replay old events when it restarts or an integration is enabled again. This JSON-backed implementation is intended for one C2 replica.
+Display history keeps the newest 2000 lifecycle events and newest 500 routine (player) events; the Discord queue is independent of that dual-class retention. Each event and integration pair has one stable 24-character delivery ID derived from their IDs. The queue stores an immutable event copy and guild/channel target, never a token. C2 retains the newest 100 sent or failed deliveries, plus every pending, retrying, sending, or uncertain delivery. The API displays the most recent 100 records. C2 queues new events only; pruning completed history does not replay old events when it restarts or an integration is enabled again. This JSON-backed implementation is intended for one C2 replica.
 
 | State | Meaning |
 | --- | --- |

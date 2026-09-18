@@ -232,7 +232,7 @@ func TestDeliveryIndependentOfDisplayRetention(t *testing.T) {
 		server := s.Servers["scuffedtards"]
 		first = emitAlert(s, server, ServerDown, "", "confirmed unhealthy", time.Now())
 		for j := 0; j < 600; j++ {
-			appendEvent(s, server, "system", "success", "display only", "")
+			appendEvent(s, server, "player", "success", "display only", "")
 		}
 		queueDeliveryForNewEvent(s, s.Integrations["bot"], first)
 		return nil
@@ -245,7 +245,13 @@ func TestDeliveryIndependentOfDisplayRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := reloaded.Snapshot()
-	if len(s.Events) != 500 || len(s.Deliveries) != 1 {
+	if !containsEventID(s.Events, first.ID) {
+		t.Fatal("player flood dropped ServerDown")
+	}
+	if got := countEventClass(s.Events, eventRoutine); got != maxRoutineEvents {
+		t.Fatalf("routine events = %d, want %d", got, maxRoutineEvents)
+	}
+	if len(s.Deliveries) != 1 {
 		t.Fatal("display retention dropped or duplicated queue")
 	}
 	for _, d := range s.Deliveries {

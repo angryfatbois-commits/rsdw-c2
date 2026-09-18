@@ -51,7 +51,7 @@ const state = {
   page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
-  query: '', category: '', range: '60s', telemetry: null, rosterObservation: '', rosterDeadline: 0, logs: '', logQuery: '',
+  query: '', category: '', range: '60s', eventRange: '24h', eventTotal: 0, eventWarnings: 0, eventCritical: 0, telemetry: null, rosterObservation: '', rosterDeadline: 0, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
   modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, modalInitialSettings: {}, request: null,
   authRequired: false, loginBusy: false, authMode: '', identity: '', csrfToken: '', role: 'denied', capabilities: {}, epoch: 0, logoutCSRF: '', signInFailed: false,
@@ -368,7 +368,7 @@ function clearProtectedState() {
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
   clearTimeout(rosterExpiryTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0, deployWatches:{}});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', eventRange:'24h', eventTotal:0, eventWarnings:0, eventCritical:0, logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0, deployWatches:{}});
   Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:'', reboots:[], rebootHistory:[], rebootsAvailable:true, rebootsDemo:false});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
@@ -487,6 +487,33 @@ async function submitLogin(event) {
   }
 }
 function eventArray(data) { return Array.isArray(data) ? data : data.events || []; }
+function eventListParams({limit, offset = 0, preview = false, serverId = state.serverId} = {}) {
+  const params = new URLSearchParams();
+  if (serverId) params.set('serverId', serverId);
+  if (!preview) {
+    params.set('query', state.query);
+    params.set('category', state.category);
+    if (state.eventRange === '24h') params.set('since', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+  }
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  return params;
+}
+function acceptEvents(result, append = false) {
+  const incoming = eventArray(result);
+  if (append) {
+    const seen = new Set(state.events.map((event) => event.id));
+    state.events = state.events.concat(incoming.filter((event) => event.id && !seen.has(event.id)));
+  } else {
+    state.events = incoming;
+  }
+  const total = Number(result?.total);
+  state.eventTotal = Number.isFinite(total) ? total : incoming.length;
+  const warnings = Number(result?.warnings);
+  state.eventWarnings = Number.isFinite(warnings) ? warnings : 0;
+  const critical = Number(result?.critical);
+  state.eventCritical = Number.isFinite(critical) ? critical : 0;
+}
 function samples() {
   const data = state.telemetry;
   return Array.isArray(data) ? data : data?.samples || data?.points || [];
@@ -631,9 +658,8 @@ function telemetryPanels() {
 function eventsPage() {
   if (!can('events')) return dashboard();
   const selected = state.events.find((event) => event.id === state.selectedEventId);
-  const warnings = state.events.filter((event) => event.severity === 'warning').length;
-  const critical = state.events.filter((event) => event.severity === 'critical' || event.severity === 'error').length;
-  return `<div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search events</span><input type="search" id="event-search" data-testid="event-search" placeholder="Search events…" value="${escapeHTML(state.query)}"></label><button data-action="export-events" data-testid="export-events">${icon('download')}Export CSV</button></div><div class="stats">${stat('Matching events',state.events.length,'events')}${stat('Warnings',warnings,'warning','amber')}${stat('Critical',critical,'pulse',critical?'red':'')}${stat('Last event',state.events[0] ? date(state.events[0].timestamp,true) : '—','clock')}</div><div class="split"><section class="panel"><div class="panel-heading"><h2>Event stream</h2></div><div class="toolbar chips" aria-label="Event category">${[['','All'],['system','System'],['player','Players'],['health','Health'],['update','Updates']].map(([value,label])=>`<button data-action="event-category" data-value="${value}" data-testid="category-${value || 'all'}" aria-pressed="${state.category===value}">${label}</button>`).join('')}</div>${eventTable(state.events,true)}</section><section class="panel"><div class="panel-heading"><h2>Event details</h2></div>${selected ? `<dl class="detail-list"><div><dt>Event</dt><dd>${escapeHTML(selected.message)}</dd></div><div><dt>Server</dt><dd>${escapeHTML(eventServerLabel(selected))}</dd></div><div><dt>Severity</dt><dd>${status(selected.severity || 'info')}</dd></div><div><dt>Time</dt><dd>${escapeHTML(date(selected.timestamp))}</dd></div></dl><pre class="event-json" tabindex="0" aria-label="Event details JSON">${escapeHTML(typeof selected.details === 'string' ? selected.details : JSON.stringify(selected.details || {},null,2))}</pre><button data-action="copy-event" data-testid="copy-event">Copy event JSON</button>` : '<p class="no-results">Select an event to inspect its details.</p>'}</section></div>`;
+  const older = state.events.length < state.eventTotal ? `<button data-action="load-older-events" data-testid="load-older-events" title="Older matches reset when the page refreshes."${state.refreshing ? ' disabled' : ''}>Load older</button>` : '';
+  return `<div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search events</span><input type="search" id="event-search" data-testid="event-search" placeholder="Search events…" value="${escapeHTML(state.query)}"></label><label class="sr-only" for="event-range">Event time range</label><select id="event-range" data-testid="event-range">${[['24h','Last 24 hours'],['all','All retained history']].map(([value,label]) => `<option value="${value}" ${state.eventRange===value?'selected':''}>${label}</option>`).join('')}</select><button data-action="export-events" data-testid="export-events">${icon('download')}Export CSV</button></div><div class="stats">${stat('Matching events',state.eventTotal,'events')}${stat('Warnings',state.eventWarnings,'warning','amber')}${stat('Critical',state.eventCritical,'pulse',state.eventCritical?'red':'')}${stat('Last event',state.events[0] ? date(state.events[0].timestamp,true) : '—','clock')}</div><div class="split"><section class="panel"><div class="panel-heading"><h2>Event stream</h2></div><div class="toolbar chips" aria-label="Event category">${[['','All'],['system','System'],['player','Players'],['health','Health'],['update','Updates']].map(([value,label])=>`<button data-action="event-category" data-value="${value}" data-testid="category-${value || 'all'}" aria-pressed="${state.category===value}">${label}</button>`).join('')}</div>${eventTable(state.events,true)}${older}</section><section class="panel"><div class="panel-heading"><h2>Event details</h2></div>${selected ? `<dl class="detail-list"><div><dt>Event</dt><dd>${escapeHTML(selected.message)}</dd></div><div><dt>Server</dt><dd>${escapeHTML(eventServerLabel(selected))}</dd></div><div><dt>Severity</dt><dd>${status(selected.severity || 'info')}</dd></div><div><dt>Time</dt><dd>${escapeHTML(date(selected.timestamp))}</dd></div></dl><pre class="event-json" tabindex="0" aria-label="Event details JSON">${escapeHTML(typeof selected.details === 'string' ? selected.details : JSON.stringify(selected.details || {},null,2))}</pre><button data-action="copy-event" data-testid="copy-event">Copy event JSON</button>` : '<p class="no-results">Select an event to inspect its details.</p>'}</section></div>`;
 }
 function maintenance() {
   if (!can('maintenance')) return dashboard();
@@ -940,10 +966,11 @@ async function refresh() {
   let epoch = state.epoch;
   let page = state.page;
   const range = state.range;
+  let eventRange = state.eventRange;
   let serverId = state.serverId;
   let selectedId = selectedServer()?.id;
   let telemetryReceived = false;
-  const current = () => sequence === refreshSequence && epoch === state.epoch && page === state.page && range === state.range && serverId === state.serverId && selectedId === selectedServer()?.id && state.request === controller && !controller.signal.aborted;
+  const current = () => sequence === refreshSequence && epoch === state.epoch && page === state.page && range === state.range && eventRange === state.eventRange && serverId === state.serverId && selectedId === selectedServer()?.id && state.request === controller && !controller.signal.aborted;
   state.refreshing = true;
   $('#refresh').disabled = true;
   try {
@@ -953,6 +980,7 @@ async function refresh() {
     if (!applyAuth(auth)) return;
     epoch = state.epoch;
     page = state.page;
+    eventRange = state.eventRange;
     serverId = state.serverId;
     selectedId = selectedServer()?.id;
     state.request = controller;
@@ -969,9 +997,9 @@ async function refresh() {
     $('#cluster-name').textContent = typeof bootstrap.cluster === 'string' ? bootstrap.cluster : bootstrap.cluster?.name || bootstrap.clusterName || 'Local cluster';
     state.mode = bootstrap.mode;
     $('#environment').textContent = bootstrap.mode === 'demo' ? 'Demo mode' : 'Kubernetes';
-    const eventParams = new URLSearchParams({query:state.page === 'events' ? state.query : '', category:state.page === 'events' ? state.category : '', serverId:state.serverId});
-    const eventsPromise = can('events') ? api(`/api/events?${eventParams}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.events = eventArray(result); }) : Promise.resolve();
     const server = selectedServer();
+    const eventParams = state.page === 'events' ? {limit:100, offset:0} : {limit:50, preview:true, serverId:state.page === 'maintenance' ? server?.id : state.serverId};
+    const eventsPromise = can('events') ? api(`/api/events?${eventListParams(eventParams)}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) acceptEvents(result); }) : Promise.resolve();
     const requests = [eventsPromise];
     if (can('users')) requests.push(api('/api/users',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.users = result.users; }));
     if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
@@ -1287,7 +1315,7 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
-  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots'}[action];
+  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'load-older-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots'}[action];
   if (permission && !can(permission)) return;
   try {
     switch (action) {
@@ -1329,7 +1357,17 @@ async function handleAction(event) {
         const selected = state.events.find((item) => item.id === state.selectedEventId);
         await navigator.clipboard.writeText(JSON.stringify(selected,null,2)); notice('Event JSON copied.'); break;
       }
-      case 'export-events': exportCSV('rsdw-events.csv',state.events,['timestamp','serverName','category','severity','message','details']); break;
+      case 'load-older-events': {
+        const result = await api(`/api/events?${eventListParams({limit:100, offset:state.events.length})}`);
+        acceptEvents(result, true);
+        render();
+        break;
+      }
+      case 'export-events': {
+        const result = await api(`/api/events?${eventListParams({limit:2500, offset:0})}`);
+        exportCSV('rsdw-events.csv', eventArray(result), ['timestamp','serverName','category','severity','message','details']);
+        break;
+      }
       case 'export-telemetry': exportCSV('rsdw-telemetry.csv',telemetryRows(),['timestamp','metric','value','observedAt','status','reason','unit','source']); break;
       case 'export-logs': download('rsdw-server.log',filteredLogs(),'text/plain;charset=utf-8'); notice('Log download ready.'); break;
       case 'refresh-logs': button.disabled = true; await loadLogs(); render(); notice('Server logs refreshed.'); break;
@@ -1371,6 +1409,7 @@ function handleChange(event) {
     if (user) $('[data-testid="server-owner"]').value = user.playerId;
   }
   if (event.target.id === 'telemetry-range') { state.range = event.target.value; clearTelemetry(); render(); refresh(); }
+  if (event.target.id === 'event-range') { state.eventRange = event.target.value; state.selectedEventId = ''; render(); refresh(); }
   if (event.target.id === 'reboot-mode') { syncRebootModeFields(); updateDailyTimeControls(); }
   if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
   if (event.target.id === 'server-filter') { state.serverId = event.target.value; clearTelemetry(); state.logs = ''; state.selectedEventId = ''; render(); refresh(); }

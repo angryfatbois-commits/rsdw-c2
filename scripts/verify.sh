@@ -23,6 +23,7 @@ NODE
 go build -o .tmp/rsdw-c2 .
 node tests/users-browser.cjs
 node tests/deletion-browser.cjs
+node tests/events-browser.cjs
 node tests/integrations-browser.cjs
 node tests/oidc-browser.cjs
 node tests/settings-browser.cjs
