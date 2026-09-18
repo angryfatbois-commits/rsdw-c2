@@ -184,7 +184,7 @@ func nextCivilDaily(timing rebootTiming, after time.Time) (time.Time, error) {
 		year, month, dayOfMonth := date.Date()
 		for _, minute := range timing.daily {
 			nominal := time.Date(year, month, dayOfMonth, int(minute)/60, int(minute)%60, 0, 0, time.UTC)
-			candidate, ok := resolveCivilMinute(nominal, timing.location)
+			candidate, ok := earliestUTCForCivilMinute(nominal, timing.location)
 			if ok && candidate.After(after) {
 				return candidate, nil
 			}
@@ -208,7 +208,7 @@ func nextCivilCron(timing rebootTiming, after time.Time) (time.Time, error) {
 		if nominal.After(horizon) {
 			break
 		}
-		candidate, ok := resolveCivilMinute(nominal, timing.location)
+		candidate, ok := earliestUTCForCivilMinute(nominal, timing.location)
 		if ok && candidate.After(after) {
 			return candidate, nil
 		}
@@ -217,10 +217,7 @@ func nextCivilCron(timing rebootTiming, after time.Time) (time.Time, error) {
 	return time.Time{}, errors.New("cron has no occurrence within the supported eight-year horizon")
 }
 
-// resolveCivilMinute maps a wall-clock minute to the earliest matching UTC
-// instant. A gap has no exact round trip and is skipped; a fold has two exact
-// round trips and deliberately returns the first one.
-func resolveCivilMinute(nominal time.Time, location *time.Location) (time.Time, bool) {
+func earliestUTCForCivilMinute(nominal time.Time, location *time.Location) (time.Time, bool) {
 	year, month, day, hour, minute := nominal.Year(), nominal.Month(), nominal.Day(), nominal.Hour(), nominal.Minute()
 	offsets := zoneOffsetsAround(location, nominal)
 	var matches []time.Time
