@@ -366,6 +366,40 @@ func TestCollectorPressureClaimPersistsBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestStopStartResetsMemoryPressureBeforeNextCollection(t *testing.T) {
+	app := newTestApp(t, true)
+	app.memoryPressure = MemoryPressurePolicy{Enabled: true, ThresholdPercent: 85, Duration: time.Nanosecond}
+	if err := app.store.Update(func(state *State) error {
+		server := state.Servers["scuffedtards"]
+		server.MemoryUsedBytes, server.MemoryLimitBytes = 85, 100
+		state.Servers = map[string]Server{server.ID: server}
+		state.Events = nil
+		at := time.Now().UTC().Add(-15 * time.Second)
+		p := state.Producers[server.ID]
+		p.MemoryPressure = &MemoryPressureState{Runtime: "demo/" + server.ID + "/" + server.LastRestart, Since: at, LastAt: at, SampleAt: at}
+		state.Producers[server.ID] = p
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"stop", "start"} {
+		res := requestJSON(t, app, http.MethodPost, "/api/servers/scuffedtards/actions/"+action, "")
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s = %d: %s", action, res.Code, res.Body.String())
+		}
+	}
+	app.collectTelemetry(context.Background())
+	state := app.store.Snapshot()
+	if !slices.Equal(eventKinds(&state), []EventKind{ServerStopped, ServerStarted}) {
+		t.Fatalf("first collection reused pre-stop pressure: %v", eventKinds(&state))
+	}
+	app.collectTelemetry(context.Background())
+	state = app.store.Snapshot()
+	if !slices.Equal(eventKinds(&state), []EventKind{ServerStopped, ServerStarted, MemoryPressureRestartRequested, RestartCompleted}) {
+		t.Fatalf("fresh pressure did not restart: %v", eventKinds(&state))
+	}
+}
+
 func TestDemoPressureAndManualRestartMakeNoExternalCalls(t *testing.T) {
 	app := newTestApp(t, true)
 	app.memoryPressure = MemoryPressurePolicy{Enabled: true, ThresholdPercent: 85, Duration: time.Nanosecond}

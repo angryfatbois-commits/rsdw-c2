@@ -65,6 +65,7 @@ func (a *App) persistStop(id string) (Server, error) {
 			current.Status = StatusStopped
 			p := state.Producers[id]
 			p.Outage = false
+			p.MemoryPressure = nil
 			p.resetStreak()
 			p.PlayerAt = time.Time{}
 			p.HealthyBaseline = false
