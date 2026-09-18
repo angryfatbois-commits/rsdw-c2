@@ -8,6 +8,8 @@ Run this feature with one C2 replica and persistent state. The chart already con
 
 Every schedule stores an IANA execution timezone. The browser sends intent only; C2 owns the schedule ID, UTC anchor, next run, occurrence record, and restart operation ID.
 
+Set an optional restart warning in minutes. C2 emits one warning for the scheduled occurrence when the window opens. A warning does not change the restart time. Editing the warning policy cancels any queued warning for the old policy without moving the existing occurrence. Disabling, deleting, stopping the target, claiming the restart, or reaching the scheduled time also cancels an unsent warning. Memory-pressure warnings remain unavailable until the memory-pressure restart producer ships.
+
 - **Cron** uses exactly five standard fields: minute, hour, day of month, month, and day of week. Lists, ranges, steps, month names, and weekday names are accepted by the pinned `robfig/cron` parser. Seconds, `@` descriptors, `TZ=` or `CRON_TZ=` prefixes, and Quartz `?`, `L`, `W`, and `#` syntax are rejected. Sunday is `0` or `SUN`. When both day-of-month and day-of-week are restricted, standard cron OR semantics apply.
 - **Interval** accepts 1–8,760 hours or 1–365 days. A day means exactly 24 elapsed hours, including across daylight-saving transitions. C2 persists a UTC anchor and calculates `anchor + N * duration`, so execution and failure do not cause drift.
 - **Daily** accepts one or more unique `HH:mm` values. Values are sorted and deduplicated and interpreted as local wall-clock minutes in the stored execution timezone.
@@ -71,6 +73,7 @@ Create and update use this flat body. Only fields for the selected mode are acce
   "mode": "daily",
   "dailyTimes": ["05:00", "17:00"],
   "executionTimezone": "America/New_York",
+  "warningMinutes": 10,
   "acknowledgeDisconnect": true
 }
 ```

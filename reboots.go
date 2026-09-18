@@ -504,7 +504,9 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 				id = randomID()
 			}
 		}
-		changed := !exists || !sameRebootDefinition(old.Definition, definition)
+		changed := !exists || !sameRebootTiming(old.Definition, definition)
+		warningChanged := exists && old.Definition.WarningMinutes != definition.WarningMinutes
+		revisionChanged := !exists || changed || warningChanged || old.Enabled != enabled
 		resetAnchor := !exists || changed || !old.Enabled && enabled
 		candidate := old
 		candidate.ID = id
@@ -513,7 +515,7 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 		candidate.UpdatedAt = now
 		if !exists {
 			candidate.CreatedAt, candidate.Revision = now, 1
-		} else {
+		} else if revisionChanged {
 			candidate.Revision++
 		}
 		if definition.Mode == rebootModeInterval {
@@ -545,10 +547,7 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 	return result, err
 }
 
-func sameRebootDefinition(a, b rebootDefinition) bool {
-	if a.WarningMinutes != b.WarningMinutes {
-		return false
-	}
+func sameRebootTiming(a, b rebootDefinition) bool {
 	if a.ServerID != b.ServerID || a.Mode != b.Mode || a.Cron != b.Cron || a.IntervalValue != b.IntervalValue || a.IntervalUnit != b.IntervalUnit || a.ExecutionTimezone != b.ExecutionTimezone || len(a.DailyTimes) != len(b.DailyTimes) {
 		return false
 	}

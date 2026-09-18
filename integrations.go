@@ -204,7 +204,7 @@ func emitAlertEvidence(state *State, server Server, kind EventKind, operation, d
 	case ServerDown, ServerRecovered:
 		category = "health"
 	}
-	if kind == RestartRequested || kind == MemoryPressureRestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
+	if kind == RestartRequested || kind == RestartWarning || kind == MemoryPressureRestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
 		severity = "warning"
 	}
 	if kind == RestartFailed || kind == ServerDown {
@@ -332,7 +332,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid integration JSON; use only a Secret reference")
+		writeError(w, http.StatusBadRequest, "invalid integration JSON; use a Secret reference for authentication")
 		return
 	}
 	if decoder.Decode(new(any)) != io.EOF || input.ID != "" {

@@ -116,8 +116,10 @@ func discordDeliveryViews(deliveries []Delivery) []discordDeliveryView {
 	views := make([]discordDeliveryView, 0, len(deliveries))
 	for _, delivery := range deliveries {
 		view := discordDeliveryView{Delivery: delivery}
-		if embed, err := renderDiscordEmbed(delivery.Event); err == nil {
-			view.Embed = &embed
+		if normalizedProvider(delivery.Provider) == providerDiscord {
+			if embed, err := renderDiscordEmbed(delivery.Event); err == nil {
+				view.Embed = &embed
+			}
 		}
 		views = append(views, view)
 	}

@@ -145,6 +145,125 @@ func TestQuietHoursSuppressOnlyNewDeliveriesInStoredTimezone(t *testing.T) {
 	}
 }
 
+func TestScheduledWarningIsIdempotentAndCancelsWhenServerStops(t *testing.T) {
+	app := newTestApp(t, true)
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	next := now.Add(5 * time.Minute)
+	countWarnings := func(events []Event) int {
+		count := 0
+		for _, event := range events {
+			if event.Kind == RestartWarning {
+				count++
+			}
+		}
+		return count
+	}
+	server := app.store.Snapshot().Servers["scuffedtards"]
+	if err := app.store.Update(func(state *State) error {
+		state.Events = nil
+		integration := integrationFixture()
+		integration.Rules[RestartWarning] = true
+		state.Integrations[integration.ID] = integration
+		state.RebootSchedules["schedule"] = rebootSchedule{ID: "schedule", Definition: rebootDefinition{ServerID: server.ID, Mode: rebootModeDaily, DailyTimes: []string{"13:00"}, ExecutionTimezone: "UTC", WarningMinutes: 10}, Enabled: true, Revision: 1, NextRun: cloneTimePtr(&next)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.scanRestartWarnings(now); err != nil {
+		t.Fatal(err)
+	}
+	first := app.store.Snapshot()
+	if len(first.Events) != 1 || first.Events[0].Kind != RestartWarning || first.Events[0].Severity != "warning" || len(first.Deliveries) != 1 {
+		t.Fatalf("first warning = %+v", first)
+	}
+	if err := app.scanRestartWarnings(now); err != nil {
+		t.Fatal(err)
+	}
+	second := app.store.Snapshot()
+	if countWarnings(second.Events) != 1 || len(second.Deliveries) != 1 {
+		t.Fatalf("warning was not idempotent: events=%d deliveries=%d", len(second.Events), len(second.Deliveries))
+	}
+	app.clock = func() time.Time { return now }
+	definition := second.RebootSchedules["schedule"].Definition
+	if _, err := app.saveReboot("schedule", definition, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.scanRestartWarnings(now); err != nil {
+		t.Fatal(err)
+	}
+	if got := countWarnings(app.store.Snapshot().Events); got != 1 {
+		t.Fatalf("no-op schedule save emitted duplicate warning: %d warnings", got)
+	}
+	reloaded, err := NewStore(app.store.path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&App{store: reloaded, demo: true}).scanRestartWarnings(now); err != nil {
+		t.Fatal(err)
+	}
+	if got := countWarnings(reloaded.Snapshot().Events); got != 1 {
+		t.Fatalf("reload emitted duplicate warning: %d warnings", got)
+	}
+	if err := app.store.Update(func(state *State) error {
+		server := state.Servers[server.ID]
+		server.Status = StatusStopped
+		state.Servers[server.ID] = server
+		cancelObsoleteWarnings(state, now)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range app.store.Snapshot().Deliveries {
+		if delivery.Status != DeliveryFailed || !strings.Contains(delivery.Result, "cancelled") {
+			t.Fatalf("stopped server left warning delivery active: %+v", delivery)
+		}
+	}
+}
+
+func TestWarningOnlyScheduleEditPreservesNextRun(t *testing.T) {
+	app := newTestApp(t, true)
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+	definition := rebootDefinition{ServerID: "scuffedtards", Mode: rebootModeInterval, IntervalValue: 1, IntervalUnit: "hours", ExecutionTimezone: "UTC"}
+	created, err := app.saveReboot("", definition, true, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextRun, anchor := *created.NextRun, *created.IntervalAnchor
+	definition.WarningMinutes = 5
+	now = now.Add(10 * time.Minute)
+	updated, err := app.saveReboot(created.ID, definition, true, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.NextRun.Equal(nextRun) || !updated.IntervalAnchor.Equal(anchor) {
+		t.Fatalf("warning-only edit moved schedule: next=%s anchor=%s", updated.NextRun, updated.IntervalAnchor)
+	}
+	revision := updated.Revision
+	unchanged, err := app.saveReboot(created.ID, definition, true, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Revision != revision || !unchanged.NextRun.Equal(nextRun) {
+		t.Fatalf("no-op edit changed occurrence: revision=%d next=%s", unchanged.Revision, unchanged.NextRun)
+	}
+}
+
+func TestObservedStoppedStatusBlocksWarnings(t *testing.T) {
+	s, server, now := alertFixture(t)
+	server.Status = StatusOnline
+	s.Servers[server.ID] = server
+	observeAlerts(s, server, observation{at: now, status: StatusStopped}, now)
+	if s.Servers[server.ID].Status != StatusStopped {
+		t.Fatalf("stopped observation was not persisted: %+v", s.Servers[server.ID])
+	}
+	next := now.Add(time.Minute)
+	schedule := rebootSchedule{ID: "schedule", Definition: rebootDefinition{ServerID: server.ID, WarningMinutes: 5}, Enabled: true, Revision: 1, NextRun: cloneTimePtr(&next)}
+	if warningEligible(s, schedule, now) {
+		t.Fatal("stopped observation remained warning-eligible")
+	}
+}
+
 func TestIntegrationProviderValidationAndFrozenTargets(t *testing.T) {
 	s, _, _ := alertFixture(t)
 	legacy := integrationFixture()
@@ -156,7 +275,7 @@ func TestIntegrationProviderValidationAndFrozenTargets(t *testing.T) {
 	if err := validateIntegration(webhook, *s); err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"http://alerts.example.com", "https://localhost/events", "https://127.0.0.1/events", "https://10.0.0.1", "https://169.254.169.254", "https://user:pass@example.com", "https://example.com?token=secret", "https://example.com/#secret", "https://example.com:8443"} {
+	for _, target := range []string{"http://alerts.example.com", "https://localhost/events", "https://127.0.0.1/events", "https://10.0.0.1", "https://100.64.0.1", "https://169.254.169.254", "https://198.18.0.1", "https://2001:db8::1", "https://user:pass@example.com", "https://example.com?token=secret", "https://example.com/#secret", "https://example.com:8443"} {
 		invalid := webhook
 		invalid.WebhookURL = target
 		if validateIntegration(invalid, *s) == nil {

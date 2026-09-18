@@ -806,7 +806,7 @@ func (k *kubeOrchestrator) checkDeletionReferences(ctx context.Context, namespac
 	}
 	for _, integration := range state.Integrations {
 		if namespace == envOr("RSDW_NAMESPACE", "rsdw-system") && slices.ContainsFunc(append(slices.Clone(plan.Secrets), plan.Resources...), func(r resourceIdentity) bool { return r.Kind == "Secret" && r.Name == integration.SecretRef.Name }) {
-			return errors.New("a game Secret is also used by a Discord integration")
+			return errors.New("a game Secret is also used by a notification integration")
 		}
 	}
 	return nil

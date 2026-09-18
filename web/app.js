@@ -125,7 +125,7 @@ function deliveryTime(delivery) {
 }
 function deliveryWasCancelled(delivery) {
   const result = String(delivery?.result || '');
-  return result.startsWith('Cancelled by ') || result === 'Integration no longer enables this delivery';
+  return result.startsWith('Cancelled by ') || result.startsWith('Restart warning cancelled') || result === 'Integration no longer enables this delivery';
 }
 function latestAttemptedDeliveryFor(integrationId, deliveries) {
   let latest = null;
@@ -782,23 +782,24 @@ function deliveryServerLabel(delivery) {
   const server = state.servers.find((item) => item.id === event.serverId);
   if (server) return serverLabel(server);
   if (event.serverName) return event.serverName;
-  return String(event.kind || '') === 'integration_test' ? 'Bot-level test' : 'Unknown server';
+  return String(event.kind || '') === 'integration_test' ? 'Integration test' : 'Unknown server';
 }
-function discordDeliveryCard(delivery) {
+function deliveryCard(delivery) {
   const event = delivery.event || {};
   const embed = delivery.embed || {};
   const kind = String(event.kind || '');
   const server = deliveryServerLabel(delivery);
-  const bot = state.integrations.find((item) => item.id === delivery.integrationId)?.name || delivery.integrationId || 'Unknown bot';
-  const title = embed.title || event.message || 'Discord alert';
+  const provider = delivery.provider === 'webhook' ? 'HTTPS webhook' : 'Discord';
+  const destination = state.integrations.find((item) => item.id === delivery.integrationId)?.name || delivery.integrationId || 'Unknown destination';
+  const title = embed.title || event.message || `${provider} alert`;
   const description = embed.description || event.message || 'No message copy available.';
   const timestamp = embed.timestamp || event.timestamp || delivery.updatedAt;
   const attempts = Number.isFinite(Number(delivery.attempts)) ? `${delivery.attempts} attempt${Number(delivery.attempts) === 1 ? '' : 's'}` : 'Attempts unavailable';
   const retry = delivery.status === 'retry' && delivery.nextAttempt ? `<span>Next attempt ${escapeHTML(date(delivery.nextAttempt))}</span>` : '';
-  return `<article class="delivery-card" data-testid="discord-recent-delivery" data-kind="${escapeHTML(kind)}">
+  return `<article class="delivery-card" data-testid="${delivery.provider === 'webhook' ? 'webhook' : 'discord'}-recent-delivery" data-kind="${escapeHTML(kind)}">
     <div class="delivery-card-header"><div class="delivery-card-server"><h3>${escapeHTML(server)}</h3>${timestamp ? `<time datetime="${escapeHTML(timestamp)}">${escapeHTML(date(timestamp))}</time>` : ''}</div>${deliveryStatus(delivery.status)}</div>
     <div class="delivery-card-body"><p class="delivery-card-title">${escapeHTML(title)}</p><p>${escapeHTML(description)}</p></div>
-    <div class="delivery-card-meta">${delivery.id ? `<span class="mono">${escapeHTML(delivery.id)}</span>` : ''}<span>Bot ${escapeHTML(bot)}</span><span>${escapeHTML(attempts)}</span><span>${escapeHTML(delivery.result || 'No result recorded.')}</span>${retry}</div>
+    <div class="delivery-card-meta">${delivery.id ? `<span class="mono">${escapeHTML(delivery.id)}</span>` : ''}<span>${escapeHTML(provider)} ${escapeHTML(destination)}</span><span>${escapeHTML(attempts)}</span><span>${escapeHTML(delivery.result || 'No result recorded.')}</span>${retry}</div>
   </article>`;
 }
 function discordMark() {
@@ -814,7 +815,7 @@ function integrationsHub() {
   const webhookStatus = discordConnectionStatus(state.integrations.filter((item) => item.provider === 'webhook'), state.deliveries);
   return `<div class="provider-grid"><a class="provider-card" href="#integrations/discord" data-testid="discord-integration-card" aria-label="Discord, ${label}">${discordMark()}<span class="provider-card-copy"><strong>Discord</strong><span class="provider-card-summary">Alerts for Dragonwilds servers.</span>${discordStatus(connection)}</span></a><a class="provider-card" href="#integrations/webhook" data-testid="webhook-integration-card">${icon('integrations')}<span class="provider-card-copy"><strong>HTTPS webhooks</strong><span class="provider-card-summary">Structured JSON alerts for your endpoint.</span>${discordStatus(webhookStatus)}</span></a></div>`;
 }
-function discordBotCard(item) {
+function integrationCard(item) {
   const servers = item.serverIds.map((id) => escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))).join(', ') || 'No servers';
   const rules = state.alertRules.filter((rule) => item.rules[rule.kind]).map((rule) => escapeHTML(rule.label)).join(', ') || 'No rules enabled';
   return `<article class="bot-card"><div class="bot-card-heading"><h3>${escapeHTML(item.name)}</h3>${status(item.enabled ? 'enabled' : 'disabled')}</div>
@@ -829,14 +830,14 @@ function discordAlertsPage() {
   const pending = Object.entries(state.pendingRestarts).map(([id,op]) => `<p class="inline-note">Restart ${escapeHTML(op.id)} for ${escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))} awaits a fresh observation. Requested ${escapeHTML(date(op.requestedAt))}.${op.commandUncertain ? ' Command outcome is unknown.' : ''}</p>`).join('');
   const demo = state.integrationsDemo ? 'Demo mode simulates deliveries and restarts. No external messages are sent. ' : '';
   const bots = integrations.length
-    ? `<div class="bot-card-list">${integrations.map(discordBotCard).join('')}</div>`
+    ? `<div class="bot-card-list">${integrations.map(integrationCard).join('')}</div>`
     : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No ${webhook ? 'HTTPS webhooks' : 'Discord bots'} configured yet</h3><p>Add a destination to route selected server alerts.</p></div>`;
   return `<a class="back-link" href="#integrations" data-testid="integrations-back">${icon('back')}Back</a>
     <section class="panel"><div class="panel-heading"><div><h2>${webhook ? 'HTTPS webhooks' : 'Discord bots'}</h2><p>Send selected server alerts to ${webhook ? 'an HTTPS endpoint' : 'a Discord channel'}.</p></div><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add ${webhook ? 'HTTPS webhook' : 'Discord bot'}</button></div>
     ${pending}<p class="inline-note">${demo}Player joined alerts name characters only when fresh roster evidence supports them; otherwise they report approximate count increases. Backup alerts are unavailable until a backup producer exists.</p>${bots}</section>
     <section class="panel section-gap"><div class="panel-heading"><div><h2>Recent messages</h2><p>Newest first. Each message names the Dragonwilds server it belongs to.</p></div></div>
     <p class="inline-note">Uncertain means a message may have been sent. Check the destination before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>
-    ${deliveries.length ? `<div class="recent-delivery-list">${[...deliveries].sort((a, b) => deliveryTime(b) - deliveryTime(a)).map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
+    ${deliveries.length ? `<div class="recent-delivery-list">${[...deliveries].sort((a, b) => deliveryTime(b) - deliveryTime(a)).map(deliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
 }
 function integrationsPage() {
   if (!can('integrations')) return dashboard();
@@ -873,7 +874,7 @@ function showIntegrationErrors(fields) {
     input.setAttribute('aria-invalid', 'true');
     const inline = document.getElementById(`${input.id}-error`);
     if (inline) inline.textContent = message;
-    return `<li><a href="#${escapeHTML(input.id)}">${escapeHTML(message)}</a></li>`;
+    return `<li><a href="#${escapeHTML(input.id)}" data-integration-error-link="${escapeHTML(input.id)}">${escapeHTML(message)}</a></li>`;
   }).join('');
   summary.hidden = false;
   summary.focus();
@@ -1569,6 +1570,12 @@ $('#login-form').addEventListener('submit',submitLogin);
 $('#login-dialog').addEventListener('cancel',(event) => { event.preventDefault(); closeLogin(); });
 $('#modal').addEventListener('cancel',(event) => { event.preventDefault(); closeModal(); });
 document.addEventListener('click',handleAction);
+document.addEventListener('click',(event) => {
+  const link = event.target.closest('[data-integration-error-link]');
+  if (!link) return;
+  event.preventDefault();
+  document.getElementById(link.dataset.integrationErrorLink)?.focus();
+});
 document.addEventListener('input',(event) => {
   if (event.target.name === 'maxPlayers') updateResources();
   if (event.target.name === 'ownerId') $('#saved-user').value = '';

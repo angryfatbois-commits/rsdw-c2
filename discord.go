@@ -154,17 +154,21 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 		if d.Status != DeliveryPending && d.Status != DeliveryRetry || d.NextAttempt.After(now) {
 			continue
 		}
+		claimNow := time.Now().UTC()
+		if claimNow.Before(now) {
+			claimNow = now
+		}
 		var integration DiscordIntegration
 		claimed := false
 		err := a.store.Update(func(state *State) error {
 			d = state.Deliveries[id]
-			if (d.Status != DeliveryPending && d.Status != DeliveryRetry) || d.NextAttempt.After(now) {
+			if (d.Status != DeliveryPending && d.Status != DeliveryRetry) || d.NextAttempt.After(claimNow) {
 				return nil
 			}
 			var ok bool
 			integration, ok = state.Integrations[d.IntegrationID]
-			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) || !warningDeliveryValid(state, d, now) || (d.Event.Kind == RestartWarning && !a.rebootSchedulingEnabled()) {
-				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", now
+			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) || !warningDeliveryValid(state, d, claimNow) || (d.Event.Kind == RestartWarning && !a.rebootSchedulingEnabled()) {
+				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", claimNow
 				state.Deliveries[id] = d
 				state.pruneDeliveryHistory()
 				return nil
@@ -172,7 +176,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 			if normalizedProvider(d.Provider) == providerDiscord && state.DiscordRetryAt.After(now) {
 				return nil
 			}
-			d.Status, d.UpdatedAt = DeliverySending, now
+			d.Status, d.UpdatedAt = DeliverySending, claimNow
 			d.Attempts++
 			state.Deliveries[id] = d
 			claimed = true
@@ -186,8 +190,8 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 		}
 		result := a.sendNotification(ctx, integration, d)
 		finished := time.Now().UTC()
-		if finished.Before(now) {
-			finished = now
+		if finished.Before(claimNow) {
+			finished = claimNow
 		}
 		if err := a.store.Update(func(state *State) error {
 			current, ok := state.Deliveries[id]

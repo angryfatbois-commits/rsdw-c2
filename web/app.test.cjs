@@ -238,6 +238,13 @@ assert.equal(context.ui.discordConnectionStatus(
   [{id:'a', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}, {id:'b', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}],
   [{integrationId:'a', status:'failed', updatedAt:'2026-09-18T00:00:01Z'}, {integrationId:'b', status:'sent', updatedAt:'2026-09-18T00:00:00Z'}]
 ), 'connected');
+state.integrationView = 'webhook';
+const webhookForm = context.ui.integrationForm({provider:'webhook', name:'Ops', enabled:true, webhookUrl:'https://alerts.example.com/events', secretRef:{name:'alerts', key:'token'}, quietHours:{start:'22:00', end:'08:00', timezone:'America/New_York'}, serverIds:['world-01'], rules:{player_joined:true}});
+assert.match(webhookForm, /Webhook destination/);
+assert.match(webhookForm, /data-testid="integration-webhook-url"/);
+assert.match(webhookForm, /name="quietTimezone"/);
+assert.match(webhookForm, /data-provider="discord" hidden disabled/);
+state.integrationView = 'hub';
 html = context.ui.integrationsPage();
 assert.match(html, /Discord/);
 assert.match(html, /data-testid="discord-integration-card"/);

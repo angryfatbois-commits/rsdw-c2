@@ -37,6 +37,19 @@ func (p *AlertProducer) resetStreak() {
 	p.Streak, p.StreakCount, p.StreakSince = "", 0, time.Time{}
 }
 
+func persistObservedStatus(state *State, server Server, o observation, now time.Time) Server {
+	current, ok := state.Servers[server.ID]
+	if !ok || o.status == "" || o.status == StatusUnknown || current.Status == StatusDeleting || current.Status == StatusStale || (current.Status != StatusStopped && o.status != StatusStopped) {
+		return current
+	}
+	current.Status = o.status
+	if !o.at.IsZero() && now.Sub(o.at) <= telemetryMaxAge {
+		current.LastSeen = o.at.Format(time.RFC3339Nano)
+	}
+	state.Servers[server.ID] = current
+	return current
+}
+
 func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) || state.stopped(server.ID) {
 		return
@@ -48,6 +61,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	if now.Sub(o.at) > telemetryMaxAge || o.at.After(now) {
 		return
 	}
+	server = persistObservedStatus(state, server, o, now)
 	if o.at.Sub(p.LastAt) > telemetryMaxAge {
 		p.resetStreak()
 		p.PlayerAt = time.Time{}

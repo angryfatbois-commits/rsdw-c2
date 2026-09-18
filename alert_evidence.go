@@ -63,7 +63,9 @@ func rosterEvidence(roster PlayerRoster, count int) []ConnectedPlayer {
 			return nil
 		}
 		seen[player.CharacterName] = true
-		players[player.Name] = true
+		if player.Name != "" {
+			players[player.Name] = true
+		}
 	}
 	return slices.Clone(roster.Players)
 }
@@ -83,10 +85,18 @@ func joinedRoster(previous, current []ConnectedPlayer, increase int) []Connected
 			joined = append(joined, player)
 		}
 	}
-	if len(joined) != increase || len(joined) > 4 {
+	if len(joined) != increase || namedJoinDescriptionBytes(joined) > 3800 {
 		return nil
 	}
 	return joined
+}
+
+func namedJoinDescriptionBytes(players []ConnectedPlayer) int {
+	total := 0
+	for _, player := range players {
+		total += len(player.CharacterName) + len(player.Name) + 4
+	}
+	return total
 }
 
 func playerCountText(count *PlayerCountEvidence) string {
