@@ -166,7 +166,8 @@ td:last-child.actions { text-align: right; }
 .status.deleting:before { background: var(--link); }
 .status.stale { color: var(--warning); }
 .status.stale:before { background: var(--warning); }
-.status.stopped,.status.critical,.status.error { color: var(--color-destructive); }
+.status.stopped { color: var(--color-muted-foreground); }
+.status.critical,.status.error { color: var(--color-destructive); }
 .status.unknown { color: var(--color-muted-foreground); }
 .status.enabled { color: var(--color-foreground); }
 .status.enabled:before { background: var(--success); }

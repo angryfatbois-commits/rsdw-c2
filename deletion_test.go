@@ -317,7 +317,7 @@ func TestDeletionKeepReceiptReloadAndLegacySecrets(t *testing.T) {
 	if len(runner.calls) != calls {
 		t.Fatal("completed retry or conflict touched Kubernetes")
 	}
-	for _, action := range []string{"restart", "update", "check-update"} {
+	for _, action := range []string{"restart", "update", "check-update", "stop", "start"} {
 		w := requestJSON(t, app, "POST", "/api/servers/world/actions/"+action, `{}`)
 		if w.Code != 404 {
 			t.Fatalf("deleted %s status %d", action, w.Code)
@@ -347,7 +347,7 @@ func TestDeletionPurgePartialFailureRetryAndReplacement(t *testing.T) {
 			}
 			calls := len(runner.calls)
 			deleteRequest(t, app, `{"confirm":"world"}`, 409)
-			for _, action := range []string{"restart", "update", "check-update"} {
+			for _, action := range []string{"restart", "update", "check-update", "stop", "start"} {
 				w := requestJSON(t, app, "POST", "/api/servers/world/actions/"+action, `{}`)
 				if w.Code != 409 {
 					t.Fatalf("pending %s: %d %s", action, w.Code, w.Body.String())
@@ -475,7 +475,7 @@ func TestDeletionPoisonedStoreHasNoExternalEffects(t *testing.T) {
 	app.store.writeErr = errors.New("state replacement durability is uncertain")
 	before := app.store.Snapshot()
 	deleteRequest(t, app, `{"confirm":"world"}`, 503)
-	for _, action := range []string{"restart", "update", "check-update"} {
+	for _, action := range []string{"restart", "update", "check-update", "stop", "start"} {
 		w := requestJSON(t, app, "POST", "/api/servers/world/actions/"+action, `{}`)
 		if w.Code != 503 {
 			t.Fatalf("poisoned %s: %d", action, w.Code)

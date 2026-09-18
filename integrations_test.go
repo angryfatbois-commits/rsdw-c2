@@ -133,6 +133,11 @@ func TestIntegrationAPIConfigurationAndNoReplay(t *testing.T) {
 		}
 		delete(input.Rules, kind)
 	}
+	input.Rules[ServerStopped] = true
+	input.Rules[ServerStarted] = true
+	if got := requestJSON(t, app, "PUT", "/api/integrations/"+saved.ID, integrationJSON(t, input)); got.Code != 200 {
+		t.Fatal("available stop/start rules rejected", got.Code, got.Body.String())
+	}
 	for _, body := range []string{
 		`{"botToken":"RAW-SECRET"}`, `{"RAW-SECRET":true}`, `{"secretRef":{"name":"valid","key":"token","value":"RAW-SECRET"}}`,
 		strings.TrimSuffix(integrationJSON(t, input), "}") + `,"token":"RAW-SECRET"}`, integrationJSON(t, input) + ` {"token":"RAW-SECRET"}`,

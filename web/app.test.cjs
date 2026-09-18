@@ -6,7 +6,7 @@ const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
 vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
-state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
+state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, stop:true, start:true, update:true, logs:true, updateCheck:true};
 
 state.servers = [{id:'world', name:'Test world', status:'online', players:2, maxPlayers:4, metricsAvailable:false}];
 state.telemetry = {samples:[], healthChecks:[], metricDefinitions:[{metric:'tick_rate', description:'Ticks <per> second'}]};
@@ -121,7 +121,13 @@ assert.match(html, /Recent changes/);
 assert.match(html, /Audit trail/);
 assert.match(html, /Image updated/);
 assert.doesNotMatch(html, /Other world restarted|Backup then restart|Create window/);
-for (const id of ['restart-server','update-image','check-update','maintenance-events']) assert.ok(html.includes(`data-testid="${id}"`));
+for (const id of ['restart-server','update-image','check-update','maintenance-events','stop-server']) assert.ok(html.includes(`data-testid="${id}"`));
+assert.doesNotMatch(html, /data-testid="start-server"/);
+state.servers[0].status = 'stopped';
+html = maintenance();
+assert.ok(html.includes('data-testid="start-server"'));
+assert.doesNotMatch(html, /data-testid="(?:restart-server|update-image|check-update|stop-server)"/);
+state.servers[0].status = 'online';
 state.displayTimezone = 'America/New_York';
 state.reboots = [{id:'schedule-1', serverId:'world', serverName:'Test world', mode:'daily', dailyTimes:['05:00','17:00'], executionTimezone:'UTC', enabled:true, nextRun:'2026-09-16T12:00:00Z', lastResult:'awaiting_reconciliation', lastReason:'Waiting for telemetry'}];
 html = context.ui.rebootsPage();
@@ -294,6 +300,7 @@ for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance, 
   html = render();
   assert.doesNotMatch(html, /Alice|0123456789abcdef|data-action="(?:add-user|edit-user|delete-user)"/);
   assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output|event-search|event-range|export-events|load-older-events)"/);
+  assert.doesNotMatch(html, /data-testid="(?:stop-server|start-server)"/);
 }
 html = telemetry();
 assert.match(html, /data-testid="export-telemetry"/);
@@ -460,6 +467,40 @@ test('saved IDs refresh only for admins and late results cannot survive a sessio
   await ui.refresh();
   assert.deepEqual(paths, ['/api/auth', '/api/bootstrap']);
   assert.equal(ui.state.users.length, 0);
+});
+
+test('stopped telemetry does not fetch logs or show a stale-data error', async () => {
+  const elements = new Map();
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, close(){}, setAttribute(){}, classList:{remove(){}, toggle(){}}});
+    return elements.get(selector);
+  };
+  const auth = {mode:'oidc', authenticated:true, subject:'admin', role:'admin', csrfToken:'admin-session', capabilities:{dashboard:true,telemetry:true,logs:true,events:true}};
+  const paths = [];
+  const response = (body, status = 200) => ({status, ok:status >= 200 && status < 300, headers:{get:()=>null}, text:async()=>JSON.stringify(body)});
+  const sandbox = vm.createContext({
+    DOMException, AbortController, URLSearchParams, clearTimeout, setTimeout,
+    document:{querySelector:element}, sessionStorage:{getItem:()=>'', removeItem(){}}, location:{hash:'#dashboard'},
+    fetch: async (path) => {
+      paths.push(path);
+      if (path === '/api/auth') return response(auth);
+      if (path === '/api/bootstrap') return response({servers:[{id:'world',name:'World',status:'stopped',maxPlayers:4}],cluster:'test',mode:'demo'});
+      if (path.startsWith('/api/events?')) return response({events:[]});
+      if (path.startsWith('/api/servers/world/telemetry?')) return response({server:{id:'world',name:'World',status:'stopped',maxPlayers:4},metrics:{players:{value:0,status:'stale',reason:'Server is stopped'}},samples:[]});
+      if (path.startsWith('/api/servers/world/logs?')) return response({error:'server is stopped; start it before this action'}, 409);
+      throw new Error(`Unexpected request ${path}`);
+    },
+  });
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nrender = () => {}; this.ui = {state, applyAuth, refresh, telemetry};', sandbox);
+  const ui = sandbox.ui;
+  ui.applyAuth(auth);
+  Object.assign(ui.state, {page:'telemetry', serverId:'world'});
+  await ui.refresh();
+  assert.equal(paths.filter((path) => path.startsWith('/api/servers/world/logs?')).length, 0);
+  assert.equal(element('#error-banner').hidden, true);
+  assert.equal(element('#connection-status').textContent, 'Connected · refreshes every 10s');
+  ui.state.logs = 'old logs must not be shown while stopped';
+  assert.doesNotMatch(ui.telemetry(), /data-testid="(?:log-output|refresh-logs|export-logs)"/);
 });
 
 function rosterResponse(id = 'a', players = [{name:'Alice', characterName:'Mage'}], count = 1) {

@@ -497,6 +497,7 @@ func (shellRunner) Run(ctx context.Context, name string, args ...string) ([]byte
 type Orchestrator interface {
 	Deploy(context.Context, Server) error
 	Restart(context.Context, Server) error
+	Scale(context.Context, Server, int) error
 	Logs(context.Context, Server, int) ([]LogLine, error)
 	Refresh(context.Context, Server) (Server, error)
 	CheckUpdate(context.Context, Server) (Server, error)
@@ -506,6 +507,9 @@ type demoOrchestrator struct{}
 
 func (demoOrchestrator) Deploy(_ context.Context, _ Server) error  { return nil }
 func (demoOrchestrator) Restart(_ context.Context, _ Server) error { return nil }
+func (demoOrchestrator) Scale(_ context.Context, _ Server, _ int) error {
+	return nil
+}
 func (demoOrchestrator) Logs(_ context.Context, server Server, tail int) ([]LogLine, error) {
 	now := time.Now().UTC()
 	lines := []LogLine{
@@ -589,6 +593,10 @@ current-context: in-cluster
 }
 
 func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
+	if server.Status == StatusStopped {
+		// The game chart hardcodes Deployment replicas: 1, so Helm would un-park.
+		return errServerStopped
+	}
 	if server.GamePort == 0 {
 		server.GamePort = 7777
 	}
@@ -683,6 +691,14 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 func (k *kubeOrchestrator) Restart(ctx context.Context, server Server) error {
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"annotations": map[string]string{restartAnnotation: server.RestartOperation}}}}})
 	_, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "patch", "deployment/"+deploymentName(server.Release), "--type=merge", "-p", string(patch))
+	return err
+}
+
+func (k *kubeOrchestrator) Scale(ctx context.Context, server Server, replicas int) error {
+	if replicas != 0 && replicas != 1 {
+		return fmt.Errorf("replicas must be 0 or 1")
+	}
+	_, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "scale", "deployment/"+deploymentName(server.Release), "--replicas="+strconv.Itoa(replicas))
 	return err
 }
 
@@ -1174,6 +1190,9 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[1] == "logs" && r.Method == http.MethodGet {
+		if rejectStopped(w, server) {
+			return
+		}
 		tail := boundedInt(r.URL.Query().Get("tail"), 100, 1, 500)
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -1200,6 +1219,10 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 			a.handleEditSettings(w, r, serverID)
 		case "restart":
 			a.handleRestart(w, r, server)
+		case "stop":
+			a.handleStop(w, r, server)
+		case "start":
+			a.handleStart(w, r, server)
 		case "update":
 			a.handleUpdate(w, r, server)
 		case "check-update":
@@ -1218,6 +1241,9 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server
 		return
 	}
 	defer a.lifecycleMu.Unlock()
+	if rejectStopped(w, server) {
+		return
+	}
 	var request UpdateServerRequest
 	if err := decodeJSON(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1260,6 +1286,9 @@ func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server S
 		return
 	}
 	defer a.lifecycleMu.Unlock()
+	if rejectStopped(w, server) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	refreshed, err := a.orchestrator.CheckUpdate(ctx, server)

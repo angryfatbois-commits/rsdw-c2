@@ -271,10 +271,12 @@ func joinObservation(server Server, result observation, now time.Time) Server {
 		server.Status = result.status
 		server.LastSeen = result.at.Format(time.RFC3339Nano)
 	}
-	if lifecycleStatus == StatusDeleting || lifecycleStatus == StatusStale {
+	if lifecycleStatus == StatusDeleting || lifecycleStatus == StatusStale || lifecycleStatus == StatusStopped {
 		server.Status = lifecycleStatus
 	}
-	server.CurrentImage = result.image
+	if result.image != "" {
+		server.CurrentImage = result.image
+	}
 	server.UpdateAvailable = server.CurrentImage != "" && server.DesiredImage != "" && server.CurrentImage != server.DesiredImage
 	return server
 }

@@ -62,6 +62,9 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	defer a.lifecycleMu.Unlock()
+	if rejectStopped(w, server) {
+		return
+	}
 	if request.WorldName != nil && strings.TrimSpace(*request.WorldName) != defaultValue(server.WorldName, server.Name) && !request.ConfirmWorldName {
 		writeError(w, http.StatusBadRequest, "changing worldName requires confirmWorldName: true; C2 does not rename or migrate saved world data and this game build's save-selection behavior is unverified")
 		return

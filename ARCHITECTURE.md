@@ -66,6 +66,8 @@ GET  /api/servers/:id/logs?tail=100
 GET  /api/servers/:id/telemetry?range=60s
 POST /api/servers
 POST /api/servers/:id/actions/restart
+POST /api/servers/:id/actions/stop
+POST /api/servers/:id/actions/start
 POST /api/servers/:id/actions/update
 POST /api/servers/:id/actions/check-update
 GET  /api/events?query=&category=&serverId=&since=&limit=&offset=
@@ -76,7 +78,7 @@ DELETE /api/reboots/:id
 POST /api/reboots/preview
 ```
 
-The service emits an `Event` for every mutating action. Restart and update require an explicit confirmation in the browser before the browser sends the request. Scheduled reboots use one polling loop and atomically persist the due occurrence, next-run cursor, linked restart operation, and audit event before dispatching the existing orchestrator command. Preview and execution share one cron/daily civil-time calculator; nonexistent wall-clock minutes are skipped and repeated minutes use their first UTC occurrence. See [scheduled reboots](docs/reboots.md) for the timing, recovery, and single-replica contract.
+The service emits an `Event` for every mutating action. Restart, stop, start, and update require an explicit confirmation in the browser before the browser sends the request. Stop parks a server with `kubectl scale --replicas=0` while keeping the inventory row and volumes; start scales back to 1. The game chart hardcodes Deployment replicas to 1, so C2 never passes Helm `replicaCount`. Scheduled reboots use one polling loop and atomically persist the due occurrence, next-run cursor, linked restart operation, and audit event before dispatching the existing orchestrator command. Preview and execution share one cron/daily civil-time calculator; nonexistent wall-clock minutes are skipped and repeated minutes use their first UTC occurrence. See [scheduled reboots](docs/reboots.md) for the timing, recovery, and single-replica contract.
 
 ## First-draft scope
 

@@ -36,7 +36,7 @@ func (p *AlertProducer) resetStreak() {
 }
 
 func observeAlerts(state *State, server Server, o observation, now time.Time) {
-	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) {
+	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) || state.stopped(server.ID) {
 		return
 	}
 	p := state.Producers[server.ID]
@@ -133,6 +133,9 @@ func (a *App) handleRestart(w http.ResponseWriter, r *http.Request, server Serve
 		return
 	}
 	defer a.lifecycleMu.Unlock()
+	if rejectStopped(w, server) {
+		return
+	}
 	dispatch, err := a.claimManualRestart(server.ID, a.rebootNow())
 	if err != nil {
 		if errors.Is(err, errRebootConflict) {
