@@ -435,6 +435,7 @@ test('saved IDs refresh only for admins and late results cannot survive a sessio
   const paths = [];
   const response = (body) => ({status:200, ok:true, headers:{get:()=>null}, text:async()=>JSON.stringify(body)});
   const sandbox = vm.createContext({
+    location:{hash:'#dashboard'},
     DOMException, AbortController, URLSearchParams, clearTimeout, setTimeout,
     document:{querySelector:element}, sessionStorage:{getItem:()=>'', removeItem(){}},
     fetch: async (path) => {
@@ -538,7 +539,8 @@ function refreshFixture(admin = false, extraCapabilities = {}) {
     window:{scrollTo(){}}, location:{hash:'#dashboard'},
     fetch:(path,options)=>new Promise((resolve,reject)=>requests.push({path,options,resolve,reject})),
   });
-  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, logout, navigate, render};', sandbox);
+  sandbox.history = {replaceState(_state, _title, hash){sandbox.location.hash = hash;}};
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
   const ui = sandbox.ui;
   const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin,...extraCapabilities}};
   ui.applyAuth(auth);
@@ -571,6 +573,158 @@ test('maintenance event preview is scoped to the fallback selected server', asyn
   assert.equal(eventRequest.path, '/api/events?serverId=a&limit=50&offset=0');
   f.reply(eventRequest.path, {events:[]});
   await pending;
+});
+
+test('overview routes decode IDs and scope legacy links without selecting another server', () => {
+  const f = refreshFixture();
+  const id = 'world /?#%<&';
+  const route = f.ui.parseLocationHash(`#servers/${encodeURIComponent(id)}`);
+  assert.equal(route.serverId, id);
+  assert.equal(route.malformed, false);
+  for (const hash of ['#servers/', '#servers/%ZZ', '#servers/a/b']) assert.equal(f.ui.parseLocationHash(hash).malformed, true);
+  for (const page of ['telemetry','maintenance','events','reboots']) {
+    const parsed = f.ui.parseLocationHash(`#${page}?serverId=${encodeURIComponent(id)}`);
+    assert.equal(parsed.serverId, id);
+    assert.equal(parsed.scoped, true);
+  }
+  Object.assign(f.ui.state, {page:'servers', serverId:id, servers:[{id,worldName:'World <one>',status:'unknown',maxPlayers:4}]});
+  assert.match(f.ui.serverOverview(), /World &lt;one&gt;/);
+  assert.ok(f.ui.serverOverview().includes(`#telemetry?serverId=${encodeURIComponent(id)}`));
+  f.ui.state.serverId = 'missing';
+  assert.equal(f.ui.selectedServer(), undefined);
+  f.ui.state.page = 'telemetry';
+  f.ui.state.routeScope = true;
+  assert.equal(f.ui.selectedServer(), undefined);
+});
+
+test('overview limits viewer fields and gates each admin control, endpoint, and next reboot', async () => {
+  const f = refreshFixture();
+  const s = f.ui.state;
+  Object.assign(s, {page:'servers', serverId:'a', displayTimezone:'UTC', servers:[{id:'a',worldName:'My world',status:'online',maxPlayers:4,endpoint:'private:7777',ownerId:'secret-owner',namespace:'secret-namespace',currentImage:'secret-image'}]});
+  s.telemetry = rosterResponse();
+  s.telemetry.metrics.tickRate = {value:999,status:'stale'};
+  s.telemetry.metrics.memoryUsedBytes = {value:1048576,status:'available'};
+  s.telemetry.metrics.engineReady = {value:0,status:'available',reason:'Reported <not ready>'};
+  let html = f.ui.serverOverview();
+  assert.match(html, /Alice|Mage/);
+  assert.match(html, /1 MB/);
+  assert.match(html, /Stale/);
+  assert.match(html, /Reported &lt;not ready&gt;/);
+  assert.doesNotMatch(html, /999|secret-|private:7777|Next reboot|Join endpoint|data-action=|#maintenance|#events|#reboots|Server logs/);
+  Object.assign(s.capabilities, {maintenance:true,reboots:true,restart:true,update:true,updateCheck:true,delete:true});
+  s.reboots = [
+    {serverId:'b',enabled:true,nextRun:'2026-09-19T01:00:00Z'},
+    {serverId:'a',enabled:false,nextRun:'2026-09-19T02:00:00Z'},
+    {serverId:'a',enabled:true,nextRun:'invalid'},
+    {serverId:'a',enabled:true,nextRun:'2026-09-19T04:00:00Z'},
+    {serverId:'a',enabled:true,nextRun:'2026-09-19T03:00:00Z'},
+  ];
+  html = f.ui.serverOverview();
+  assert.match(html, /3:00:00 AM/);
+  assert.doesNotMatch(html, /4:00:00 AM|2:00:00 AM|1:00:00 AM/);
+  assert.match(html, /private:7777/);
+  for (const action of ['restart','edit-settings','update','check-update','delete','copy-endpoint']) assert.ok(html.includes(`data-action="${action}"`));
+  let copied;
+  f.sandbox.navigator = {clipboard:{writeText:async(value)=>{copied=value;}}};
+  await f.ui.handleAction({target:{closest:()=>({dataset:{action:'copy-endpoint'}})}});
+  assert.equal(copied,'private:7777');
+  s.capabilities.maintenance = false;
+  copied = undefined;
+  await f.ui.handleAction({target:{closest:()=>({dataset:{action:'copy-endpoint'}})}});
+  assert.equal(copied,undefined);
+  assert.doesNotMatch(f.ui.serverOverview(), /private:7777|copy-endpoint|edit-settings/);
+  s.capabilities.maintenance = true;
+  s.servers[0].endpoint = '';
+  s.rebootsAvailable = false;
+  assert.match(f.ui.serverOverview(), /overview-next-reboot">Unavailable/);
+  assert.doesNotMatch(f.ui.serverOverview(), /copy-endpoint/);
+});
+
+test('invalid overview falls back only after inventory succeeds and route error survives refresh', async () => {
+  for (const id of ['missing%3Cscript%3E','%ZZ','']) {
+    const f = refreshFixture();
+    Object.assign(f.ui.state,{page:'servers',serverId:'',loaded:false,servers:[]});
+    f.sandbox.location.hash = `#servers/${id}`;
+    const pending = f.ui.refresh();
+    await f.discover();
+    await pending;
+    assert.equal(f.sandbox.location.hash,'#dashboard');
+    assert.equal(f.ui.state.page,'dashboard');
+    assert.ok(f.ui.state.routeError);
+    assert.match(f.element('#content').innerHTML,/data-testid="route-error"/);
+    assert.doesNotMatch(f.element('#content').innerHTML,/<script>/);
+    assert.equal(f.requests.some((r)=>r.path.includes('/telemetry')),false);
+    const again = f.ui.refresh();
+    await f.discover();
+    await again;
+    assert.match(f.element('#content').innerHTML,/data-testid="route-error"/);
+  }
+  const f = refreshFixture();
+  Object.assign(f.ui.state,{page:'servers',serverId:'missing',loaded:false,servers:[]});
+  f.sandbox.location.hash = '#servers/missing';
+  const pending = f.ui.refresh();
+  await f.flush();
+  f.reply('/api/auth',{mode:'oidc',authenticated:true,subject:'test',role:'viewer',csrfToken:'session',capabilities:{dashboard:true,telemetry:true}});
+  await f.flush();
+  f.reply('/api/bootstrap',{error:'Inventory offline'},503);
+  await pending;
+  assert.equal(f.sandbox.location.hash,'#servers/missing');
+  assert.equal(f.ui.state.routeError,'');
+  assert.match(f.element('#content').innerHTML,/Unable to connect/);
+});
+
+test('unknown scoped Events keeps its server filter after inventory reconciliation', async () => {
+  const f = refreshFixture(false,{events:true});
+  f.sandbox.location.hash = '#events?serverId=missing';
+  f.ui.navigate();
+  await f.discover();
+  const request = f.requests.find((item) => item.path.startsWith('/api/events?'));
+  assert.equal(new URLSearchParams(request.path.split('?')[1]).get('serverId'),'missing');
+  assert.equal(f.ui.state.serverId,'missing');
+  f.reply(request.path,{events:[]});
+  await f.flush();
+});
+
+test('overview waits for fresh inventory before rejecting a newly created server', async () => {
+  const f = refreshFixture();
+  f.sandbox.location.hash = '#servers/new';
+  f.ui.navigate();
+  assert.equal(f.sandbox.location.hash,'#servers/new');
+  f.reply('/api/auth',{mode:'oidc',authenticated:true,subject:'test',role:'viewer',csrfToken:'session',capabilities:{dashboard:true,telemetry:true}});
+  await f.flush();
+  f.reply('/api/bootstrap',{servers:[{id:'new',worldName:'New world',maxPlayers:4}]});
+  await f.flush();
+  f.reply('/api/servers/new/telemetry?range=60s',rosterResponse('new'));
+  await f.flush();
+  assert.equal(f.sandbox.location.hash,'#servers/new');
+  assert.equal(f.ui.state.routeError,'');
+  assert.match(f.element('#content').innerHTML,/data-testid="server-overview"/);
+});
+
+test('overview restores URL scope after auth reset, rejects late responses, and expires paused roster', async () => {
+  const f = refreshFixture();
+  f.sandbox.location.hash = '#servers/b';
+  f.ui.applyAuth({mode:'oidc',authenticated:true,subject:'other',role:'viewer',csrfToken:'other',capabilities:{dashboard:true,telemetry:true}});
+  const first = f.ui.refresh();
+  await f.discover();
+  assert.equal(f.ui.state.serverId,'b');
+  assert.equal(f.ui.state.page,'servers');
+  f.sandbox.location.hash = '#servers/a';
+  f.ui.navigate();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  await f.flush();
+  f.reply('/api/servers/b/telemetry?range=60s',rosterResponse('b',[{name:'Late B'}]));
+  await first;
+  await f.flush();
+  assert.equal(f.ui.state.telemetry.server.id,'a');
+  assert.doesNotMatch(f.element('#content').innerHTML,/Late B/);
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  f.ui.state.paused = true;
+  f.advanceMonotonic(46000);
+  for (const timer of [...f.timers.values()]) timer.fn();
+  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
 });
 
 test('switching servers clears rendered names immediately and aborts before auth discovery', async () => {

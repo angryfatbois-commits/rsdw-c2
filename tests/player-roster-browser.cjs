@@ -36,6 +36,18 @@ async function run() {
     assert.equal(await panel.locator('img, script').count(),0);
     assert.match(await panel.innerText(),/Name unavailable/);
     assert.match(await panel.innerText(),/Character name unavailable/);
+    await page.getByTestId('nav-dashboard').click();
+    await page.getByTestId('view-server').click();
+    await page.getByTestId('server-overview').waitFor();
+    await panel.locator('li').first().waitFor();
+    assert.equal(new URL(page.url()).hash,'#servers/world');
+    assert.equal(await page.locator('#content').getByRole('link',{name:'Telemetry',exact:true}).getAttribute('href'),'#telemetry?serverId=world');
+    assert.doesNotMatch(await page.locator('#content').innerText(),/Join endpoint|Next reboot|Server actions|Server logs/);
+    await page.locator('#content').getByRole('link',{name:'Telemetry',exact:true}).focus();
+    await page.keyboard.press('Enter');
+    await page.waitForURL('**/#telemetry?serverId=world');
+    await page.goto('http://roster.test/#servers/world');
+    await panel.locator('li').first().waitFor();
     for (const width of [1280,760,375]) {
       await page.setViewportSize({width,height:900});
       const layout = await panel.evaluate((element) => {
@@ -55,7 +67,16 @@ async function run() {
     assert.match(await panel.innerText(),/Connected players are stale/);
     assert.equal(await panel.locator('li').count(),0);
     assert.deepEqual(errors,[]);
-    console.log('Player roster desktop, narrow layout, escaping, and paused expiry checks passed.');
+    await page.goto('http://roster.test/#servers/missing%3Cscript%3E');
+    await page.getByTestId('route-error').waitFor();
+    assert.equal(new URL(page.url()).hash,'#dashboard');
+    assert.match(await page.getByTestId('route-error').innerText(),/missing<script>/);
+    assert.equal(await page.getByTestId('route-error').locator('script').count(),0);
+    await page.getByRole('button',{name:'Refresh data',exact:true}).click();
+    await page.waitForFunction(()=>!state.refreshing);
+    assert.equal(await page.getByTestId('route-error').count(),1);
+    assert.deepEqual(errors,[]);
+    console.log('Player roster and overview navigation, keyboard, narrow layout, escaping, persistent route error, and paused expiry checks passed.');
   } finally {
     await browser.close();
   }
