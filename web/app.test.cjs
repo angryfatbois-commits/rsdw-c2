@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
 
@@ -171,6 +171,27 @@ context.ui.handleChange({target:{id:'saved-user', value:'deleted-id'}});
 assert.equal(ownerField.value, 'abcdef0123456789abcdef0123456789');
 assert.equal(state.users[0].playerId, '0123456789abcdef0123456789abcdef');
 state.servers = savedServers;
+const {PATTERN, eventTable} = context.ui;
+assert.doesNotThrow(() => new RegExp(PATTERN.dnsLabel, 'v'));
+assert.doesNotThrow(() => new RegExp(PATTERN.eosId, 'v'));
+html = context.ui.usersPage();
+assert.match(html, /No player IDs saved yet|Renamed|&lt;Alice/);
+state.users = [];
+html = context.ui.usersPage();
+assert.match(html, /No player IDs saved yet/);
+assert.match(html, /class="empty"/);
+state.users = [
+  {id:'stable-one', name:'<Alice & "friends">', playerId:'0123456789abcdef0123456789abcdef'},
+  {id:'stable-two', name:'<Alice & "friends">', playerId:'11111111111111111111111111111111'},
+];
+assert.match(eventTable([{id:'player-event', serverId:'world', category:'player', severity:'info', message:'A player joined'}], true), />Players</);
+assert.doesNotMatch(eventTable([{id:'player-event', serverId:'world', category:'player', severity:'info', message:'A player joined'}], true), />player</);
+assert.match(maintenance(), /Memory limit/);
+assert.match(maintenance(), /Stable server ID/);
+html = context.ui.dashboard();
+assert.match(html, /Needs attention/);
+assert.doesNotMatch(html, /stat-value amber[^"]*">0<\/div><div class="stat-label">Needs attention/);
+assert.match(context.ui.integrationForm({serverIds:[], secretRef:{name:'s', key:'token'}, rules:{}}), /fieldset class="form-section"/);
 console.log('UI rendering and saved-ID selection checks passed.');
 
 state.capabilities = {integrations:true};
@@ -187,6 +208,16 @@ state.servers[1].worldName = 'PC2-US-EAST-01';
 state.pendingRestarts = {'world-02':{id:'restart-operation'}};
 assert.ok(context.ui.integrationsPage().includes('Restart restart-operation for PC2-US-EAST-01 (world-02) awaits a fresh observation.'));
 state.pendingRestarts = {};
+state.alertRules = [];
+state.integrations = [
+  {id:'enabled-bot', name:'Alerts', enabled:true, secretRef:{name:'discord', key:'token'}, guildId:'1', channelId:'2', serverIds:[], rules:{}},
+  {id:'disabled-bot', name:'Quiet', enabled:false, secretRef:{name:'discord', key:'token'}, guildId:'1', channelId:'2', serverIds:[], rules:{}},
+];
+html = context.ui.integrationsPage();
+assert.match(html, /class="status enabled"/);
+assert.match(html, /class="status disabled"/);
+state.integrations = [];
+assert.match(context.ui.integrationsPage(), /No Discord bots configured yet/);
 state.servers = savedServers;
 
 state.capabilities = {dashboard:true, telemetry:true};
