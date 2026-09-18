@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"math"
@@ -70,6 +69,10 @@ func (a *App) sendDiscord(ctx context.Context, i DiscordIntegration, d Delivery)
 	if a.demo {
 		return discordResult{status: DeliverySent, reason: "Demo simulated delivery; no Discord request"}
 	}
+	message, err := buildDiscordMessage(d)
+	if err != nil {
+		return discordResult{status: DeliveryFailed, reason: err.Error()}
+	}
 	k, ok := a.orchestrator.(*kubeOrchestrator)
 	if !ok {
 		return discordResult{status: DeliveryFailed, reason: "Discord requires Kubernetes Secret access"}
@@ -103,12 +106,7 @@ func (a *App) sendDiscord(ctx context.Context, i DiscordIntegration, d Delivery)
 	if err != nil || channel.ID != d.ChannelID || channel.GuildID != d.GuildID {
 		return discordResult{status: DeliveryFailed, reason: "Discord channel does not match the configured guild"}
 	}
-	content := fmt.Sprintf("%s: %s\n%s\nEvent %s | Delivery %s", d.Event.ServerName, d.Event.Message, d.Event.Details, d.Event.ID, d.ID)
-	runes := []rune(content)
-	if len(runes) > 1900 {
-		content = string(runes[:1900])
-	}
-	data, _ := json.Marshal(map[string]any{"content": content, "nonce": d.ID, "enforce_nonce": true, "allowed_mentions": map[string]any{"parse": []string{}}})
+	data, _ := json.Marshal(message)
 	request, _ = http.NewRequestWithContext(ctx, http.MethodPost, channelURL+"/messages", bytes.NewReader(data))
 	request.Header.Set("Authorization", "Bot "+token)
 	request.Header.Set("Content-Type", "application/json")

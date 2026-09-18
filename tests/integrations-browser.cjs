@@ -88,6 +88,8 @@ async function run() {
   await page.getByTestId('add-integration').waitFor();
   assert.match(await page.locator('#content').innerText(),/No Discord bots configured/);
   await checkDialogLayout('add-integration');
+  assert.equal(await page.getByRole('heading',{name:'Message previews',exact:true}).count(),0);
+  assert.equal(await page.getByTestId('discord-message-preview').count(),0);
   await page.getByTestId('add-integration').click();
   await page.getByTestId('integration-name').fill('<Guild & friends>');
   await page.getByTestId('integration-guild').fill('123');
@@ -105,6 +107,7 @@ async function run() {
   assert.deepEqual(saved().integrations[item.id],item);
   await page.getByTestId('edit-integration').waitFor();
   await checkDialogLayout('edit-integration');
+  assert.equal(await page.getByRole('heading',{name:'Message previews',exact:true}).count(),0);
   assert.match(await page.locator('#content').innerText(),/<Guild & friends>/);
   assert.equal(await page.locator('#content guild').count(),0);
   await page.getByTestId('test-integration').click();
@@ -135,8 +138,22 @@ async function run() {
     return data.deliveries.filter((d) => ['restart_requested','restart_completed'].includes(d.event.kind) && d.status === 'sent').length === 2;
   });
   await page.locator('#refresh').click();
-  await page.locator('td').filter({hasText:/^Restart completed/}).waitFor();
+  const recent = page.getByTestId('discord-recent-delivery');
+  const completed = recent.filter({hasText:'Restart completed'});
+  const sentCompleted = completed.filter({hasText:'Sent'}).first();
+  await sentCompleted.waitFor();
+  assert.ok(await recent.count() >= 3);
+  assert.match(await sentCompleted.innerText(),/SERVER[\s\S]*ScuffedTards/);
+  assert.match(await sentCompleted.innerText(),/bare minimum/);
   await page.screenshot({path:path.join(output,'deliveries.png'),fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),true);
+  for (const card of await recent.all()) {
+    const box = await card.boundingBox();
+    assert.ok(box.width > 200 && box.x >= 0 && box.x + box.width <= 390);
+  }
+  await page.screenshot({path:path.join(output,'deliveries-mobile.png'),fullPage:true});
+  await page.setViewportSize({width:1440,height:1050});
   await page.getByTestId('edit-integration').click();
   await page.getByTestId('integration-name').fill('Unsaved private draft');
   await page.evaluate(() => sessionStorage.setItem('rsdw-admin-token','expired'));
@@ -147,6 +164,7 @@ async function run() {
   assert.equal(await page.locator('#modal').isVisible(),false);
   assert.equal(await page.locator('#modal-body').innerText(),'');
   assert.doesNotMatch(await page.locator('#content').innerText(),/Guild & friends|discord-rotated|Unsaved private draft/);
+  assert.equal(await page.getByTestId('discord-recent-delivery').count(),0);
   assert.deepEqual(errors,[]);
   assert.ok(!logs.includes(token));
   console.log('PASS add/edit dialog focus, visible headings, checkbox layout and keyboard/label interaction at desktop/narrow/short viewports; authenticated Discord configuration, unavailable backup rules, approximate labels, associations, rotation, disable/enable, demo tests and restart deliveries, persistence, escaping, and expired-session clearing.');

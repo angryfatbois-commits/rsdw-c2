@@ -83,6 +83,23 @@ main { padding: 24px 30px 30px; min-width: 0; width: 100%; }
 #content > .panel + .panel,.section-gap { margin-top: 16px; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }
 .panel-heading p { font-size: 14px; margin-top: 4px; }
+.recent-delivery-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,420px),1fr)); gap: 16px; }
+.delivery-card { min-width: 0; background: var(--color-muted); border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
+.delivery-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; }
+.delivery-card-identity { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; }
+.delivery-card-avatar { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--color-primary); color: var(--color-on-primary); font-size: 12px; }
+.delivery-card-bot { padding: 1px 5px; border-radius: 3px; background: var(--color-primary); color: var(--color-on-primary); font-size: 10px; }
+.delivery-card-embed { margin: 0 16px; padding: 16px; background: var(--color-background); border-left: 4px solid var(--embed-color); border-radius: 4px; overflow-wrap: anywhere; }
+.delivery-card-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.delivery-card-title h3 { font-size: 16px; margin-bottom: 8px; }
+.delivery-card-title time { flex-shrink: 0; color: var(--color-muted-foreground); font-size: 12px; }
+.delivery-card-embed p { color: var(--color-foreground); font-size: 14px; }
+.delivery-card-details { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin: 16px 0 0; font-size: 14px; }
+.delivery-card-details dt { color: var(--color-muted-foreground); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.delivery-card-details dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.delivery-card-embed footer { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 16px; color: var(--color-muted-foreground); font-size: 12px; }
+.delivery-card-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 14px 16px 16px; color: var(--color-muted-foreground); font-size: 13px; }
+.delivery-card-meta span { overflow-wrap: anywhere; }
 .stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 16px; margin-bottom: 16px; }
 .stat { display: flex; gap: 24px; align-items: center; min-height: 106px; padding: 20px 28px; }
 .stat svg { width: 32px; height: 32px; color: var(--color-muted-foreground); }
