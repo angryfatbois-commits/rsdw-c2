@@ -208,6 +208,16 @@ state.servers[1].worldName = 'PC2-US-EAST-01';
 state.pendingRestarts = {'world-02':{id:'restart-operation'}};
 assert.ok(context.ui.integrationsPage().includes('Restart restart-operation for PC2-US-EAST-01 (world-02) awaits a fresh observation.'));
 state.pendingRestarts = {};
+state.alertRules = [];
+state.integrations = [
+  {id:'enabled-bot', name:'Alerts', enabled:true, secretRef:{name:'discord', key:'token'}, guildId:'1', channelId:'2', serverIds:[], rules:{}},
+  {id:'disabled-bot', name:'Quiet', enabled:false, secretRef:{name:'discord', key:'token'}, guildId:'1', channelId:'2', serverIds:[], rules:{}},
+];
+html = context.ui.integrationsPage();
+assert.match(html, /class="status enabled"/);
+assert.match(html, /class="status disabled"/);
+state.integrations = [];
+assert.match(context.ui.integrationsPage(), /No Discord bots configured yet/);
 state.servers = savedServers;
 
 state.capabilities = {dashboard:true, telemetry:true};

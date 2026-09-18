@@ -142,8 +142,8 @@ function zonedDate(value, zone) {
   return `${formatted} (${selected})`;
 }
 function status(value = 'unknown') {
-  const known = ['online', 'starting', 'attention', 'stopped', 'deleting', 'stale', 'unknown', 'warning', 'critical', 'error', 'success', 'healthy'];
-  const label = {deleting:'DELETING', stale:'STALE'}[value] || value.charAt(0).toUpperCase() + value.slice(1);
+  const known = ['online', 'starting', 'attention', 'stopped', 'deleting', 'stale', 'unknown', 'warning', 'critical', 'error', 'success', 'healthy', 'enabled', 'disabled'];
+  const label = {deleting:'DELETING', stale:'STALE', enabled:'Enabled', disabled:'Disabled'}[value] || value.charAt(0).toUpperCase() + value.slice(1);
   return `<span class="status ${known.includes(value) ? value : 'unknown'}">${escapeHTML(label)}</span>`;
 }
 function stat(label, value, name, tone = '') {
@@ -162,7 +162,7 @@ function notice(message) {
   $('#toast').textContent = message;
   $('#toast').hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6000);
+  toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 5000);
 }
 async function api(path, options = {}) {
   const epoch = state.epoch;
@@ -535,7 +535,7 @@ function integrationsPage() {
   return `<section class="panel"><div class="panel-heading"><h2>Discord bots</h2><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add Discord bot</button></div>
     ${Object.entries(state.pendingRestarts).map(([id,op]) => `<p class="inline-note">Restart ${escapeHTML(op.id)} for ${escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))} awaits a fresh observation. Requested ${escapeHTML(date(op.requestedAt))}.${op.commandUncertain ? ' Command outcome is unknown.' : ''}</p>`).join('')}
     <p class="inline-note">${state.integrationsDemo ? 'Demo mode simulates deliveries and restarts. No Discord messages are sent. ' : ''}Choose events for each bot. Player joined alerts are approximate count increases, with no player identities. Backup alerts are unavailable until a backup producer exists.</p>
-    ${state.integrations.length ? `<div class="table-wrap"><table><thead><tr><th>Bot</th><th>Target</th><th>Servers</th><th>Rules</th><th>Actions</th></tr></thead><tbody>${state.integrations.map((item) => `<tr><td>${escapeHTML(item.name)}<br>${item.enabled ? 'Enabled' : 'Disabled'}<br><small>Secret ${escapeHTML(item.secretRef.name)} / ${escapeHTML(item.secretRef.key)}</small></td><td>Guild ${escapeHTML(item.guildId)}<br>Channel ${escapeHTML(item.channelId)}</td><td>${item.serverIds.map((id) => escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))).join('<br>') || 'No servers'}</td><td>${state.alertRules.filter((rule) => item.rules[rule.kind]).map((rule) => escapeHTML(rule.label)).join('<br>') || 'No rules enabled'}</td><td class="actions"><button data-action="edit-integration" data-id="${escapeHTML(item.id)}" data-testid="edit-integration">Configure</button><button data-action="test-integration" data-id="${escapeHTML(item.id)}" data-testid="test-integration">Send test</button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No Discord bots configured yet</h3><p>Add a bot to route selected server alerts to Discord.</p></div>`}</section>
+    ${state.integrations.length ? `<div class="table-wrap"><table><thead><tr><th>Bot</th><th>Target</th><th>Servers</th><th>Rules</th><th>Actions</th></tr></thead><tbody>${state.integrations.map((item) => `<tr><td>${escapeHTML(item.name)}<br>${status(item.enabled ? 'enabled' : 'disabled')}<br><small>Secret ${escapeHTML(item.secretRef.name)} / ${escapeHTML(item.secretRef.key)}</small></td><td>Guild ${escapeHTML(item.guildId)}<br>Channel ${escapeHTML(item.channelId)}</td><td>${item.serverIds.map((id) => escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))).join('<br>') || 'No servers'}</td><td>${state.alertRules.filter((rule) => item.rules[rule.kind]).map((rule) => escapeHTML(rule.label)).join('<br>') || 'No rules enabled'}</td><td class="actions"><button data-action="edit-integration" data-id="${escapeHTML(item.id)}" data-testid="edit-integration">Configure</button><button data-action="test-integration" data-id="${escapeHTML(item.id)}" data-testid="test-integration">Send test</button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No Discord bots configured yet</h3><p>Add a bot to route selected server alerts to Discord.</p></div>`}</section>
     <section class="panel section-gap"><div class="panel-heading"><div><h2>Recent deliveries</h2><p>What was sent, where it went, and whether Discord accepted it.</p></div></div><p class="inline-note">Uncertain means a message may have been sent. Check Discord before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>${state.deliveries.length ? `<div class="recent-delivery-list">${state.deliveries.map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
 }
 function integrationForm(item) {
@@ -666,6 +666,9 @@ async function previewReboot() {
     if (button?.isConnected) button.disabled = false;
   }
 }
+function navHTML() {
+  return Object.entries(pages).filter(([page]) => can(page)).map(([page,[label]])=>`<a href="#${page}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
+}
 function render() {
   if (state.authRequired) { lockedState(); return; }
   if (!can(state.page)) state.page = 'dashboard';
@@ -677,7 +680,7 @@ function render() {
   document.title = `${title} · RSDW C2`;
   $('#page-title').textContent = title;
   $('#page-description').textContent = description;
-  $('#navigation').innerHTML = Object.entries(pages).filter(([page]) => can(page)).map(([page,[label]])=>`<a href="#${page}" data-testid="nav-${page}" ${page===state.page?'aria-current="page"':''}>${icon(page)}${label}</a>`).join('');
+  $('#navigation').innerHTML = navHTML();
   const individual = state.page === 'telemetry' || state.page === 'maintenance';
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(serverLabel(server))}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
@@ -1128,7 +1131,7 @@ function navigate() {
   window.scrollTo(0, 0);
   const page = location.hash.slice(1).split('?')[0];
   state.page = pages[page] && (!state.identity || can(page)) ? page : 'dashboard';
-  $('#navigation').innerHTML = Object.entries(pages).filter(([name]) => can(name)).map(([name,[label]])=>`<a href="#${name}" data-testid="nav-${name}" ${name===state.page?'aria-current="page"':''}>${icon(name)}${label}</a>`).join('');
+  $('#navigation').innerHTML = navHTML();
   $('#page-title').textContent = pages[state.page][0];
   $('#page-description').textContent = pages[state.page][1];
   clearTelemetry();
