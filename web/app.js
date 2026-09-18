@@ -487,9 +487,9 @@ async function submitLogin(event) {
   }
 }
 function eventArray(data) { return Array.isArray(data) ? data : data.events || []; }
-function eventListParams({limit, offset = 0, preview = false} = {}) {
+function eventListParams({limit, offset = 0, preview = false, serverId = state.serverId} = {}) {
   const params = new URLSearchParams();
-  if (state.serverId) params.set('serverId', state.serverId);
+  if (serverId) params.set('serverId', serverId);
   if (!preview) {
     params.set('query', state.query);
     params.set('category', state.category);
@@ -997,8 +997,9 @@ async function refresh() {
     $('#cluster-name').textContent = typeof bootstrap.cluster === 'string' ? bootstrap.cluster : bootstrap.cluster?.name || bootstrap.clusterName || 'Local cluster';
     state.mode = bootstrap.mode;
     $('#environment').textContent = bootstrap.mode === 'demo' ? 'Demo mode' : 'Kubernetes';
-    const eventsPromise = can('events') ? api(`/api/events?${eventListParams(state.page === 'events' ? {limit:100, offset:0} : {limit:50, preview:true})}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) acceptEvents(result); }) : Promise.resolve();
     const server = selectedServer();
+    const eventParams = state.page === 'events' ? {limit:100, offset:0} : {limit:50, preview:true, serverId:state.page === 'maintenance' ? server?.id : state.serverId};
+    const eventsPromise = can('events') ? api(`/api/events?${eventListParams(eventParams)}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) acceptEvents(result); }) : Promise.resolve();
     const requests = [eventsPromise];
     if (can('users')) requests.push(api('/api/users',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.users = result.users; }));
     if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
