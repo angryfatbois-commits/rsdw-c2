@@ -96,7 +96,7 @@ func markNewestEvents(keep []bool, events []Event, indexes []int, limit int) {
 }
 
 func addEvent(state *State, event Event) {
-	state.Events = pruneEvents(append(state.Events, event))
+	state.Events = pruneEvents(append(state.Events, event.clone()))
 }
 
 func appendEvent(state *State, server Server, category, severity, message, details string) {

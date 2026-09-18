@@ -158,15 +158,18 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 		claimed := false
 		err := a.store.Update(func(state *State) error {
 			d = state.Deliveries[id]
-			if state.DiscordRetryAt.After(now) || (d.Status != DeliveryPending && d.Status != DeliveryRetry) || d.NextAttempt.After(now) {
+			if (d.Status != DeliveryPending && d.Status != DeliveryRetry) || d.NextAttempt.After(now) {
 				return nil
 			}
 			var ok bool
 			integration, ok = state.Integrations[d.IntegrationID]
-			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) {
+			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) || !warningDeliveryValid(state, d, now) || (d.Event.Kind == RestartWarning && !a.rebootSchedulingEnabled()) {
 				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", now
 				state.Deliveries[id] = d
 				state.pruneDeliveryHistory()
+				return nil
+			}
+			if normalizedProvider(d.Provider) == providerDiscord && state.DiscordRetryAt.After(now) {
 				return nil
 			}
 			d.Status, d.UpdatedAt = DeliverySending, now
@@ -181,7 +184,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 		if !claimed {
 			continue
 		}
-		result := a.sendDiscord(ctx, integration, d)
+		result := a.sendNotification(ctx, integration, d)
 		finished := time.Now().UTC()
 		if finished.Before(now) {
 			finished = now
@@ -192,7 +195,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 				return nil
 			}
 			d.Status, d.Result, d.UpdatedAt = result.status, result.reason, finished
-			if result.wait > 0 {
+			if result.wait > 0 && normalizedProvider(d.Provider) == providerDiscord {
 				state.DiscordRetryAt = finished.Add(result.wait)
 			}
 			if d.Status == DeliveryRetry {

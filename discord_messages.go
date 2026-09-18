@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -44,6 +46,7 @@ type discordMessageSpec struct {
 
 var discordMessageSpecs = []discordMessageSpec{
 	{MemoryPressureRestartRequested, "Memory pressure restart requested", "The server kept hogging memory. C2 requested a restart before it ate the whole damn limit.", 0xF59E0B, true},
+	{RestartWarning, "Restart approaching", "A scheduled restart is approaching. Save your progress.", 0xF59E0B, true},
 	{RestartRequested, "Restart requested", "The server was told to get its act together. It chose a dramatic reboot instead.", 0xF59E0B, true},
 	{RestartCompleted, "Restart completed", "The corpse has staggered back online. It did the bare minimum and expects a fucking parade.", 0x22C55E, true},
 	{RestartFailed, "Restart not confirmed", "The restart fucked off into the void and never bothered to report back. Even the server can't explain what the hell it's doing.", 0xEF4444, true},
@@ -73,6 +76,23 @@ func renderDiscordEmbed(event Event) (discordEmbed, error) {
 		}
 		if !event.Timestamp.IsZero() {
 			embed.Timestamp = event.Timestamp.UTC().Format(time.RFC3339Nano)
+		}
+		if count := event.Evidence.PlayerCount; count != nil {
+			embed.Fields = append(embed.Fields, discordEmbedField{Name: "Players", Value: playerCountText(count)})
+		}
+		if len(event.Evidence.JoinedPlayers) > 0 {
+			var names []string
+			for _, player := range event.Evidence.JoinedPlayers {
+				name := player.CharacterName
+				if player.Name != "" {
+					name += " (" + player.Name + ")"
+				}
+				names = append(names, name)
+			}
+			embed.Title, embed.Description = "Player joined", strings.Join(names, ", ")+" joined the server."
+		}
+		if warning := event.Evidence.RestartWarning; warning != nil {
+			embed.Description = fmt.Sprintf("Restart in %d minutes. Save your progress. Scheduled for %s.", warning.Minutes, warning.RestartAt.UTC().Format(time.RFC3339))
 		}
 		return embed, nil
 	}

@@ -125,21 +125,22 @@ func (s Server) MarshalJSON() ([]byte, error) {
 }
 
 type Event struct {
-	Kind         EventKind `json:"kind,omitempty"`
-	Source       string    `json:"source,omitempty"`
-	Accuracy     string    `json:"accuracy,omitempty"`
-	OperationID  string    `json:"operationId,omitempty"`
-	ScheduleID   string    `json:"scheduleId,omitempty"`
-	OccurrenceID string    `json:"occurrenceId,omitempty"`
-	Actor        string    `json:"actor,omitempty"`
-	ID           string    `json:"id"`
-	Timestamp    time.Time `json:"timestamp"`
-	ServerID     string    `json:"serverId"`
-	ServerName   string    `json:"serverName"`
-	Category     string    `json:"category"`
-	Severity     string    `json:"severity"`
-	Message      string    `json:"message"`
-	Details      string    `json:"details"`
+	Evidence     AlertEvidence `json:"evidence,omitempty"`
+	Kind         EventKind     `json:"kind,omitempty"`
+	Source       string        `json:"source,omitempty"`
+	Accuracy     string        `json:"accuracy,omitempty"`
+	OperationID  string        `json:"operationId,omitempty"`
+	ScheduleID   string        `json:"scheduleId,omitempty"`
+	OccurrenceID string        `json:"occurrenceId,omitempty"`
+	Actor        string        `json:"actor,omitempty"`
+	ID           string        `json:"id"`
+	Timestamp    time.Time     `json:"timestamp"`
+	ServerID     string        `json:"serverId"`
+	ServerName   string        `json:"serverName"`
+	Category     string        `json:"category"`
+	Severity     string        `json:"severity"`
+	Message      string        `json:"message"`
+	Details      string        `json:"details"`
 }
 
 type State struct {
@@ -288,6 +289,9 @@ func (s State) clone() State {
 	}
 	next.Servers, next.Users, next.PendingSeeds = maps.Clone(s.Servers), maps.Clone(s.Users), maps.Clone(s.PendingSeeds)
 	next.Events = append([]Event(nil), s.Events...)
+	for index := range next.Events {
+		next.Events[index] = next.Events[index].clone()
+	}
 	next.RebootSchedules = maps.Clone(s.RebootSchedules)
 	next.RebootHistory = append([]rebootExecution(nil), s.RebootHistory...)
 	for index := range next.RebootHistory {
@@ -321,6 +325,10 @@ func (s State) clone() State {
 	}
 	next.Integrations, next.Producers, next.Deliveries = maps.Clone(s.Integrations), maps.Clone(s.Producers), maps.Clone(s.Deliveries)
 	for id, integration := range next.Integrations {
+		if integration.QuietHours != nil {
+			quiet := *integration.QuietHours
+			integration.QuietHours = &quiet
+		}
 		integration.ServerIDs = append([]string{}, integration.ServerIDs...)
 		integration.Rules = maps.Clone(integration.Rules)
 		next.Integrations[id] = integration
@@ -330,11 +338,16 @@ func (s State) clone() State {
 			pressure := *producer.MemoryPressure
 			producer.MemoryPressure = &pressure
 		}
+		producer.Roster = append([]ConnectedPlayer(nil), producer.Roster...)
 		if producer.Restart != nil {
 			restart := *producer.Restart
 			producer.Restart = &restart
 		}
 		next.Producers[id] = producer
+	}
+	for id, delivery := range next.Deliveries {
+		delivery.Event = delivery.Event.clone()
+		next.Deliveries[id] = delivery
 	}
 	return next
 }
@@ -857,6 +870,7 @@ func newerVersion(candidate, current [3]int) bool {
 type App struct {
 	deliveryMu       sync.Mutex
 	discordTransport http.RoundTripper
+	webhookTransport http.RoundTripper
 	// ponytail: one C2 writer serializes lifecycle changes; use durable coordination before multiple replicas.
 	lifecycleMu    sync.Mutex
 	store          *Store

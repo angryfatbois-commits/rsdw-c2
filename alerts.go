@@ -18,6 +18,7 @@ type RestartOperation struct {
 }
 
 type AlertProducer struct {
+	Roster          []ConnectedPlayer    `json:"roster,omitempty"`
 	Runtime         string               `json:"runtime"`
 	LastAt          time.Time            `json:"lastAt"`
 	PlayerAt        time.Time            `json:"playerAt"`
@@ -88,9 +89,15 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	reading := freshMetrics(o.metrics, now)["players"]
 	if o.health == "healthy" && o.runtime != "" && reading.Value != nil && reading.Status == "available" && reading.ObservedAt != nil {
 		at, count := *reading.ObservedAt, int(*reading.Value)
+		roster := rosterEvidence(o.playerRoster, count)
 		if !p.PlayerAt.IsZero() && at.After(p.PlayerAt) && at.Sub(p.PlayerAt) <= telemetryMaxAge {
 			if count > p.Players {
-				emitAlert(state, server, PlayerJoined, "", fmt.Sprintf("Approximate increase of %d players (%d to %d); identities and joins between polls are unknown", count-p.Players, p.Players, count), o.at)
+				joined := joinedRoster(p.Roster, roster, count-p.Players)
+				details := fmt.Sprintf("Approximate increase of %d players (%d to %d); identities and joins between polls are unknown", count-p.Players, p.Players, count)
+				if len(joined) > 0 {
+					details = fmt.Sprintf("Observed %d new characters on the same healthy runtime", len(joined))
+				}
+				emitAlertEvidence(state, server, PlayerJoined, "", details, o.at, AlertEvidence{JoinedPlayers: joined, PlayerCount: countEvidence(server, o, now)}, "", "")
 			}
 			if p.PlayerLimit == server.MaxPlayers && server.MaxPlayers > 0 && p.Players < server.MaxPlayers && count >= server.MaxPlayers {
 				emitAlert(state, server, PlayerLimitReached, "", fmt.Sprintf("Player count reached %d / %d", count, server.MaxPlayers), o.at)
@@ -98,6 +105,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 		}
 		if at.After(p.PlayerAt) {
 			p.Players, p.PlayerLimit, p.PlayerAt = count, server.MaxPlayers, at
+			p.Roster = roster
 		}
 	} else {
 		p.PlayerAt = time.Time{}
@@ -125,7 +133,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	} else if p.Outage && o.health == "healthy" && p.StreakCount >= 2 && o.at.Sub(p.StreakSince) >= 15*time.Second {
 		p.Outage = false
 		p.resetStreak()
-		emitAlert(state, server, ServerRecovered, "", "Confirmed healthy after an established outage", o.at)
+		emitAlertEvidence(state, server, ServerRecovered, "", "Confirmed healthy after an established outage", o.at, AlertEvidence{PlayerCount: countEvidence(server, o, now)}, "", "")
 	}
 }
 

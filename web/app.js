@@ -85,7 +85,7 @@ function parseLocationHash(hash) {
     }
   }
   if (pageKey === 'integrations') {
-    return {page:'integrations', integrationView: view === 'discord' ? 'discord' : 'hub'};
+    return {page:'integrations', integrationView: ['discord','webhook'].includes(view) ? view : 'hub'};
   }
   return {page: pages[pageKey] ? pageKey : 'dashboard', integrationView:'hub'};
 }
@@ -110,6 +110,7 @@ function validateOverviewRoute() {
   }
 }
 function pageHeading() {
+  if (state.page === 'integrations' && state.integrationView === 'webhook') return ['HTTPS webhooks', 'Send selected server alerts to an HTTPS endpoint.'];
   if (state.page === 'integrations' && state.integrationView === 'discord') {
     return ['Discord', 'Configure Discord alerts for your Dragonwilds servers.'];
   }
@@ -808,42 +809,74 @@ function discordStatus(value) {
   return `<span class="status ${tone}">${label}</span>`;
 }
 function integrationsHub() {
-  const connection = discordConnectionStatus(state.integrations, state.deliveries);
+  const connection = discordConnectionStatus(state.integrations.filter((item) => (item.provider || 'discord') === 'discord'), state.deliveries);
   const [label] = discordStatusCopy[connection];
-  return `<div class="provider-grid"><a class="provider-card" href="#integrations/discord" data-testid="discord-integration-card" aria-label="Discord, ${label}">${discordMark()}<span class="provider-card-copy"><strong>Discord</strong><span class="provider-card-summary">Alerts for Dragonwilds servers.</span>${discordStatus(connection)}</span></a></div>`;
+  const webhookStatus = discordConnectionStatus(state.integrations.filter((item) => item.provider === 'webhook'), state.deliveries);
+  return `<div class="provider-grid"><a class="provider-card" href="#integrations/discord" data-testid="discord-integration-card" aria-label="Discord, ${label}">${discordMark()}<span class="provider-card-copy"><strong>Discord</strong><span class="provider-card-summary">Alerts for Dragonwilds servers.</span>${discordStatus(connection)}</span></a><a class="provider-card" href="#integrations/webhook" data-testid="webhook-integration-card">${icon('integrations')}<span class="provider-card-copy"><strong>HTTPS webhooks</strong><span class="provider-card-summary">Structured JSON alerts for your endpoint.</span>${discordStatus(webhookStatus)}</span></a></div>`;
 }
 function discordBotCard(item) {
   const servers = item.serverIds.map((id) => escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))).join(', ') || 'No servers';
   const rules = state.alertRules.filter((rule) => item.rules[rule.kind]).map((rule) => escapeHTML(rule.label)).join(', ') || 'No rules enabled';
   return `<article class="bot-card"><div class="bot-card-heading"><h3>${escapeHTML(item.name)}</h3>${status(item.enabled ? 'enabled' : 'disabled')}</div>
-    <dl class="detail-list"><div><dt>Guild</dt><dd class="mono">${escapeHTML(item.guildId)}</dd></div><div><dt>Channel</dt><dd class="mono">${escapeHTML(item.channelId)}</dd></div><div><dt>Secret</dt><dd>${escapeHTML(item.secretRef.name)} / ${escapeHTML(item.secretRef.key)}</dd></div><div><dt>Servers</dt><dd>${servers}</dd></div><div><dt>Rules</dt><dd>${rules}</dd></div></dl>
+    <dl class="detail-list">${item.provider === 'webhook' ? `<div><dt>Endpoint</dt><dd>${escapeHTML(item.webhookUrl)}</dd></div>` : `<div><dt>Guild</dt><dd class="mono">${escapeHTML(item.guildId)}</dd></div><div><dt>Channel</dt><dd class="mono">${escapeHTML(item.channelId)}</dd></div>`}<div><dt>Secret</dt><dd>${escapeHTML(item.secretRef.name)} / ${escapeHTML(item.secretRef.key)}</dd></div><div><dt>Quiet hours</dt><dd>${item.quietHours ? `${escapeHTML(item.quietHours.start)} to ${escapeHTML(item.quietHours.end)} (${escapeHTML(item.quietHours.timezone)})` : 'Off'}</dd></div><div><dt>Servers</dt><dd>${servers}</dd></div><div><dt>Rules</dt><dd>${rules}</dd></div></dl>
     <div class="bot-card-actions"><button data-action="edit-integration" data-id="${escapeHTML(item.id)}" data-testid="edit-integration">Configure</button><button data-action="test-integration" data-id="${escapeHTML(item.id)}" data-testid="test-integration">Send test</button></div></article>`;
 }
 function discordAlertsPage() {
+  const webhook = state.integrationView === 'webhook';
+  const provider = webhook ? 'webhook' : 'discord';
+  const integrations = state.integrations.filter((item) => (item.provider || 'discord') === provider);
+  const deliveries = state.deliveries.filter((item) => (item.provider || 'discord') === provider);
   const pending = Object.entries(state.pendingRestarts).map(([id,op]) => `<p class="inline-note">Restart ${escapeHTML(op.id)} for ${escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))} awaits a fresh observation. Requested ${escapeHTML(date(op.requestedAt))}.${op.commandUncertain ? ' Command outcome is unknown.' : ''}</p>`).join('');
-  const demo = state.integrationsDemo ? 'Demo mode simulates deliveries and restarts. No Discord messages are sent. ' : '';
-  const bots = state.integrations.length
-    ? `<div class="bot-card-list">${state.integrations.map(discordBotCard).join('')}</div>`
-    : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No Discord bots configured yet</h3><p>Add a bot to route selected server alerts to Discord.</p></div>`;
+  const demo = state.integrationsDemo ? 'Demo mode simulates deliveries and restarts. No external messages are sent. ' : '';
+  const bots = integrations.length
+    ? `<div class="bot-card-list">${integrations.map(discordBotCard).join('')}</div>`
+    : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No ${webhook ? 'HTTPS webhooks' : 'Discord bots'} configured yet</h3><p>Add a destination to route selected server alerts.</p></div>`;
   return `<a class="back-link" href="#integrations" data-testid="integrations-back">${icon('back')}Back</a>
-    <section class="panel"><div class="panel-heading"><div><h2>Discord bots</h2><p>Send selected server alerts to a Discord channel.</p></div><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add Discord bot</button></div>
-    ${pending}<p class="inline-note">${demo}Choose events for each bot. Player joined alerts are approximate count increases, with no player identities. Backup alerts are unavailable until a backup producer exists.</p>${bots}</section>
+    <section class="panel"><div class="panel-heading"><div><h2>${webhook ? 'HTTPS webhooks' : 'Discord bots'}</h2><p>Send selected server alerts to ${webhook ? 'an HTTPS endpoint' : 'a Discord channel'}.</p></div><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add ${webhook ? 'HTTPS webhook' : 'Discord bot'}</button></div>
+    ${pending}<p class="inline-note">${demo}Player joined alerts name characters only when fresh roster evidence supports them; otherwise they report approximate count increases. Backup alerts are unavailable until a backup producer exists.</p>${bots}</section>
     <section class="panel section-gap"><div class="panel-heading"><div><h2>Recent messages</h2><p>Newest first. Each message names the Dragonwilds server it belongs to.</p></div></div>
-    <p class="inline-note">Uncertain means a message may have been sent. Check Discord before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>
-    ${state.deliveries.length ? `<div class="recent-delivery-list">${[...state.deliveries].sort((a, b) => deliveryTime(b) - deliveryTime(a)).map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
+    <p class="inline-note">Uncertain means a message may have been sent. Check the destination before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>
+    ${deliveries.length ? `<div class="recent-delivery-list">${[...deliveries].sort((a, b) => deliveryTime(b) - deliveryTime(a)).map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
 }
 function integrationsPage() {
   if (!can('integrations')) return dashboard();
-  return state.integrationView === 'discord' ? discordAlertsPage() : integrationsHub();
+  return ['discord','webhook'].includes(state.integrationView) ? discordAlertsPage() : integrationsHub();
 }
 function integrationForm(item) {
+  const provider = item ? (item.provider || 'discord') : (state.integrationView === 'webhook' ? 'webhook' : 'discord');
+  const quiet = item?.quietHours;
   const servers = state.servers.map((server) => `<label class="choice-row"><input type="checkbox" name="integrationServer" value="${escapeHTML(server.id)}" ${item?.serverIds?.includes(server.id) ? 'checked' : ''}><span class="choice-copy"><strong>${escapeHTML(serverLabel(server))}</strong></span></label>`).join('') || '<p>No servers available.</p>';
   const rules = state.alertRules.map((rule) => `<label class="choice-row"><input type="checkbox" name="integrationRule" value="${escapeHTML(rule.kind)}" ${rule.available ? '' : 'disabled'} ${item?.rules?.[rule.kind] && rule.available ? 'checked' : ''}><span class="choice-copy"><strong>${escapeHTML(rule.label)}</strong><small>${escapeHTML(rule.source)}</small></span></label>`).join('');
-  return `<fieldset class="form-section"><legend>Bot</legend><div class="form-grid"><label class="field">Display name<input name="name" data-testid="integration-name" required maxlength="80" value="${escapeHTML(item?.name || '')}"></label><label class="field">Alerts<select name="enabled" data-testid="integration-enabled"><option value="true" ${item?.enabled !== false ? 'selected' : ''}>Enabled</option><option value="false" ${item?.enabled === false ? 'selected' : ''}>Disabled</option></select></label></div></fieldset>
-    <fieldset class="form-section"><legend>Discord destination</legend><div class="form-grid"><label class="field">Guild ID<input name="guildId" data-testid="integration-guild" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.guildId || '')}"></label><label class="field">Channel ID<input name="channelId" data-testid="integration-channel" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.channelId || '')}"></label></div></fieldset>
+  return `<div class="error-summary" id="integration-error-summary" role="alert" tabindex="-1" hidden><h3>Check the integration</h3><ul></ul></div><fieldset class="form-section"><legend>Integration</legend><div class="form-grid"><label class="field">Display name<input name="name" data-testid="integration-name" required maxlength="80" value="${escapeHTML(item?.name || '')}"></label><label class="field">Alerts<select name="enabled" data-testid="integration-enabled"><option value="true" ${item?.enabled !== false ? 'selected' : ''}>Enabled</option><option value="false" ${item?.enabled === false ? 'selected' : ''}>Disabled</option></select></label><label class="field">Provider<select name="provider" id="integration-provider"><option value="discord" ${provider === 'discord' ? 'selected' : ''}>Discord</option><option value="webhook" ${provider === 'webhook' ? 'selected' : ''}>HTTPS webhook</option></select></label></div></fieldset>
+    <fieldset class="form-section" data-provider="discord" ${provider === 'discord' ? '' : 'hidden disabled'}><legend>Discord destination</legend><div class="form-grid"><label class="field">Guild ID<input name="guildId" data-testid="integration-guild" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.guildId || '')}"></label><label class="field">Channel ID<input name="channelId" data-testid="integration-channel" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.channelId || '')}"></label></div></fieldset>
+    <fieldset class="form-section" data-provider="webhook" ${provider === 'webhook' ? '' : 'hidden disabled'}><legend>Webhook destination</legend><label class="field">HTTPS endpoint<input name="webhookUrl" data-testid="integration-webhook-url" type="url" required maxlength="2048" value="${escapeHTML(item?.webhookUrl || '')}" placeholder="https://alerts.example.com/events"><small>Public HTTPS on port 443. No credentials, query, or fragment in the URL. The Secret is sent as a bearer token. Redirects are not followed.</small></label></fieldset>
     <fieldset class="form-section"><legend>Kubernetes Secret</legend><p>Reference a pre-created Kubernetes Secret in the C2 namespace. Never enter a bot token here. Change the Secret name or key to rotate the reference. Sending a test also works while disabled.</p><div class="form-grid"><label class="field">Secret name<input name="secretName" data-testid="integration-secret-name" required maxlength="253" value="${escapeHTML(item?.secretRef?.name || '')}" autocomplete="off"></label><label class="field">Secret key<input name="secretKey" data-testid="integration-secret-key" required maxlength="253" value="${escapeHTML(item?.secretRef?.key || 'token')}" autocomplete="off"></label></div></fieldset>
+    <fieldset class="form-section"><legend>Quiet hours</legend><label class="choice-row"><input type="checkbox" name="quietEnabled" id="integration-quiet-enabled" ${quiet ? 'checked' : ''}><span>Mute this integration during quiet hours</span></label><p>Applies to all selected rules. Suppressed alerts are not replayed. Tests bypass quiet hours.</p><div class="form-grid" id="integration-quiet-fields" ${quiet ? '' : 'hidden'}><label class="field">Start time<input type="time" name="quietStart" required value="${escapeHTML(quiet?.start || '22:00')}" ${quiet ? '' : 'disabled'}></label><label class="field">End time<input type="time" name="quietEnd" required value="${escapeHTML(quiet?.end || '08:00')}" ${quiet ? '' : 'disabled'}></label><label class="field">IANA timezone<input name="quietTimezone" required value="${escapeHTML(quiet?.timezone || state.displayTimezone || 'UTC')}" placeholder="America/New_York" ${quiet ? '' : 'disabled'}></label></div></fieldset>
     <fieldset class="form-section"><legend>Dragonwilds servers</legend>${servers}</fieldset>
     <fieldset class="form-section"><legend>Alert rules</legend>${rules}</fieldset>`;
+}
+function syncIntegrationFields() {
+  const provider = $('#integration-provider').value;
+  document.querySelectorAll('[data-provider]').forEach((section) => { section.hidden = section.disabled = section.dataset.provider !== provider; });
+  const quiet = $('#integration-quiet-enabled').checked;
+  $('#integration-quiet-fields').hidden = !quiet;
+  $('#integration-quiet-fields').querySelectorAll('input').forEach((input) => { input.disabled = !quiet; });
+}
+function showIntegrationErrors(fields) {
+  const form = $('#modal-form');
+  form.querySelectorAll('[data-integration-error]').forEach((element) => { element.textContent = ''; });
+  form.querySelectorAll('[aria-invalid]').forEach((element) => element.removeAttribute('aria-invalid'));
+  const summary = $('#integration-error-summary');
+  summary.querySelector('ul').innerHTML = Object.entries(fields).map(([name, message]) => {
+    const input = form.elements.namedItem(name);
+    if (!input?.id) return `<li>${escapeHTML(message)}</li>`;
+    input.setAttribute('aria-invalid', 'true');
+    const inline = document.getElementById(`${input.id}-error`);
+    if (inline) inline.textContent = message;
+    return `<li><a href="#${escapeHTML(input.id)}">${escapeHTML(message)}</a></li>`;
+  }).join('');
+  summary.hidden = false;
+  summary.focus();
 }
 function rebootResultLabel(result) {
   return ({awaiting_reconciliation:'Awaiting reconciliation', completed:'Completed', failed:'Failed', skipped:'Skipped', missed:'Missed during downtime', uncertain:'Uncertain'})[result] || 'No execution yet';
@@ -898,9 +931,9 @@ function rebootForm(item) {
   const mode = item?.mode || 'daily';
   const dailyTimes = item?.dailyTimes?.length ? item.dailyTimes : ['05:00'];
   const dailyRows = dailyTimes.map((value, index) => dailyTimeRow(value, index)).join('');
-  return `<p>Choose exactly one timing mode. The first run is strictly after this save. Editing the target, timing, or execution timezone starts a new schedule anchor.</p><div class="error-summary" id="reboot-error-summary" role="alert" tabindex="-1" hidden><h3>Check the schedule</h3><ul></ul></div><div class="form-grid reboot-form"><label class="field">Server<select name="serverId" id="serverId" data-testid="reboot-server" required>${state.servers.map((server) => `<option value="${escapeHTML(server.id)}" ${server.id === (item?.serverId || state.modalServerId) ? 'selected' : ''}>${escapeHTML(serverLabel(server))}</option>`).join('')}</select><small id="serverId-error" data-reboot-error></small></label><label class="field">Execution timezone${timezoneSelect('executionTimezone', zone, 'reboot-timezone')}<small id="executionTimezone-error" data-reboot-error>Stored with this schedule; it is not changed by the display preference.</small></label><label class="field">Timing mode<select name="mode" id="reboot-mode" data-testid="reboot-mode" aria-describedby="mode-error" required><option value="cron" ${mode === 'cron' ? 'selected' : ''}>Cron expression</option><option value="interval" ${mode === 'interval' ? 'selected' : ''}>Elapsed interval</option><option value="daily" ${mode === 'daily' ? 'selected' : ''}>Daily wall-clock times</option></select><small id="mode-error" data-reboot-error></small></label><span></span><label class="field full" data-reboot-field="cron" ${mode === 'cron' ? '' : 'hidden'}>Cron expression<input name="cron" id="cron" data-testid="reboot-cron" value="${escapeHTML(item?.cron || '0 5 * * *')}" placeholder="minute hour day-of-month month day-of-week" aria-describedby="cron-error"><small id="cron-error" data-reboot-error>Five fields. Sunday is 0 or SUN; day-of-month and day-of-week use standard cron OR semantics. No seconds, descriptors, or timezone prefixes.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Every<input type="number" name="intervalValue" id="intervalValue" data-testid="reboot-interval-value" min="1" max="8760" value="${escapeHTML(item?.intervalValue || 12)}" aria-describedby="intervalValue-error"><small id="intervalValue-error" data-reboot-error>Hours: 1–8760. Days: 1–365. A day is exactly 24 elapsed hours.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Unit<select name="intervalUnit" id="intervalUnit" data-testid="reboot-interval-unit" aria-describedby="intervalUnit-error"><option value="hours" ${item?.intervalUnit !== 'days' ? 'selected' : ''}>hours</option><option value="days" ${item?.intervalUnit === 'days' ? 'selected' : ''}>days</option></select><small id="intervalUnit-error" data-reboot-error></small></label><div class="field full" data-reboot-field="daily" ${mode === 'daily' ? '' : 'hidden'}><span>Daily times</span><div id="dailyTimes" class="daily-times" aria-describedby="dailyTimes-error">${dailyRows}</div><button type="button" class="subtle" data-action="add-daily-time" data-testid="add-daily-time">Add another time</button><small id="dailyTimes-error" data-reboot-error>Use the native time controls. Times must be unique HH:mm values; they are sorted before execution.</small></div><label class="field full checkbox-field"><span><input type="checkbox" name="enabled" ${enabled ? 'checked' : ''}> Enable this schedule</span><small>A disabled schedule keeps its history and next run is cleared.</small></label><label class="field full checkbox-field"><span><input type="checkbox" name="acknowledgeDisconnect" id="acknowledgeDisconnect" aria-describedby="acknowledgeDisconnect-error"> I understand that an enabled scheduled reboot may disconnect connected players.</span><small id="acknowledgeDisconnect-error" data-reboot-error>Required every time an enabled schedule is saved.</small></label><div class="field full"><button type="button" class="subtle" data-action="preview-reboot" data-testid="preview-reboot">Preview next five runs</button><div id="reboot-preview" class="preview-results" aria-live="polite"></div></div></div>`;
+  return `<p>Choose exactly one timing mode. The first run is strictly after this save. Editing the target, timing, or execution timezone starts a new schedule anchor.</p><div class="error-summary" id="reboot-error-summary" role="alert" tabindex="-1" hidden><h3>Check the schedule</h3><ul></ul></div><div class="form-grid reboot-form"><label class="field">Server<select name="serverId" id="serverId" data-testid="reboot-server" required>${state.servers.map((server) => `<option value="${escapeHTML(server.id)}" ${server.id === (item?.serverId || state.modalServerId) ? 'selected' : ''}>${escapeHTML(serverLabel(server))}</option>`).join('')}</select><small id="serverId-error" data-reboot-error></small></label><label class="field">Execution timezone${timezoneSelect('executionTimezone', zone, 'reboot-timezone')}<small id="executionTimezone-error" data-reboot-error>Stored with this schedule; it is not changed by the display preference.</small></label><label class="field">Timing mode<select name="mode" id="reboot-mode" data-testid="reboot-mode" aria-describedby="mode-error" required><option value="cron" ${mode === 'cron' ? 'selected' : ''}>Cron expression</option><option value="interval" ${mode === 'interval' ? 'selected' : ''}>Elapsed interval</option><option value="daily" ${mode === 'daily' ? 'selected' : ''}>Daily wall-clock times</option></select><small id="mode-error" data-reboot-error></small></label><span></span><label class="field full" data-reboot-field="cron" ${mode === 'cron' ? '' : 'hidden'}>Cron expression<input name="cron" id="cron" data-testid="reboot-cron" value="${escapeHTML(item?.cron || '0 5 * * *')}" placeholder="minute hour day-of-month month day-of-week" aria-describedby="cron-error"><small id="cron-error" data-reboot-error>Five fields. Sunday is 0 or SUN; day-of-month and day-of-week use standard cron OR semantics. No seconds, descriptors, or timezone prefixes.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Every<input type="number" name="intervalValue" id="intervalValue" data-testid="reboot-interval-value" min="1" max="8760" value="${escapeHTML(item?.intervalValue || 12)}" aria-describedby="intervalValue-error"><small id="intervalValue-error" data-reboot-error>Hours: 1–8760. Days: 1–365. A day is exactly 24 elapsed hours.</small></label><label class="field" data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}>Unit<select name="intervalUnit" id="intervalUnit" data-testid="reboot-interval-unit" aria-describedby="intervalUnit-error"><option value="hours" ${item?.intervalUnit !== 'days' ? 'selected' : ''}>hours</option><option value="days" ${item?.intervalUnit === 'days' ? 'selected' : ''}>days</option></select><small id="intervalUnit-error" data-reboot-error></small></label><div class="field full" data-reboot-field="daily" ${mode === 'daily' ? '' : 'hidden'}><span>Daily times</span><div id="dailyTimes" class="daily-times" aria-describedby="dailyTimes-error">${dailyRows}</div><button type="button" class="subtle" data-action="add-daily-time" data-testid="add-daily-time">Add another time</button><small id="dailyTimes-error" data-reboot-error>Use the native time controls. Times must be unique HH:mm values; they are sorted before execution.</small></div><label class="field full">Restart warning (minutes)<input type="number" name="warningMinutes" id="warningMinutes" data-testid="reboot-warning-minutes" min="0" max="60" step="1" value="${escapeHTML(item?.warningMinutes || 0)}" aria-describedby="warningMinutes-error"><small id="warningMinutes-error" data-reboot-error>0 disables warnings. Enable the Restart warning rule on an integration to send advance notice. Manual restarts remain immediate.</small></label><label class="field full checkbox-field"><span><input type="checkbox" name="enabled" ${enabled ? 'checked' : ''}> Enable this schedule</span><small>A disabled schedule keeps its history and next run is cleared.</small></label><label class="field full checkbox-field"><span><input type="checkbox" name="acknowledgeDisconnect" id="acknowledgeDisconnect" aria-describedby="acknowledgeDisconnect-error"> I understand that an enabled scheduled reboot may disconnect connected players.</span><small id="acknowledgeDisconnect-error" data-reboot-error>Required every time an enabled schedule is saved.</small></label><div class="field full"><button type="button" class="subtle" data-action="preview-reboot" data-testid="preview-reboot">Preview next five runs</button><div id="reboot-preview" class="preview-results" aria-live="polite"></div></div></div>`;
 }
-const rebootErrorControls = {mode:'reboot-mode', serverId:'serverId', executionTimezone:'executionTimezone', cron:'cron', intervalValue:'intervalValue', intervalUnit:'intervalUnit', dailyTimes:'dailyTimes', enabled:'enabled', acknowledgeDisconnect:'acknowledgeDisconnect'};
+const rebootErrorControls = {mode:'reboot-mode', serverId:'serverId', executionTimezone:'executionTimezone', cron:'cron', intervalValue:'intervalValue', intervalUnit:'intervalUnit', dailyTimes:'dailyTimes', enabled:'enabled', acknowledgeDisconnect:'acknowledgeDisconnect', warningMinutes:'warningMinutes'};
 function clearRebootErrors() {
   const summary = $('#reboot-error-summary');
   if (summary) { summary.hidden = true; summary.querySelector('ul').innerHTML = ''; }
@@ -929,7 +962,7 @@ function showRebootErrors(fields) {
 function rebootRequestFromForm() {
   const fields = new FormData($('#modal-form'));
   const values = Object.fromEntries(fields);
-  const body = {serverId:values.serverId, enabled:values.enabled === 'on', mode:values.mode, executionTimezone:values.executionTimezone, acknowledgeDisconnect:values.acknowledgeDisconnect === 'on'};
+  const body = {serverId:values.serverId, enabled:values.enabled === 'on', mode:values.mode, executionTimezone:values.executionTimezone, warningMinutes:Number(values.warningMinutes || 0), acknowledgeDisconnect:values.acknowledgeDisconnect === 'on'};
   if (values.mode === 'cron') body.cron = values.cron;
   if (values.mode === 'interval') { body.intervalValue = Number(values.intervalValue); body.intervalUnit = values.intervalUnit; }
   if (values.mode === 'daily') body.dailyTimes = fields.getAll('dailyTime').map((value) => value.trim()).filter(Boolean);
@@ -1127,6 +1160,7 @@ function openModal(action, userId = '') {
   $('#modal').classList.toggle('create-server-dialog', action === 'add-server');
   modalOpener = document.activeElement;
   state.modalAction = action;
+  $('#modal-form').noValidate = ['add-integration','edit-integration'].includes(action);
   state.modalServerId = selectedServer()?.id || '';
   if (action === 'delete' && userId) state.modalServerId = userId;
   state.modalUserId = userId;
@@ -1150,9 +1184,15 @@ function openModal(action, userId = '') {
     const item = state.integrations.find((i) => i.id === userId);
     if (action === 'edit-integration' && !item) throw new Error('This integration no longer exists. Refresh the list.');
     state.modalIntegrationId = userId;
-    $('#modal-title').textContent = action === 'add-integration' ? 'Add Discord bot' : 'Configure Discord bot';
+    $('#modal-title').textContent = action === 'add-integration' ? 'Add integration' : 'Configure integration';
     $('#modal-submit').textContent = 'Save integration';
     $('#modal-body').innerHTML = integrationForm(item);
+    $('#modal-form').querySelectorAll('input:not([type="checkbox"]),select').forEach((input) => {
+      if (!input.id) input.id = `integration-${input.name}`;
+      const errorId = `${input.id}-error`;
+      input.setAttribute('aria-describedby', errorId);
+      input.insertAdjacentHTML('afterend', `<small id="${errorId}" class="field-error" data-integration-error></small>`);
+    });
   } else if (['add-user','edit-user','delete-user'].includes(action)) {
     const user = state.users.find((item) => item.id === userId);
     if (action !== 'add-user' && !user) throw new Error('This saved ID no longer exists. Refresh the list.');
@@ -1264,6 +1304,10 @@ function createRequestBody(values) {
 }
 async function submitModal(event) {
   event.preventDefault();
+  if (['add-integration','edit-integration'].includes(state.modalAction)) {
+    const invalid = Array.from($('#modal-form').elements).filter((input) => input.willValidate && !input.validity.valid);
+    if (invalid.length) { showIntegrationErrors(Object.fromEntries(invalid.map((input) => [input.name, input.validationMessage]))); return; }
+  }
   if (!can(state.modalAction === 'add-server' ? 'create' : state.modalAction) || state.modalBusy || !$('#modal-form').reportValidity()) return;
   const epoch = state.epoch;
   const values = Object.fromEntries(new FormData($('#modal-form')));
@@ -1304,10 +1348,10 @@ async function submitModal(event) {
       break;
     case 'add-integration': case 'edit-integration': {
       const fields = new FormData($('#modal-form'));
-      body = {name:values.name,enabled:values.enabled === 'true',guildId:values.guildId,channelId:values.channelId,secretRef:{name:values.secretName,key:values.secretKey},serverIds:fields.getAll('integrationServer'),rules:Object.fromEntries(fields.getAll('integrationRule').map((kind) => [kind,true]))};
+      body = {name:values.name,enabled:values.enabled === 'true',provider:values.provider || 'discord',...(values.provider === 'webhook' ? {webhookUrl:values.webhookUrl} : {guildId:values.guildId,channelId:values.channelId}),quietHours:values.quietEnabled === 'on' ? {start:values.quietStart,end:values.quietEnd,timezone:values.quietTimezone} : null,secretRef:{name:values.secretName,key:values.secretKey},serverIds:fields.getAll('integrationServer'),rules:Object.fromEntries(fields.getAll('integrationRule').map((kind) => [kind,true]))};
       path = action === 'add-integration' ? '/api/integrations' : `/api/integrations/${encodeURIComponent(state.modalIntegrationId)}`;
       method = action === 'add-integration' ? 'POST' : 'PUT';
-      message = 'Discord integration saved.';
+      message = 'Integration saved.';
       break;
     }
     case 'add-user': case 'edit-user':
@@ -1362,6 +1406,11 @@ async function submitModal(event) {
     $('#modal-error').hidden = false;
     if (action === 'edit-settings') $('#edit-status').textContent = 'Apply failed. Review the error, inspect the release if needed, then retry or cancel.';
     let focusedSummary = false;
+    if (['add-integration','edit-integration'].includes(action)) {
+      showIntegrationErrors(error.fields && Object.keys(error.fields).length ? error.fields : {form:error.message});
+      $('#modal-error').hidden = true;
+      focusedSummary = true;
+    }
     if ((action === 'add-reboot' || action === 'edit-reboot') && error.fields && Object.keys(error.fields).length) {
       showRebootErrors(error.fields);
       $('#modal-error').hidden = true;
@@ -1483,6 +1532,7 @@ function navigate() {
   refresh();
 }
 function handleChange(event) {
+  if (['integration-provider','integration-quiet-enabled'].includes(event.target.id)) syncIntegrationFields();
   if (event.target.id === 'delete-mode') {
     const purge = event.target.value === 'purge';
     $('#purge-confirmation').hidden = !purge;
