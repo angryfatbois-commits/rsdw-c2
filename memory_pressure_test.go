@@ -208,18 +208,56 @@ func TestMemoryPressureResetsContinuity(t *testing.T) {
 	}
 }
 
-func TestMemoryPressureUsesCollectionTimeAndInclusiveThreshold(t *testing.T) {
+func TestMemoryPressureUsesSourceTimeAndInclusiveThreshold(t *testing.T) {
 	for _, threshold := range []float64{0, 85, 100} {
 		state, server, start := alertFixture(t)
 		policy := MemoryPressurePolicy{Enabled: true, ThresholdPercent: threshold, Duration: 30 * time.Second}
 		for _, offset := range []time.Duration{0, 30 * time.Second} {
 			o := pressureSample(start.Add(offset))
-			setReading(o.metrics, "memoryUsedBytes", threshold, start)
-			setReading(o.metrics, "memoryLimitBytes", 100, start)
+			setReading(o.metrics, "memoryUsedBytes", threshold, o.at)
+			setReading(o.metrics, "memoryLimitBytes", 100, o.at)
 			observePressure(t, policy, state, server, o, o.at)
 		}
 		if !slices.Equal(eventKinds(state), []EventKind{MemoryPressureRestartRequested}) {
-			t.Fatalf("threshold %g with repeated fresh metric timestamps = %v", threshold, eventKinds(state))
+			t.Fatalf("threshold %g with advancing metric timestamps = %v", threshold, eventKinds(state))
+		}
+	}
+}
+
+func TestMemoryPressureCachedSamplesCannotAdvanceOrBridgeSourceGaps(t *testing.T) {
+	state, server, start := alertFixture(t)
+	policy := MemoryPressurePolicy{Enabled: true, ThresholdPercent: 85, Duration: 30 * time.Second}
+	for _, step := range []struct{ collected, sampled int }{
+		{0, 0}, {15, 0}, {30, 0}, {45, 0}, {60, 60}, {75, 75}, {90, 90},
+	} {
+		o := pressureSample(start.Add(time.Duration(step.collected) * time.Second))
+		setReading(o.metrics, "memoryUsedBytes", 85, start.Add(time.Duration(step.sampled)*time.Second))
+		observePressure(t, policy, state, server, o, o.at)
+		if step.collected < 90 && len(state.Events) != 0 {
+			t.Fatalf("cached samples or a source gap triggered a restart at %d seconds", step.collected)
+		}
+	}
+	if !slices.Equal(eventKinds(state), []EventKind{MemoryPressureRestartRequested}) {
+		t.Fatalf("new continuous source samples did not trigger exactly one restart: %v", eventKinds(state))
+	}
+}
+
+func TestMemoryPressureSourceClockResets(t *testing.T) {
+	for _, offset := range []time.Duration{-time.Second, time.Second} {
+		state, server, start := alertFixture(t)
+		policy := MemoryPressurePolicy{Enabled: true, ThresholdPercent: 85, Duration: 30 * time.Second}
+		observePressure(t, policy, state, server, pressureSample(start), start)
+		o := pressureSample(start.Add(30 * time.Second))
+		sampleAt := start.Add(offset)
+		if offset > 0 {
+			sampleAt = o.at.Add(offset)
+		}
+		setReading(o.metrics, "memoryUsedBytes", 85, sampleAt)
+		observePressure(t, policy, state, server, o, o.at)
+		o = pressureSample(start.Add(45 * time.Second))
+		observePressure(t, policy, state, server, o, o.at)
+		if len(state.Events) != 0 {
+			t.Fatalf("source clock change retained elapsed pressure: %v", eventKinds(state))
 		}
 	}
 }
@@ -284,7 +322,7 @@ func TestCollectorPressureClaimPersistsBeforeDispatch(t *testing.T) {
 			app.memoryPressure = MemoryPressurePolicy{Enabled: true, ThresholdPercent: 3.125, Duration: time.Minute}
 			at := time.Now().UTC().Add(-15 * time.Second)
 			if err := app.store.Update(func(state *State) error {
-				state.Producers[server.ID] = AlertProducer{Runtime: "pod-uid/container-id", LastAt: at, MemoryPressure: &MemoryPressureState{Runtime: "pod-uid/container-id", Since: at.Add(-time.Minute), LastAt: at}}
+				state.Producers[server.ID] = AlertProducer{Runtime: "pod-uid/container-id", LastAt: at, MemoryPressure: &MemoryPressureState{Runtime: "pod-uid/container-id", Since: at.Add(-time.Minute), LastAt: at, SampleAt: at}}
 				return nil
 			}); err != nil {
 				t.Fatal(err)

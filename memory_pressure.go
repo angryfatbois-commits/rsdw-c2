@@ -14,9 +14,10 @@ type MemoryPressurePolicy struct {
 }
 
 type MemoryPressureState struct {
-	Runtime string    `json:"runtime"`
-	Since   time.Time `json:"since"`
-	LastAt  time.Time `json:"lastAt"`
+	Runtime  string    `json:"runtime"`
+	Since    time.Time `json:"since"`
+	LastAt   time.Time `json:"lastAt"`
+	SampleAt time.Time `json:"sampleAt"`
 }
 
 func memoryPressurePolicyFromEnv() (MemoryPressurePolicy, error) {
@@ -59,13 +60,19 @@ func (policy MemoryPressurePolicy) observe(state *State, server Server, o observ
 	if streak != nil && !o.at.After(streak.LastAt) {
 		return rebootDispatch{}, nil
 	}
-	if streak == nil || streak.Runtime != o.runtime || o.at.Sub(streak.LastAt) > telemetryMaxAge {
+	sampleAt := *used.ObservedAt
+	if sampleAt.After(now) {
+		return rebootDispatch{}, nil
+	}
+	if streak == nil || streak.Runtime != o.runtime || o.at.Sub(streak.LastAt) > telemetryMaxAge || streak.SampleAt.IsZero() || sampleAt.Before(streak.SampleAt) || sampleAt.Sub(streak.SampleAt) > telemetryMaxAge {
 		streak = &MemoryPressureState{Runtime: o.runtime, Since: o.at}
 	}
+	advanced := sampleAt.After(streak.SampleAt)
+	streak.SampleAt = sampleAt
 	streak.LastAt = o.at
 	p.MemoryPressure = streak
 	state.Producers[server.ID] = p
-	if o.at.Sub(streak.Since) < policy.Duration {
+	if !advanced || sampleAt.Sub(streak.Since) < policy.Duration {
 		return rebootDispatch{}, nil
 	}
 	return reserveRestart(state, server.ID, now, MemoryPressureRestartRequested)
