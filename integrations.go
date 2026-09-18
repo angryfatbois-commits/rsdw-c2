@@ -269,7 +269,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 		if len(deliveries) > 100 {
 			deliveries = deliveries[:100]
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"integrations": integrations, "deliveries": deliveries, "rules": alertRules, "pendingRestarts": restarts, "demo": a.demo})
+		writeJSON(w, http.StatusOK, map[string]any{"integrations": integrations, "deliveries": discordDeliveryViews(deliveries), "rules": alertRules, "pendingRestarts": restarts, "demo": a.demo})
 		return
 	}
 	if len(parts) == 3 && parts[1] != "" && parts[2] == "test" && r.Method == http.MethodPost {

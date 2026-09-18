@@ -92,10 +92,22 @@ func TestDiscordDeliveryResultsAndNoSecretLeakage(t *testing.T) {
 					Allowed struct {
 						Parse []string `json:"parse"`
 					} `json:"allowed_mentions"`
-					Content string `json:"content"`
+					Content string         `json:"content"`
+					Embeds  []discordEmbed `json:"embeds"`
 				}
-				if json.NewDecoder(r.Body).Decode(&payload) != nil || payload.Nonce != id || !payload.Enforce || payload.Allowed.Parse == nil || len(payload.Allowed.Parse) != 0 || !strings.Contains(payload.Content, id) {
+				if json.NewDecoder(r.Body).Decode(&payload) != nil || payload.Nonce != id || !payload.Enforce || payload.Allowed.Parse == nil || len(payload.Allowed.Parse) != 0 || payload.Content != "" || len(payload.Embeds) != 1 {
 					t.Fatal("unsafe message payload", payload)
+				}
+				embed := payload.Embeds[0]
+				if embed.Title != "Server unhealthy" || embed.Description != "The server has stopped pretending to be functional. How honest of it." || embed.Color != 0xEF4444 || len(embed.Fields) != 1 || embed.Fields[0] != (discordEmbedField{Name: "Server", Value: "ScuffedTards"}) || embed.Footer.Text != "Dragonwilds C2" || embed.Timestamp == "" {
+					t.Fatal("unexpected embed", embed)
+				}
+				visible, _ := json.Marshal(embed)
+				event := app.store.Snapshot().Deliveries[id].Event
+				for _, private := range []string{id, event.ID, event.Details, event.Source, event.Accuracy, "fixture.bot.secret"} {
+					if private != "" && strings.Contains(string(visible), private) {
+						t.Fatalf("private value %q in embed", private)
+					}
 				}
 				if tc.transportError {
 					return nil, errors.New("fixture.bot.secret transport detail")

@@ -14,11 +14,19 @@ Use **Configure** to change server associations, rules, enabled state, or the Se
 
 Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. Production telemetry is not simulated in demo mode.
 
+## Discord messages
+
+Discord notifications contain one colored embed with a fixed title and a playful description that roasts the server or automation. Server alerts include a Server field, using "Unknown server" when the name is empty. Integration tests omit that field. Every embed has a "Dragonwilds C2" footer and includes the event timestamp in UTC when present. Messages disable all mentions.
+
+The Integrations page does not show a separate message preview gallery. Once a delivery exists, Recent deliveries renders the same embed title, description, server, bot, status, and result that apply to that delivery. Integration tests are labeled as bot-level tests because they are not associated with a server.
+
+Visible Discord text excludes raw event messages and details, source and accuracy metadata, operational IDs, endpoints, Secrets, and player identities. Operational IDs remain in C2 delivery records. The delivery ID also remains in the transport nonce. Payload bytes are not persisted.
+
 ## API reference
 
 | Request | Result |
 | --- | --- |
-| `GET /api/integrations` | Configurations, rule definitions, pending restart operations, and the 100 most recently updated deliveries |
+| `GET /api/integrations` | Configurations, rule definitions, pending restart operations, and the 100 most recently updated deliveries. Each supported delivery includes a rendered `embed` for the Recent deliveries view. |
 | `POST /api/integrations` | Create a Discord bot configuration |
 | `PUT /api/integrations/{id}` | Replace a configuration, including its Secret reference |
 | `POST /api/integrations/{id}/test` | Queue a test and return its stable delivery ID with HTTP 202 |
@@ -36,7 +44,7 @@ Each event has an immutable `id`, `kind`, `source`, `accuracy`, timestamp, serve
 | `restart_requested` | C2 durably recorded a restart operation before issuing the Kubernetes command. This does not assert that Kubernetes accepted it. |
 | `restart_completed` | A fresh, owned runtime has the operation's Pod-template annotation, a different runtime identity, a start time at or after the request at Kubernetes' second precision, and both Pod and engine readiness. |
 | `restart_failed` | After five minutes, a fresh definitive observation still cannot confirm a ready marked replacement. |
-| `player_joined` | An approximate increase between fresh player counts on the same healthy runtime. The message includes the count delta. No identities or exact joins are inferred. |
+| `player_joined` | An approximate increase between fresh player counts on the same healthy runtime. C2 event details include the count delta. The Discord embed describes the observation without raw details. No identities or exact joins are inferred. |
 | `player_limit_reached` | A fresh count crosses from below the configured limit to at least the limit. Falling below rearms the rule. Changing the configured limit establishes a new threshold baseline. |
 | `server_down` | After a healthy baseline, three consecutive definitive unhealthy observations span at least 30 seconds. |
 | `server_recovered` | After an established outage, two consecutive healthy observations span at least 15 seconds. |
@@ -67,7 +75,7 @@ There are at most five attempts. Safe retries use exponential delays of 2, 4, 8,
 
 A timeout, connection error, HTTP 408, or HTTP 5xx during message submission is uncertain. HTTP 5xx during the read-only channel check can retry. A persisted `sending` record becomes uncertain after a C2 restart, including a crash after send but before result persistence. If result persistence fails in a running process, the next worker pass marks it uncertain without sending again. File and directory synchronization precede successful Store commits. Secret and HTTP I/O occur outside the Store lock.
 
-The delivery ID is also a Discord nonce with `enforce_nonce` enabled. Discord's nonce check has a limited time window and does not prove exactly-once delivery. Check the channel using the event and delivery IDs before taking action on an uncertain result. C2 does not automatically replay uncertain or failed alerts. A new test is an explicit new event.
+The delivery ID is also a Discord nonce with `enforce_nonce` enabled. Discord's nonce check has a limited time window and does not prove exactly-once delivery. For an uncertain result, compare the channel's messages with the event kind, server name, and timestamp in C2 before taking action. Event and delivery IDs are not visible in Discord text. C2 does not automatically replay uncertain or failed alerts. A new test is an explicit new event.
 
 The sender follows the [Discord message API](https://docs.discord.com/developers/resources/message#create-message) and [rate-limit contract](https://docs.discord.com/developers/topics/rate-limits).
 
