@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
 
@@ -200,6 +200,40 @@ state.servers = [
   {id:'world-02', name:'PETZKO', worldName:'PC2-US-EAST-02'},
   {id:'legacy', name:'Legacy world'},
 ];
+for (const [hash, page, view] of [['#integrations','integrations','hub'], ['#integrations/discord','integrations','discord'], ['#integrations/slack','integrations','hub'], ['#telemetry','telemetry','hub']]) {
+  const parsed = context.ui.parseLocationHash(hash);
+  assert.equal(parsed.page, page, hash);
+  assert.equal(parsed.integrationView, view, hash);
+}
+assert.equal(context.ui.discordConnectionStatus([], []), 'not_connected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:false, serverIds:['world-01'], rules:{restart_completed:true}}], []), 'disconnected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:[], rules:{restart_completed:true}}], []), 'disconnected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{}}], []), 'disconnected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], []), 'connected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [{integrationId:'bot', status:'sent', updatedAt:'2026-09-18T00:00:00Z'}]), 'connected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [{integrationId:'bot', status:'failed', updatedAt:'2026-09-18T00:00:00Z'}]), 'disconnected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [{integrationId:'bot', status:'failed', result:'Cancelled by integration configuration change', updatedAt:'2026-09-18T00:00:02Z'}]), 'connected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [
+  {integrationId:'bot', status:'failed', result:'Cancelled by integration configuration change', updatedAt:'2026-09-18T00:00:02Z'},
+  {integrationId:'bot', status:'sent', updatedAt:'2026-09-18T00:00:00Z'},
+]), 'connected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [
+  {integrationId:'bot', status:'failed', result:'Integration no longer enables this delivery', updatedAt:'2026-09-18T00:00:02Z'},
+  {integrationId:'bot', status:'sent', updatedAt:'2026-09-18T00:00:00Z'},
+]), 'connected');
+assert.equal(context.ui.discordConnectionStatus(
+  [{id:'a', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}, {id:'b', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}],
+  [{integrationId:'a', status:'failed', updatedAt:'2026-09-18T00:00:01Z'}, {integrationId:'b', status:'sent', updatedAt:'2026-09-18T00:00:00Z'}]
+), 'connected');
+html = context.ui.integrationsPage();
+assert.match(html, /Discord/);
+assert.match(html, /data-testid="discord-integration-card"/);
+assert.match(html, /Not connected/);
+assert.doesNotMatch(html, /data-testid="add-integration"|data-testid="discord-recent-delivery"/);
+state.integrationView = 'discord';
+assert.match(context.ui.integrationsPage(), /data-testid="integrations-back"/);
+assert.match(context.ui.integrationsPage(), /data-testid="add-integration"/);
+assert.match(context.ui.integrationsPage(), /No Discord bots configured yet/);
 for (const [id, label] of [['world-01','PC2-US-EAST-01'], ['world-02','PC2-US-EAST-02'], ['legacy','Legacy world'], ['missing','missing']]) {
   state.pendingRestarts = {[id]:{id:'restart-operation'}};
   assert.ok(context.ui.integrationsPage().includes(`Restart restart-operation for ${label} awaits a fresh observation.`));
@@ -216,8 +250,24 @@ state.integrations = [
 html = context.ui.integrationsPage();
 assert.match(html, /class="status enabled"/);
 assert.match(html, /class="status disabled"/);
+state.integrationView = 'hub';
+assert.match(context.ui.integrationsPage(), /Disconnected/);
+assert.doesNotMatch(context.ui.integrationsPage(), /data-testid="add-integration"|data-testid="discord-recent-delivery"/);
+state.integrationView = 'discord';
 state.integrations = [];
 assert.match(context.ui.integrationsPage(), /No Discord bots configured yet/);
+state.deliveries = [
+  {id:'d2', integrationId:'bot', status:'sent', event:{serverId:'missing-world', serverName:'<World & "name">'}, embed:{title:'Older alert'}, result:'ok', attempts:1, updatedAt:'2026-09-18T00:00:00Z'},
+  {id:'d1', integrationId:'bot', status:'sent', event:{serverId:'world-01'}, embed:{title:'Newer alert'}, result:'ok', attempts:1, updatedAt:'2026-09-18T00:00:01Z'},
+];
+html = context.ui.integrationsPage();
+assert.match(html, /data-testid="discord-recent-delivery"/);
+assert.match(html, /PC2-US-EAST-01/);
+assert.match(html, /&lt;World &amp; &quot;name&quot;&gt;/);
+assert.doesNotMatch(html, /<World/);
+assert.ok(html.indexOf('Newer alert') < html.indexOf('Older alert'));
+state.deliveries = [];
+state.integrationView = 'hub';
 state.servers = savedServers;
 
 state.capabilities = {dashboard:true, telemetry:true};

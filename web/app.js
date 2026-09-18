@@ -22,6 +22,7 @@ const icons = {
   warning: '<path d="m12 3 10 18H2Z M12 9v5m0 3v.01"/>',
   refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  back: '<path d="m15 6-6 6 6 6"/>',
   arrow: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
   download: '<path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/>',
   search: '<circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/>',
@@ -35,12 +36,17 @@ const pages = {
   events: ['Events', 'Search every server event in one place.'],
   maintenance: ['Maintenance', 'Make safe changes to your servers.'],
   users: ['Saved IDs', 'Manage reusable Dragonwilds player IDs.'],
-  integrations: ['Integrations', 'Send selected server alerts to Discord.'],
+  integrations: ['Integrations', 'Connect Discord and other alert destinations.'],
   reboots: ['Reboots', 'Schedule per-server restarts with predictable timezone rules.'],
+};
+const discordStatusCopy = {
+  not_connected: ['Not connected', 'unknown'],
+  connected: ['Connected', 'enabled'],
+  disconnected: ['Disconnected', 'error'],
 };
 const state = {
   deletions: {},
-  page: 'dashboard', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
+  page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
   query: '', category: '', range: '60s', telemetry: null, rosterObservation: '', rosterDeadline: 0, logs: '', logQuery: '',
@@ -55,6 +61,48 @@ let modalOpener;
 let refreshSequence = 0;
 let rosterExpiryTimer;
 const can = (capability) => state.capabilities[({users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
+function parseLocationHash(hash) {
+  const raw = String(hash ?? '').replace(/^#/, '').split('?')[0];
+  const slash = raw.indexOf('/');
+  const pageKey = slash === -1 ? raw : raw.slice(0, slash);
+  const view = slash === -1 ? '' : raw.slice(slash + 1);
+  if (pageKey === 'integrations') {
+    return {page:'integrations', integrationView: view === 'discord' ? 'discord' : 'hub'};
+  }
+  return {page: pages[pageKey] ? pageKey : 'dashboard', integrationView:'hub'};
+}
+function pageHeading() {
+  if (state.page === 'integrations' && state.integrationView === 'discord') {
+    return ['Discord', 'Configure Discord alerts for your Dragonwilds servers.'];
+  }
+  return pages[state.page] || pages.dashboard;
+}
+function alertingIntegration(item) {
+  return item?.enabled === true && Array.isArray(item.serverIds) && item.serverIds.length > 0 && item.rules && Object.values(item.rules).some((value) => value === true);
+}
+function deliveryTime(delivery) {
+  const value = Date.parse(delivery?.updatedAt || delivery?.event?.timestamp || '');
+  return Number.isFinite(value) ? value : 0;
+}
+function deliveryWasCancelled(delivery) {
+  const result = String(delivery?.result || '');
+  return result.startsWith('Cancelled by ') || result === 'Integration no longer enables this delivery';
+}
+function latestAttemptedDeliveryFor(integrationId, deliveries) {
+  let latest = null;
+  for (const delivery of deliveries || []) {
+    if (delivery.integrationId !== integrationId || deliveryWasCancelled(delivery)) continue;
+    if (!latest || deliveryTime(delivery) > deliveryTime(latest)) latest = delivery;
+  }
+  return latest;
+}
+function discordConnectionStatus(integrations, deliveries) {
+  const list = integrations || [];
+  if (!list.length) return 'not_connected';
+  const alerting = list.filter(alertingIntegration);
+  if (!alerting.length) return 'disconnected';
+  return alerting.every((item) => latestAttemptedDeliveryFor(item.id, deliveries)?.status === 'failed') ? 'disconnected' : 'connected';
+}
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
 const monotonicNow = () => typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
 const rosterObservationKey = (telemetry) => telemetry?.server?.id && telemetry?.metrics?.players?.observedAt ? `${telemetry.server.id}\n${telemetry.metrics.players.observedAt}` : '';
@@ -508,46 +556,74 @@ function deliveryStatus(value = 'unknown') {
   const label = normalized.charAt(0).toUpperCase() + normalized.slice(1);
   return `<span class="status ${tones[normalized] || 'unknown'}">${escapeHTML(label)}</span>`;
 }
+function deliveryServerLabel(delivery) {
+  const event = delivery?.event || {};
+  const server = state.servers.find((item) => item.id === event.serverId);
+  if (server) return serverLabel(server);
+  if (event.serverName) return event.serverName;
+  return String(event.kind || '') === 'integration_test' ? 'Bot-level test' : 'Unknown server';
+}
 function discordDeliveryCard(delivery) {
   const event = delivery.event || {};
   const embed = delivery.embed || {};
-  const color = Number.isInteger(embed.color) && embed.color >= 0 && embed.color <= 0xffffff ? embed.color : 0x0063ff;
-  const rail = `#${color.toString(16).padStart(6, '0')}`;
   const kind = String(event.kind || '');
-  const server = event.serverName || (kind === 'integration_test' ? 'Bot-level test' : event.serverId || 'Unknown server');
+  const server = deliveryServerLabel(delivery);
   const bot = state.integrations.find((item) => item.id === delivery.integrationId)?.name || delivery.integrationId || 'Unknown bot';
   const title = embed.title || event.message || 'Discord alert';
   const description = embed.description || event.message || 'No message copy available.';
-  const footer = embed.footer?.text || 'Dragonwilds C2';
   const timestamp = embed.timestamp || event.timestamp || delivery.updatedAt;
   const attempts = Number.isFinite(Number(delivery.attempts)) ? `${delivery.attempts} attempt${Number(delivery.attempts) === 1 ? '' : 's'}` : 'Attempts unavailable';
   const retry = delivery.status === 'retry' && delivery.nextAttempt ? `<span>Next attempt ${escapeHTML(date(delivery.nextAttempt))}</span>` : '';
   return `<article class="delivery-card" data-testid="discord-recent-delivery" data-kind="${escapeHTML(kind)}">
-    <div class="delivery-card-header"><div class="delivery-card-identity"><span class="delivery-card-avatar" aria-hidden="true">C2</span><strong>Dragonwilds C2</strong><span class="delivery-card-bot">BOT</span></div>${deliveryStatus(delivery.status)}</div>
-    <div class="delivery-card-embed" style="--embed-color:${rail}"><div class="delivery-card-title"><h3>${escapeHTML(title)}</h3>${timestamp ? `<time datetime="${escapeHTML(timestamp)}">${escapeHTML(date(timestamp))}</time>` : ''}</div><p>${escapeHTML(description)}</p>
-      <dl class="delivery-card-details"><div><dt>Server</dt><dd>${escapeHTML(server)}</dd></div><div><dt>Bot</dt><dd>${escapeHTML(bot)}</dd></div></dl>
-      <footer><span>${escapeHTML(footer)}</span>${timestamp ? `<time datetime="${escapeHTML(timestamp)}">${escapeHTML(date(timestamp, true))}</time>` : ''}</footer>
-    </div><div class="delivery-card-meta"><span>${escapeHTML(attempts)}</span><span>${escapeHTML(delivery.result || 'No result recorded.')}</span>${retry}</div>
+    <div class="delivery-card-header"><div class="delivery-card-server"><h3>${escapeHTML(server)}</h3>${timestamp ? `<time datetime="${escapeHTML(timestamp)}">${escapeHTML(date(timestamp))}</time>` : ''}</div>${deliveryStatus(delivery.status)}</div>
+    <div class="delivery-card-body"><p class="delivery-card-title">${escapeHTML(title)}</p><p>${escapeHTML(description)}</p></div>
+    <div class="delivery-card-meta">${delivery.id ? `<span class="mono">${escapeHTML(delivery.id)}</span>` : ''}<span>Bot ${escapeHTML(bot)}</span><span>${escapeHTML(attempts)}</span><span>${escapeHTML(delivery.result || 'No result recorded.')}</span>${retry}</div>
   </article>`;
+}
+function discordMark() {
+  return '<svg class="discord-mark" viewBox="0 0 127.14 96.36" aria-hidden="true"><path fill="#5865F2" d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.06,72.06,0,0,0,45.64,0,105.69,105.69,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/></svg>';
+}
+function discordStatus(value) {
+  const [label, tone] = discordStatusCopy[value] || discordStatusCopy.not_connected;
+  return `<span class="status ${tone}">${label}</span>`;
+}
+function integrationsHub() {
+  const connection = discordConnectionStatus(state.integrations, state.deliveries);
+  const [label] = discordStatusCopy[connection];
+  return `<div class="provider-grid"><a class="provider-card" href="#integrations/discord" data-testid="discord-integration-card" aria-label="Discord, ${label}">${discordMark()}<span class="provider-card-copy"><strong>Discord</strong><span class="provider-card-summary">Alerts for Dragonwilds servers.</span>${discordStatus(connection)}</span></a></div>`;
+}
+function discordBotCard(item) {
+  const servers = item.serverIds.map((id) => escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))).join(', ') || 'No servers';
+  const rules = state.alertRules.filter((rule) => item.rules[rule.kind]).map((rule) => escapeHTML(rule.label)).join(', ') || 'No rules enabled';
+  return `<article class="bot-card"><div class="bot-card-heading"><h3>${escapeHTML(item.name)}</h3>${status(item.enabled ? 'enabled' : 'disabled')}</div>
+    <dl class="detail-list"><div><dt>Guild</dt><dd class="mono">${escapeHTML(item.guildId)}</dd></div><div><dt>Channel</dt><dd class="mono">${escapeHTML(item.channelId)}</dd></div><div><dt>Secret</dt><dd>${escapeHTML(item.secretRef.name)} / ${escapeHTML(item.secretRef.key)}</dd></div><div><dt>Servers</dt><dd>${servers}</dd></div><div><dt>Rules</dt><dd>${rules}</dd></div></dl>
+    <div class="bot-card-actions"><button data-action="edit-integration" data-id="${escapeHTML(item.id)}" data-testid="edit-integration">Configure</button><button data-action="test-integration" data-id="${escapeHTML(item.id)}" data-testid="test-integration">Send test</button></div></article>`;
+}
+function discordAlertsPage() {
+  const pending = Object.entries(state.pendingRestarts).map(([id,op]) => `<p class="inline-note">Restart ${escapeHTML(op.id)} for ${escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))} awaits a fresh observation. Requested ${escapeHTML(date(op.requestedAt))}.${op.commandUncertain ? ' Command outcome is unknown.' : ''}</p>`).join('');
+  const demo = state.integrationsDemo ? 'Demo mode simulates deliveries and restarts. No Discord messages are sent. ' : '';
+  const bots = state.integrations.length
+    ? `<div class="bot-card-list">${state.integrations.map(discordBotCard).join('')}</div>`
+    : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No Discord bots configured yet</h3><p>Add a bot to route selected server alerts to Discord.</p></div>`;
+  return `<a class="back-link" href="#integrations" data-testid="integrations-back">${icon('back')}Back</a>
+    <section class="panel"><div class="panel-heading"><div><h2>Discord bots</h2><p>Send selected server alerts to a Discord channel.</p></div><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add Discord bot</button></div>
+    ${pending}<p class="inline-note">${demo}Choose events for each bot. Player joined alerts are approximate count increases, with no player identities. Backup alerts are unavailable until a backup producer exists.</p>${bots}</section>
+    <section class="panel section-gap"><div class="panel-heading"><div><h2>Recent messages</h2><p>Newest first. Each message names the Dragonwilds server it belongs to.</p></div></div>
+    <p class="inline-note">Uncertain means a message may have been sent. Check Discord before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>
+    ${state.deliveries.length ? `<div class="recent-delivery-list">${[...state.deliveries].sort((a, b) => deliveryTime(b) - deliveryTime(a)).map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
 }
 function integrationsPage() {
   if (!can('integrations')) return dashboard();
-  return `<section class="panel"><div class="panel-heading"><h2>Discord bots</h2><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add Discord bot</button></div>
-    ${Object.entries(state.pendingRestarts).map(([id,op]) => `<p class="inline-note">Restart ${escapeHTML(op.id)} for ${escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))} awaits a fresh observation. Requested ${escapeHTML(date(op.requestedAt))}.${op.commandUncertain ? ' Command outcome is unknown.' : ''}</p>`).join('')}
-    <p class="inline-note">${state.integrationsDemo ? 'Demo mode simulates deliveries and restarts. No Discord messages are sent. ' : ''}Choose events for each bot. Player joined alerts are approximate count increases, with no player identities. Backup alerts are unavailable until a backup producer exists.</p>
-    ${state.integrations.length ? `<div class="table-wrap"><table><thead><tr><th>Bot</th><th>Target</th><th>Servers</th><th>Rules</th><th>Actions</th></tr></thead><tbody>${state.integrations.map((item) => `<tr><td>${escapeHTML(item.name)}<br>${status(item.enabled ? 'enabled' : 'disabled')}<br><small>Secret ${escapeHTML(item.secretRef.name)} / ${escapeHTML(item.secretRef.key)}</small></td><td>Guild ${escapeHTML(item.guildId)}<br>Channel ${escapeHTML(item.channelId)}</td><td>${item.serverIds.map((id) => escapeHTML(serverLabel(state.servers.find((server) => server.id === id) || {id}))).join('<br>') || 'No servers'}</td><td>${state.alertRules.filter((rule) => item.rules[rule.kind]).map((rule) => escapeHTML(rule.label)).join('<br>') || 'No rules enabled'}</td><td class="actions"><button data-action="edit-integration" data-id="${escapeHTML(item.id)}" data-testid="edit-integration">Configure</button><button data-action="test-integration" data-id="${escapeHTML(item.id)}" data-testid="test-integration">Send test</button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No Discord bots configured yet</h3><p>Add a bot to route selected server alerts to Discord.</p></div>`}</section>
-    <section class="panel section-gap"><div class="panel-heading"><div><h2>Recent deliveries</h2><p>What was sent, where it went, and whether Discord accepted it.</p></div></div><p class="inline-note">Uncertain means a message may have been sent. Check Discord before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>${state.deliveries.length ? `<div class="recent-delivery-list">${state.deliveries.map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
+  return state.integrationView === 'discord' ? discordAlertsPage() : integrationsHub();
 }
 function integrationForm(item) {
-  return `<p>Reference a pre-created Kubernetes Secret in the C2 namespace. Never enter a bot token here. Change the Secret name or key to rotate the reference. Sending a test also works while disabled.</p><div class="form-grid">
-    <label class="field">Display name<input name="name" data-testid="integration-name" required maxlength="80" value="${escapeHTML(item?.name || '')}"></label>
-    <label class="field">Alerts<select name="enabled" data-testid="integration-enabled"><option value="true" ${item?.enabled !== false ? 'selected' : ''}>Enabled</option><option value="false" ${item?.enabled === false ? 'selected' : ''}>Disabled</option></select></label>
-    <label class="field">Guild ID<input name="guildId" data-testid="integration-guild" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.guildId || '')}"></label>
-    <label class="field">Channel ID<input name="channelId" data-testid="integration-channel" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.channelId || '')}"></label>
-    <label class="field">Secret name<input name="secretName" data-testid="integration-secret-name" required maxlength="253" value="${escapeHTML(item?.secretRef.name || '')}" autocomplete="off"></label>
-    <label class="field">Secret key<input name="secretKey" data-testid="integration-secret-key" required maxlength="253" value="${escapeHTML(item?.secretRef.key || 'token')}" autocomplete="off"></label></div>
-    <fieldset class="form-section"><legend>Connected servers</legend>${state.servers.map((server) => `<label class="field"><span><input type="checkbox" name="integrationServer" value="${escapeHTML(server.id)}" ${item?.serverIds.includes(server.id) ? 'checked' : ''}> ${escapeHTML(serverLabel(server))}</span></label>`).join('') || '<p>No servers available.</p>'}</fieldset>
-    <fieldset class="form-section"><legend>Alert rules</legend>${state.alertRules.map((rule) => `<label class="field"><span><input type="checkbox" name="integrationRule" value="${escapeHTML(rule.kind)}" ${rule.available ? '' : 'disabled'} ${item?.rules[rule.kind] && rule.available ? 'checked' : ''}> ${escapeHTML(rule.label)}</span><small>${escapeHTML(rule.source)}</small></label>`).join('')}</fieldset>`;
+  const servers = state.servers.map((server) => `<label class="choice-row"><input type="checkbox" name="integrationServer" value="${escapeHTML(server.id)}" ${item?.serverIds?.includes(server.id) ? 'checked' : ''}><span class="choice-copy"><strong>${escapeHTML(serverLabel(server))}</strong></span></label>`).join('') || '<p>No servers available.</p>';
+  const rules = state.alertRules.map((rule) => `<label class="choice-row"><input type="checkbox" name="integrationRule" value="${escapeHTML(rule.kind)}" ${rule.available ? '' : 'disabled'} ${item?.rules?.[rule.kind] && rule.available ? 'checked' : ''}><span class="choice-copy"><strong>${escapeHTML(rule.label)}</strong><small>${escapeHTML(rule.source)}</small></span></label>`).join('');
+  return `<fieldset class="form-section"><legend>Bot</legend><div class="form-grid"><label class="field">Display name<input name="name" data-testid="integration-name" required maxlength="80" value="${escapeHTML(item?.name || '')}"></label><label class="field">Alerts<select name="enabled" data-testid="integration-enabled"><option value="true" ${item?.enabled !== false ? 'selected' : ''}>Enabled</option><option value="false" ${item?.enabled === false ? 'selected' : ''}>Disabled</option></select></label></div></fieldset>
+    <fieldset class="form-section"><legend>Discord destination</legend><div class="form-grid"><label class="field">Guild ID<input name="guildId" data-testid="integration-guild" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.guildId || '')}"></label><label class="field">Channel ID<input name="channelId" data-testid="integration-channel" required pattern="${PATTERN.snowflake}" value="${escapeHTML(item?.channelId || '')}"></label></div></fieldset>
+    <fieldset class="form-section"><legend>Kubernetes Secret</legend><p>Reference a pre-created Kubernetes Secret in the C2 namespace. Never enter a bot token here. Change the Secret name or key to rotate the reference. Sending a test also works while disabled.</p><div class="form-grid"><label class="field">Secret name<input name="secretName" data-testid="integration-secret-name" required maxlength="253" value="${escapeHTML(item?.secretRef?.name || '')}" autocomplete="off"></label><label class="field">Secret key<input name="secretKey" data-testid="integration-secret-key" required maxlength="253" value="${escapeHTML(item?.secretRef?.key || 'token')}" autocomplete="off"></label></div></fieldset>
+    <fieldset class="form-section"><legend>Dragonwilds servers</legend>${servers}</fieldset>
+    <fieldset class="form-section"><legend>Alert rules</legend>${rules}</fieldset>`;
 }
 function rebootResultLabel(result) {
   return ({awaiting_reconciliation:'Awaiting reconciliation', completed:'Completed', failed:'Failed', skipped:'Skipped', missed:'Missed during downtime', uncertain:'Uncertain'})[result] || 'No execution yet';
@@ -676,7 +752,7 @@ function render() {
   const focused = document.activeElement;
   const testId = focused?.getAttribute('data-testid');
   const selection = focused instanceof HTMLInputElement ? [focused.selectionStart, focused.selectionEnd] : null;
-  const [title,description] = pages[state.page];
+  const [title,description] = pageHeading();
   document.title = `${title} · RSDW C2`;
   $('#page-title').textContent = title;
   $('#page-description').textContent = description;
@@ -1129,11 +1205,13 @@ async function handleAction(event) {
 }
 function navigate() {
   window.scrollTo(0, 0);
-  const page = location.hash.slice(1).split('?')[0];
-  state.page = pages[page] && (!state.identity || can(page)) ? page : 'dashboard';
+  const parsed = parseLocationHash(location.hash);
+  state.page = pages[parsed.page] && (!state.identity || can(parsed.page)) ? parsed.page : 'dashboard';
+  state.integrationView = state.page === 'integrations' ? parsed.integrationView : 'hub';
+  const [title, description] = pageHeading();
   $('#navigation').innerHTML = navHTML();
-  $('#page-title').textContent = pages[state.page][0];
-  $('#page-description').textContent = pages[state.page][1];
+  $('#page-title').textContent = title;
+  $('#page-description').textContent = description;
   clearTelemetry();
   state.logs = '';
   if (state.loaded) render();

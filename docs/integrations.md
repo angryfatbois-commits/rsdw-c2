@@ -2,15 +2,17 @@
 
 The Integrations page is available to admins. OIDC viewers cannot read or change integrations, deliveries, or Secret references. OIDC mutations require the session CSRF token and the configured Origin. Token-mode requests require the admin bearer token. Session changes clear integration lists, delivery history, and open configuration forms.
 
-![Integrations page with Discord bot setup and delivery history panels.](screenshots/integrations.png)
+![Integrations hub with a Discord card marked Connected.](screenshots/integrations.png)
+
+![Discord alerts page with a configured bot and recent messages.](screenshots/integrations-discord.png)
 
 ## Configuration
 
 Create a Discord bot with permission to view the target channel and send messages. Put its token in a pre-created Kubernetes Secret in the C2 namespace. C2 reads that namespace from `RSDW_NAMESPACE`, which the chart supplies through the Downward API. Standalone processes default to `rsdw-system`.
 
-In Integrations, select **Add Discord bot**. Enter a name, the numeric guild and channel IDs, and the Secret name and key. Select the servers and alert rules, then save. The console accepts a Secret reference only. It has no bot-token input, and its API rejects token fields without echoing their values.
+In Integrations, open **Discord**. The card shows Not connected, Connected, or Disconnected. Select **Add Discord bot**. Enter a name, the numeric guild and channel IDs, and the Secret name and key. Select the servers and alert rules, then save. The console accepts a Secret reference only. It has no bot-token input, and its API rejects token fields without echoing their values.
 
-Use **Configure** to change server associations, rules, enabled state, or the Secret reference. Updating the referenced Secret also rotates the token because each attempt reads it again. The bot verifies that the channel belongs to the configured guild before sending. **Send test** queues a test even when automatic alerts are disabled. The delivery table reports its result.
+Use **Configure** to change server associations, rules, enabled state, or the Secret reference. Updating the referenced Secret also rotates the token because each attempt reads it again. The bot verifies that the channel belongs to the configured guild before sending. **Send test** queues a test even when automatic alerts are disabled. Recent messages lists each delivery with the Dragonwilds server it belongs to.
 
 Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. Production telemetry is not simulated in demo mode.
 
@@ -18,7 +20,7 @@ Demo mode uses the same configuration and delivery state but simulates sends and
 
 Discord notifications contain one colored embed with a fixed title and a playful description that roasts the server or automation. Server alerts include a Server field, using "Unknown server" when the name is empty. Integration tests omit that field. Every embed has a "Dragonwilds C2" footer and includes the event timestamp in UTC when present. Messages disable all mentions.
 
-The Integrations page does not show a separate message preview gallery. Once a delivery exists, Recent deliveries renders the same embed title, description, server, bot, status, and result that apply to that delivery. Integration tests are labeled as bot-level tests because they are not associated with a server.
+The Discord page does not show a separate message preview gallery. Recent messages is a single-column list, newest first. Each row leads with the current Dragonwilds server name when that server still exists, otherwise the name stored on the event. Integration tests show as Bot-level test because they are not associated with a server. Title, description, bot, status, and result follow.
 
 Visible Discord text excludes raw event messages and details, source and accuracy metadata, operational IDs, endpoints, Secrets, and player identities. Operational IDs remain in C2 delivery records. The delivery ID also remains in the transport nonce. Payload bytes are not persisted.
 
@@ -26,7 +28,7 @@ Visible Discord text excludes raw event messages and details, source and accurac
 
 | Request | Result |
 | --- | --- |
-| `GET /api/integrations` | Configurations, rule definitions, pending restart operations, and the 100 most recently updated deliveries. Each supported delivery includes a rendered `embed` for the Recent deliveries view. |
+| `GET /api/integrations` | Configurations, rule definitions, pending restart operations, and the 100 most recently updated deliveries. Each supported delivery includes a rendered `embed` for the Recent messages list. |
 | `POST /api/integrations` | Create a Discord bot configuration |
 | `PUT /api/integrations/{id}` | Replace a configuration, including its Secret reference |
 | `POST /api/integrations/{id}/test` | Queue a test and return its stable delivery ID with HTTP 202 |

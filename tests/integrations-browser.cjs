@@ -80,12 +80,27 @@ async function run() {
     await page.locator('#modal').waitFor({state:'hidden'});
     return result.json();
   };
+  const openDiscord = async () => {
+    await Promise.race([
+      page.getByTestId('add-integration').waitFor(),
+      page.getByTestId('discord-integration-card').waitFor(),
+    ]);
+    if (await page.getByTestId('add-integration').count() === 0) {
+      await page.getByTestId('discord-integration-card').click();
+    }
+    await page.getByTestId('add-integration').waitFor();
+  };
   await page.goto(base+'/#integrations');
   assert.equal((await fetch(base+'/api/integrations')).status,401);
   await page.getByTestId('open-login').click();
   await page.getByTestId('admin-token').fill(token);
   await page.getByTestId('login-submit').click();
+  await page.getByTestId('discord-integration-card').waitFor();
+  assert.match(await page.locator('#content').innerText(),/Not connected/);
+  assert.equal(await page.getByTestId('add-integration').count(),0);
+  await page.getByTestId('discord-integration-card').click();
   await page.getByTestId('add-integration').waitFor();
+  await page.getByTestId('integrations-back').waitFor();
   assert.match(await page.locator('#content').innerText(),/No Discord bots configured/);
   await checkDialogLayout('add-integration');
   assert.equal(await page.getByRole('heading',{name:'Message previews',exact:true}).count(),0);
@@ -124,6 +139,7 @@ async function run() {
   assert.equal(saved().integrations[item.id].enabled,false);
   assert.equal(saved().integrations[item.id].rules.server_down,undefined);
   await page.reload();
+  await openDiscord();
   await page.getByTestId('edit-integration').waitFor();
   assert.match(await page.locator('#content').innerText(),/discord-rotated/);
   await page.getByTestId('edit-integration').click();
@@ -133,6 +149,9 @@ async function run() {
   await page.getByTestId('restart-server').click();
   await submit('POST','/api/servers/scuffedtards/actions/restart',200);
   await page.getByTestId('nav-integrations').click();
+  await page.getByTestId('discord-integration-card').waitFor();
+  await page.getByTestId('discord-integration-card').click();
+  await page.getByTestId('add-integration').waitFor();
   await page.waitForFunction(async () => {
     const data = await fetch('/api/integrations',{headers:{Authorization:'Bearer integration-browser-admin'}}).then((r) => r.json());
     return data.deliveries.filter((d) => ['restart_requested','restart_completed'].includes(d.event.kind) && d.status === 'sent').length === 2;
@@ -143,7 +162,7 @@ async function run() {
   const sentCompleted = completed.filter({hasText:'Sent'}).first();
   await sentCompleted.waitFor();
   assert.ok(await recent.count() >= 3);
-  assert.match(await sentCompleted.innerText(),/SERVER[\s\S]*ScuffedTards/);
+  assert.match(await sentCompleted.innerText(),/ScuffedTards/);
   assert.match(await sentCompleted.innerText(),/bare minimum/);
   await page.screenshot({path:path.join(output,'deliveries.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});
