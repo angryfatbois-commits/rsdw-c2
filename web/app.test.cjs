@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, update:true, logs:true, updateCheck:true};
 
@@ -356,7 +356,7 @@ test('identity changes clear protected data and reject late API and log response
   vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.authUI = {state, api, loadLogs, applyAuth, logout, discoverAuth, refresh};', sandbox);
   const ui = sandbox.authUI;
   ui.applyAuth({mode:'oidc',authenticated:true,subject:'operator',role:'admin',csrfToken:'admin-session',required:true,capabilities:{dashboard:true,telemetry:true,logs:true,events:true}});
-  Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], users:[{id:'saved', name:'Alice', playerId:'0123456789abcdef0123456789abcdef'}], integrations:[{name:'private bot'}], deliveries:[{id:'private delivery'}], alertRules:[{kind:'server_down'}], pendingRestarts:{world:{id:'operation'}}, modalIntegrationId:'private bot', telemetry:{secret:true}, selectedEventId:'secret', modalAction:'edit-user', modalUserId:'saved', modalServerId:'world'});
+  Object.assign(ui.state, {servers:[{id:'world'}], logs:'secret log', events:[{message:'secret event'}], users:[{id:'saved', name:'Alice', playerId:'0123456789abcdef0123456789abcdef'}], integrations:[{name:'private bot'}], deliveries:[{id:'private delivery'}], alertRules:[{kind:'server_down'}], pendingRestarts:{world:{id:'operation'}}, modalIntegrationId:'private bot', telemetry:{secret:true}, selectedEventId:'secret', modalAction:'edit-user', modalUserId:'saved', modalServerId:'world', deployWatches:{world:{serverId:'world', startedAt:1, ready:false}}});
   element('#modal-body').innerHTML = 'secret settings';
   const logs = ui.loadLogs();
   const events = ui.api('/api/events');
@@ -381,6 +381,7 @@ test('identity changes clear protected data and reject late API and log response
   assert.equal(ui.state.servers.length, 0);
   assert.equal(ui.state.telemetry, null);
   assert.equal(ui.state.modalAction, '');
+  assert.equal(Object.keys(ui.state.deployWatches).length, 0);
   assert.equal(element('#modal-body').innerHTML, '');
   assert.equal(element('#session-role').textContent, 'Viewer');
   assert.equal(ui.state.capabilities.logs, undefined);
@@ -716,4 +717,125 @@ test('an independent log failure keeps successfully refreshed telemetry', async 
   assert.match(f.element('#content').innerHTML,/Alice|Mage/);
   assert.match(f.element('#content').innerHTML,/1 \/ 4/);
   assert.equal(f.element('#error-banner').textContent,'Logs unavailable');
+});
+
+const savedPlayer = '0123456789abcdef0123456789abcdef';
+const otherPlayer = '11111111111111111111111111111111';
+const manualPlayer = 'abcdef0123456789abcdef0123456789';
+
+function createForm(entries) {
+  const form = new FormData();
+  for (const [name, value] of entries) form.append(name, value);
+  return form;
+}
+
+test('adminIdsFromForm joins saved and manual player IDs and rejects invalid hex', () => {
+  const {adminIdsFromForm, createSettingsFromForm, parseAdminIds} = context.ui;
+  const form = createForm([
+    ['name', 'World'],
+    ['worldName', 'World'],
+    ['ownerId', savedPlayer],
+    ['imageTag', '0.2.0'],
+    ['namespace', 'dragonwilds'],
+    ['maxPlayers', '4'],
+    ['memoryLimitMiB', '6144'],
+    ['cpuLimitMillis', '2000'],
+    ['gamePort', '7777'],
+    ['storageGiB', '40'],
+    ['serviceType', 'LoadBalancer'],
+    ['adminPlayerId', savedPlayer],
+    ['adminPlayerId', otherPlayer],
+    ['adminPlayerId', savedPlayer],
+    ['adminPlayerIdManual', manualPlayer.toUpperCase()],
+    ['debugLevel', '0'],
+    ['validateGameFiles', 'false'],
+    ['autoStopOnUpdate', 'false'],
+    ['additionalArgs', ''],
+    ['serverPassword', ''],
+    ['adminPassword', ''],
+  ]);
+  assert.equal(adminIdsFromForm(form), `${savedPlayer},${otherPlayer},${manualPlayer}`);
+  assert.notEqual(Object.fromEntries(form).adminPlayerId, adminIdsFromForm(form));
+  const settings = createSettingsFromForm(form);
+  assert.equal(settings.adminIds, `${savedPlayer},${otherPlayer},${manualPlayer}`);
+  assert.equal(settings.serviceType, 'LoadBalancer');
+  assert.equal('adminPlayerId' in settings, false);
+  assert.equal('adminPlayerIdManual' in settings, false);
+  assert.equal('save' in settings, false);
+  assert.equal(parseAdminIds(` ${savedPlayer.toUpperCase()},,${otherPlayer} ,${savedPlayer} `).join(','), `${savedPlayer},${otherPlayer}`);
+  assert.equal(adminIdsFromForm(createForm([])), '');
+  assert.throws(() => adminIdsFromForm(createForm([['adminPlayerIdManual', 'not-an-id']])), /32 hexadecimal/);
+  assert.match(context.ui.adminIdsFields([{id:'stable-one', name:'Alice', playerId:savedPlayer}]), new RegExp(`value="${savedPlayer}"`));
+  assert.doesNotMatch(context.ui.adminIdsFields([{id:'stable-one', name:'Alice', playerId:savedPlayer}]), /value="stable-one"/);
+});
+
+test('serviceTypeField defaults to LoadBalancer and keeps NodePort and ClusterIP', () => {
+  const html = context.ui.serviceTypeField();
+  assert.match(html, /data-testid="server-service-type"/);
+  assert.match(html, /<option value="LoadBalancer" selected>/);
+  assert.match(html, /value="NodePort"/);
+  assert.match(html, /local kind testing/);
+  assert.match(html, /value="ClusterIP"/);
+  assert.ok(html.indexOf('LoadBalancer') < html.indexOf('NodePort'));
+  assert.ok(html.indexOf('NodePort') < html.indexOf('ClusterIP'));
+});
+
+test('deployProgress derives phases and latches demo ready without latching timeout', () => {
+  const {beginDeployWatch, deployProgress, DEPLOY_WATCH_TIMEOUT_MS} = context.ui;
+  const startedAt = 1_000_000;
+  state.deployWatches = {};
+  state.servers = [{id:'fresh', name:'Fresh world', status:'starting'}];
+  assert.equal(deployProgress(state.servers[0], startedAt), null);
+
+  beginDeployWatch({id:'fresh', status:'starting'}, startedAt);
+  assert.equal(deployProgress({id:'fresh', name:'Fresh world', status:'starting'}, startedAt).phase, 'starting');
+  assert.equal(deployProgress({id:'fresh', name:'Fresh world', status:'unknown'}, startedAt).phase, 'starting');
+  assert.equal(deployProgress({id:'fresh', name:'Fresh world'}, startedAt).phase, 'starting');
+  assert.equal(deployProgress({id:'fresh', name:'Fresh world', status:'online'}, startedAt).phase, 'ready');
+  assert.equal(deployProgress({id:'fresh', name:'Fresh world', status:'attention'}, startedAt).phase, 'ready');
+
+  state.deployWatches = {};
+  beginDeployWatch({id:'demo', status:'online'}, startedAt);
+  assert.equal(deployProgress({id:'demo', name:'Demo world', status:'online'}, startedAt).phase, 'ready');
+  assert.equal(deployProgress({id:'demo', name:'Demo world', status:'unknown'}, startedAt + 1000).phase, 'ready');
+
+  state.deployWatches = {};
+  beginDeployWatch({id:'bad', status:'starting'}, startedAt);
+  assert.equal(deployProgress({id:'bad', name:'Bad world', status:'attention'}, startedAt).phase, 'failed');
+  assert.equal(deployProgress({id:'bad', name:'Bad world', status:'error'}, startedAt).phase, 'failed');
+  assert.equal(deployProgress({id:'bad', name:'Bad world', status:'stopped'}, startedAt).phase, 'failed');
+  assert.equal(deployProgress({id:'bad', name:'Bad world', status:'stale'}, startedAt).phase, 'failed');
+  assert.equal(deployProgress({id:'bad', name:'Bad world', status:'deleting'}, startedAt).phase, 'failed');
+
+  state.deployWatches = {};
+  beginDeployWatch({id:'slow', status:'starting'}, startedAt);
+  const timed = deployProgress({id:'slow', name:'Slow world', status:'starting'}, startedAt + DEPLOY_WATCH_TIMEOUT_MS);
+  assert.equal(timed.phase, 'timed_out');
+  assert.equal(deployProgress({id:'slow', name:'Slow world', status:'online'}, startedAt + DEPLOY_WATCH_TIMEOUT_MS + 1).phase, 'ready');
+});
+
+test('maintenance shows deploy progress only for the selected watched server', () => {
+  state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, create:true};
+  state.page = 'maintenance';
+  state.fleetFilter = 'all';
+  state.events = [];
+  state.deletions = {};
+  state.deployWatches = {};
+  state.servers = [
+    {id:'watched', name:'Watched world', status:'starting', maxPlayers:4},
+    {id:'other', name:'Other world', status:'online', maxPlayers:4},
+  ];
+  state.serverId = 'watched';
+  assert.doesNotMatch(maintenance(), /data-testid="deploy-progress"/);
+  context.ui.beginDeployWatch({id:'watched', status:'starting'}, Date.now());
+  assert.match(maintenance(), /data-testid="deploy-progress"/);
+  assert.match(maintenance(), /data-phase="starting"/);
+  state.serverId = 'other';
+  assert.doesNotMatch(maintenance(), /data-testid="deploy-progress"/);
+  state.serverId = '';
+  html = context.ui.dashboard();
+  assert.match(html, /<tr class="deploying">/);
+  assert.match(html, /Watched world/);
+  state.capabilities = {dashboard:true, telemetry:true};
+  assert.doesNotMatch(context.ui.dashboard(), /Add server|data-testid="add-server"/);
 });
