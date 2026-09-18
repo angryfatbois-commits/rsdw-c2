@@ -42,7 +42,7 @@ Memory pressure restarts are disabled by default. The policy applies to every se
 | `RSDW_MEMORY_PRESSURE_THRESHOLD_PERCENT` | `memoryPressure.thresholdPercent` | `85` |
 | `RSDW_MEMORY_PRESSURE_DURATION` | `memoryPressure.duration` | `10m` |
 
-The enabled value must be a boolean, the threshold must be between 0 and 100 inclusive, and the duration must be a positive Go duration such as `10m` or `1m30s`. Invalid values prevent startup, even when the policy is disabled.
+The enabled value must be a boolean, the threshold must be between 0 and 100 inclusive, and the duration must be a positive Go duration such as `10m` or `1m30s`. Helm values accept whole-unit components up to six digits and reject values outside the runtime duration range. Invalid values prevent startup, even when the policy is disabled.
 
 The existing collector checks fresh container memory usage against its observed memory limit. Usage at or above the threshold must persist for the configured duration on the same runtime. The streak uses collection completion timestamps. Missing or invalid readings, stale observations, gaps longer than 45 seconds, runtime changes, stopped or deleting servers, and pending restarts reset the streak. C2 restart also clears the streak, so downtime never counts toward a restart.
 

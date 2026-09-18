@@ -24,7 +24,8 @@
         "thresholdPercent": {"type": "number", "minimum": 0, "maximum": 100},
         "duration": {
           "type": "string",
-          "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$",
+          "minLength": 2,
+          "pattern": "^\\+?(?:[0-9]{1,6}h)?(?:[0-9]{1,6}(?:ms|m))?(?:[0-9]{1,6}s)?(?:[0-9]{1,6}(?:us|µs|μs|ns))?$",
           "not": {"pattern": "^\\+?([0.]+(ns|us|µs|μs|ms|s|m|h))+$"}
         }
       }

@@ -50,7 +50,7 @@ func (policy MemoryPressurePolicy) observe(state *State, server Server, o observ
 	}
 	metrics := freshMetrics(o.metrics, now)
 	used, limit := metrics["memoryUsedBytes"], metrics["memoryLimitBytes"]
-	if used.Status != "available" || limit.Status != "available" || used.Value == nil || limit.Value == nil || math.IsNaN(*used.Value) || math.IsNaN(*limit.Value) || math.IsInf(*used.Value, 0) || math.IsInf(*limit.Value, 0) || *used.Value < 0 || *limit.Value <= 0 {
+	if used.Status != "available" || limit.Status != "available" || used.Value == nil || limit.Value == nil || *limit.Value <= 0 {
 		return rebootDispatch{}, nil
 	}
 	if *used.Value / *limit.Value * 100 < policy.ThresholdPercent {

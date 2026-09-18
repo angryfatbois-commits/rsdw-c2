@@ -15,7 +15,7 @@ rendered=$(helm template pressure-test "${chart[@]}" --set memoryPressure.enable
 check_env "$rendered" RSDW_MEMORY_PRESSURE_ENABLED true
 check_env "$rendered" RSDW_MEMORY_PRESSURE_THRESHOLD_PERCENT 90.5
 check_env "$rendered" RSDW_MEMORY_PRESSURE_DURATION 1m30s
-for invalid in enabled=maybe thresholdPercent=-1 thresholdPercent=101 duration=0s duration=0h0m0.0s duration=-1m duration=10 duration=bad; do
+for invalid in enabled=maybe thresholdPercent=-1 thresholdPercent=101 duration=0s duration=0h0m0.0s duration=0.1ns duration=9999999h duration=-1m duration=10 duration=bad; do
   if helm template pressure-test "${chart[@]}" --set "memoryPressure.$invalid" >/dev/null 2>&1; then
     printf 'Unexpected chart success: %s\n' "$invalid" >&2
     exit 1

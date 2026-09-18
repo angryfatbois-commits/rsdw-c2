@@ -126,9 +126,7 @@ func TestMemoryPressureResetsContinuity(t *testing.T) {
 				setReading(o.metrics, "memoryUsedBytes", 84.99, o.at)
 			case "negative used", "NaN", "infinity":
 				value := map[string]float64{"negative used": -1, "NaN": math.NaN(), "infinity": math.Inf(1)}[tc]
-				reading := o.metrics["memoryUsedBytes"]
-				reading.Value = &value
-				o.metrics["memoryUsedBytes"] = reading
+				setReading(o.metrics, "memoryUsedBytes", value, o.at)
 			case "zero limit", "negative limit":
 				setReading(o.metrics, "memoryLimitBytes", 0, o.at)
 				if tc == "negative limit" {
