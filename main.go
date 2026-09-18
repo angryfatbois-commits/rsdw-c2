@@ -1143,6 +1143,7 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not persist the server; any seed storage remains owned for recovery")
 		return
 	}
+	a.markTelemetryPending(server)
 	writeJSON(w, http.StatusCreated, server)
 }
 

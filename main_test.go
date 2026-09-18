@@ -685,6 +685,9 @@ func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
 	if strings.Contains(helmCall, "private-join") || strings.Contains(helmCall, "private-admin") {
 		t.Fatal("password passed as a Helm value")
 	}
+	if got := app.telemetryFor(server, "60s").Server; got.Status != StatusStarting {
+		t.Fatalf("create telemetry status = %s, want starting", got.Status)
+	}
 }
 
 func TestDemoAPIExercisesMutations(t *testing.T) {

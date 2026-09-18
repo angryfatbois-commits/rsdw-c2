@@ -104,6 +104,8 @@ async function run() {
   const lockCPU = page.getByRole('button', {name:'Lock CPU to player count',exact:true});
   await page.locator('#server-advanced summary').focus();
   await page.keyboard.press('Enter');
+  assert.equal(await page.getByTestId('server-service-type').inputValue(), 'LoadBalancer');
+  assert.deepEqual(await page.getByTestId('server-service-type').locator('option').evaluateAll((options) => options.map((option) => option.value)), ['LoadBalancer', 'NodePort', 'ClusterIP']);
   assert.equal(await memory.isEditable(), false);
   for (const [count, mib, millis] of [[1,'3072','500'],[4,'6144','2000'],[64,'67584','32000']]) {
     await players.fill(String(count));
@@ -168,17 +170,28 @@ async function run() {
   assert.equal(Object.values(saved().servers).some((item) => item.name === 'Saved owner world'), false);
   await page.screenshot({path:path.join(output, 'save-upload.png'),fullPage:true});
   await upload.setInputFiles([]);
+  await page.locator('#server-advanced').evaluate((details) => { details.open = true; });
+  await page.getByTestId('admin-saved-id').check();
+  await page.getByTestId('admin-manual-id').fill(manualID);
   const created = await submit('POST', '/api/servers', 201);
   assert.equal(created.ownerId, playerID);
   assert.equal(created.worldName, 'Saved world');
   assert.equal(created.name, 'Saved owner world');
   assert.equal(created.memoryLimitMiB, 6144);
   assert.equal(created.cpuLimitMillis, 2000);
+  assert.equal(created.serviceType, 'LoadBalancer');
+  assert.equal(created.adminIds, `${playerID},${manualID}`);
   assert.equal(saved().servers[created.id].memoryLimitMiB, 6144);
   assert.equal(saved().servers[created.id].cpuLimitMillis, 2000);
   assert.equal(created.currentImage.endsWith(':0.2.0'), true);
   assert.equal(saved().servers[created.id].ownerId, playerID);
+  assert.equal(saved().servers[created.id].adminIds, `${playerID},${manualID}`);
+  assert.equal(await page.locator('#modal').isVisible(), false);
+  assert.equal(new URL(page.url()).hash, '#maintenance');
+  await page.getByTestId('deploy-progress').waitFor();
+  assert.equal(await page.getByTestId('deploy-progress').getAttribute('data-phase'), 'ready');
 
+  await page.getByTestId('nav-dashboard').click();
   await page.getByTestId('add-server').click();
   await page.getByTestId('saved-user').selectOption(user.id);
   await page.getByTestId('server-owner').fill('bad-id');
