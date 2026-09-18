@@ -197,7 +197,7 @@ func scheduleView(schedule rebootSchedule, servers map[string]Server) rebootSche
 		LastReason: schedule.LastReason, LastOperationID: schedule.LastOperationID,
 	}
 	if server, ok := servers[view.ServerID]; ok {
-		view.ServerName = server.Name
+		view.ServerName = worldLabel(server)
 	}
 	return view
 }
@@ -206,7 +206,7 @@ func executionViews(history []rebootExecution, servers map[string]Server) []rebo
 	result := make([]rebootExecutionView, 0, len(history))
 	for _, execution := range history {
 		view := rebootExecutionView{rebootExecution: execution}
-		view.ServerName = servers[execution.ServerID].Name
+		view.ServerName = worldLabel(servers[execution.ServerID])
 		result = append(result, view)
 	}
 	sort.SliceStable(result, func(i, j int) bool {

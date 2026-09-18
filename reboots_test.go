@@ -31,6 +31,35 @@ func (o *rebootTestOrchestrator) CheckUpdate(_ context.Context, server Server) (
 	return server, nil
 }
 
+func TestRebootViewsUseWorldNameInsteadOfCreatorName(t *testing.T) {
+	servers := map[string]Server{
+		"pc2-us-east-01": {
+			ID:             "pc2-us-east-01",
+			Name:           "Petzko",
+			ServerSettings: ServerSettings{WorldName: "PC2-US-EAST-01"},
+		},
+	}
+	schedule := rebootSchedule{
+		ID: "schedule-1",
+		Definition: rebootDefinition{
+			ServerID:          "pc2-us-east-01",
+			Mode:              rebootModeDaily,
+			DailyTimes:        []string{"05:00"},
+			ExecutionTimezone: "UTC",
+		},
+	}
+
+	view := scheduleView(schedule, servers)
+	if view.ServerID != "pc2-us-east-01" || view.ServerName != "PC2-US-EAST-01" {
+		t.Fatalf("schedule view labels = serverID %q, serverName %q", view.ServerID, view.ServerName)
+	}
+
+	history := executionViews([]rebootExecution{{ServerID: "pc2-us-east-01"}}, servers)
+	if len(history) != 1 || history[0].ServerName != "PC2-US-EAST-01" {
+		t.Fatalf("execution view label = %+v", history)
+	}
+}
+
 func TestRebootScheduleAPIValidatesAndMutatesWithoutImmediateRestart(t *testing.T) {
 	app := newTestApp(t, true)
 	now := rebootAt("2026-09-17T12:00:00Z")
