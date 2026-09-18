@@ -134,8 +134,9 @@ function zonedDate(value, zone) {
   return `${formatted} (${selected})`;
 }
 function status(value = 'unknown') {
-  const known = ['online', 'starting', 'attention', 'stopped', 'unknown', 'warning', 'critical', 'error', 'success', 'healthy'];
-  return `<span class="status ${known.includes(value) ? value : 'unknown'}">${escapeHTML(value.charAt(0).toUpperCase() + value.slice(1))}</span>`;
+  const known = ['online', 'starting', 'attention', 'stopped', 'deleting', 'stale', 'unknown', 'warning', 'critical', 'error', 'success', 'healthy'];
+  const label = {deleting:'DELETING', stale:'STALE'}[value] || value.charAt(0).toUpperCase() + value.slice(1);
+  return `<span class="status ${known.includes(value) ? value : 'unknown'}">${escapeHTML(label)}</span>`;
 }
 function stat(label, value, name, tone = '') {
   return `<section class="panel stat">${icon(name)}<div><div class="stat-value ${tone} ${String(value).length > 10 ? 'stat-text' : ''}">${escapeHTML(value)}</div><div class="stat-label">${escapeHTML(label)}</div></div></section>`;
@@ -359,8 +360,8 @@ function eventTable(events, detailed = false) {
 function dashboard() {
   const servers = scopedServers();
   const online = servers.filter((server) => server.status === 'online').length;
-  const attention = servers.filter((server) => server.status === 'attention' || server.updateAvailable).length;
-  const filtered = servers.filter((server) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? server.status === 'online' : server.status === 'attention' || server.updateAvailable));
+  const attention = servers.filter((server) => server.status === 'attention' || server.status === 'stale' || server.updateAvailable).length;
+  const filtered = servers.filter((server) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? server.status === 'online' : server.status === 'attention' || server.status === 'stale' || server.updateAvailable));
   const stats = `<div class="stats">${stat('Registered servers', servers.length, 'server')}${stat('Online', online, 'pulse', 'green')}${stat('Needs attention', attention, 'warning', 'amber')}${can('updateCheck') ? stat('Updates available', servers.filter((server) => server.updateAvailable).length, 'refresh') : stat('Reporting metrics', servers.filter((server) => server.metricsAvailable).length, 'pulse')}</div>`;
   if (!state.servers.length) return stats + emptyState();
   return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => `<tr><td><strong>${escapeHTML(serverLabel(server))}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${metricText(server, 'players')} / ${number(server.maxPlayers)}</td><td>${metricText(server, 'tickRate', ' TPS')}</td><td>${metricText(server, 'cpuPercent', '%')}</td><td class="mono">${duration(metricValue(server, 'uptimeSeconds'))}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section>${can('events') ? `<section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>` : ''}`;
@@ -458,23 +459,34 @@ function maintenance() {
   if (!can('maintenance')) return dashboard();
   const server = selectedServer();
   if (!server) return deletionReceipts() + emptyState();
-  if (state.deletions[server.id]) return deletionReceipts() + `<section class="panel"><h2>${escapeHTML(serverLabel(server))}</h2><p>Deletion is pending. Retry the recorded operation below. Other lifecycle actions are unavailable.</p></section>`;
+  if (state.deletions[server.id]) {
+    const message = server.status === 'deleting' ? 'Deletion is in progress. You can leave this page; C2 will keep working and update the receipt.' : server.status === 'stale' ? 'Deletion exceeded the 10-minute cleanup window. Retry the recorded operation below.' : 'Deletion is pending. Retry the recorded operation below. Other lifecycle actions are unavailable.';
+    return deletionReceipts() + `<section class="panel"><h2>${escapeHTML(serverLabel(server))}</h2><p>${message}</p></section>`;
+  }
   const activity = state.events.filter((event) => event.serverId === server.id);
   const changes = activity.filter((event) => ['system', 'update'].includes(event.category));
   return `<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(serverLabel(server))}</p></div>${status(server.status)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Endpoint unavailable. Ask your cluster operator for the server address and game port.')}</dd></div></dl><div class="action-grid"><div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div></div><p class="inline-note">Restart and update actions require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(server.status)}</dd></div><div><dt>Players connected</dt><dd>${metricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
+}
+function deletionServer(record) { return state.servers.find((server) => server.id === record.serverId); }
+function deletionInProgress(record) { return !record.completed && deletionServer(record)?.status === 'deleting'; }
+function deletionStateLabel(record) {
+  if (record.completed) return 'Completed';
+  if (deletionInProgress(record)) return 'In progress';
+  if (deletionServer(record)?.status === 'stale') return 'Timed out after 10 minutes; retry required';
+  return 'Pending, retry required';
 }
 function deletionReceipts() {
   if (!can('delete')) return '';
   const records = Object.values(state.deletions);
   if (!records.length) return '';
   return `<section class="panel section-gap" data-testid="deletion-receipts"><div class="panel-heading"><h2>Deletion receipts</h2></div>${records.map((record) => `<article>
-    <h3>${escapeHTML(record.worldLabel)}</h3><p>Server ID <code>${escapeHTML(record.serverId)}</code>. ${record.completed ? 'Completed' : 'Pending, retry required'}. World data choice <strong>${escapeHTML(record.mode)}</strong>.</p>
+    <h3>${escapeHTML(record.worldLabel)}</h3><p>Server ID <code>${escapeHTML(record.serverId)}</code>. ${deletionStateLabel(record)}. World data choice <strong>${escapeHTML(record.mode)}</strong>.</p>
     ${record.lastError ? `<p role="status">${escapeHTML(record.lastError)}</p>` : ''}
     ${record.plan.world?.length ? `<ul>${record.plan.world.map((ref) => `<li>${record.mode === 'keep' ? 'Retained' : record.completed ? 'Deleted' : 'Selected'} volume <code>${escapeHTML(ref.namespace)}/${escapeHTML(ref.name)}</code>, UID <code>${escapeHTML(ref.uid)}</code>.</li>`).join('')}</ul>` : '<p>No real storage was changed in demo mode.</p>'}
     ${record.plan.seeds?.length ? `<ul>${record.plan.seeds.map((ref) => `<li>${record.mode === 'keep' ? 'Retained' : record.completed ? 'Deleted' : 'Selected'} source-save PVC <code>${escapeHTML(ref.namespace)}/${escapeHTML(ref.name)}</code>, UID <code>${escapeHTML(ref.uid)}</code>.</li>`).join('')}</ul>${record.mode === 'keep' ? '<p>The uploaded source save may be the only copy if import did not finish. Verify its UID and preserve it for recovery through <code>saveSeed</code>. A source-save PVC is an import source, not a world volume for <code>persistence.existingClaim</code>.</p>' : ''}` : ''}
     ${record.plan.retainedSecrets?.length ? `<p>These external or legacy Secrets were kept because C2 could not prove ownership. No ownership adoption is required to finish deletion. Secret values are not included.</p><ul>${record.plan.retainedSecrets.map((ref) => `<li>Retained Secret <code>${escapeHTML(ref.namespace)}/${escapeHTML(ref.name)}</code>, UID <code>${escapeHTML(ref.uid)}</code>.</li>`).join('')}</ul>` : ''}
     ${record.mode === 'keep' ? '<p>To recover a retained world, an operator must verify its UID and exclusive use, then set <code>persistence.existingClaim</code> to this claim in the same namespace. Keep this receipt. C2 does not automatically reuse deleted identities.</p>' : '<p>PVC deletion does not erase provider snapshots or backing volumes with a Retain reclaim policy. Ask the storage operator about those copies.</p>'}
-    ${record.completed ? '' : `<button class="danger" data-action="delete" data-id="${escapeHTML(record.serverId)}" data-testid="retry-deletion">Retry deletion</button>`}
+    ${record.completed || deletionInProgress(record) ? '' : `<button class="danger" data-action="delete" data-id="${escapeHTML(record.serverId)}" data-testid="retry-deletion">Retry deletion</button>`}
   </article>`).join('')}</section>`;
 }
 function usersPage() {
@@ -973,11 +985,11 @@ async function submitModal(event) {
   $('#modal-error').hidden = true;
   $('#modal').querySelectorAll('[data-action="close-modal"]').forEach((button) => { button.disabled = true; });
   try {
-    await api(path,{method,body:action === 'add-server' ? createRequestBody(body) : body ? JSON.stringify(body) : undefined});
+    const result = await api(path,{method,body:action === 'add-server' ? createRequestBody(body) : body ? JSON.stringify(body) : undefined});
     if (epoch !== state.epoch) return;
     state.modalBusy = false;
     closeModal();
-    notice(message);
+    notice(action === 'delete' && !result.completed ? 'Deletion started. You can leave this page.' : message);
     await refresh();
     if (action === 'edit-settings') $('[data-testid="edit-settings"]')?.focus();
   } catch (error) {

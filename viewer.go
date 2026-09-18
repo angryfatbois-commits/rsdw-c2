@@ -41,7 +41,7 @@ type ViewerServer struct {
 func viewerServer(server Server) ViewerServer {
 	status := StatusUnknown
 	switch server.Status {
-	case StatusOnline, StatusStarting, StatusAttention, StatusStopped:
+	case StatusOnline, StatusStarting, StatusAttention, StatusStopped, StatusDeleting, StatusStale:
 		status = server.Status
 	}
 	return ViewerServer{ID: server.ID, Name: server.Name, WorldName: server.WorldName, Status: status, MaxPlayers: server.MaxPlayers, LastSeen: server.LastSeen, Metrics: viewerMetrics(server.Metrics), MetricsAvailable: server.MetricsAvailable}

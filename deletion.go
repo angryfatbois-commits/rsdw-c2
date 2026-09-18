@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"slices"
@@ -22,6 +23,12 @@ import (
 )
 
 const ownershipAnnotation = "rsdw-c2.petzko.sh/owner"
+
+const (
+	deletionTimeout           = 10 * time.Minute
+	deletionAttemptTimeout    = 100 * time.Second
+	deletionReconcileInterval = 5 * time.Second
+)
 
 type worldDataMode string
 
@@ -55,6 +62,7 @@ type deletionRecord struct {
 	Release    string        `json:"release"`
 	Mode       worldDataMode `json:"mode"`
 	Plan       deletionPlan  `json:"plan"`
+	DeadlineAt *time.Time    `json:"deadlineAt,omitempty"`
 	Completed  bool          `json:"completed"`
 	LastError  string        `json:"lastError,omitempty"`
 }
@@ -107,6 +115,23 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusBadRequest, "purge requires the additional confirmation DELETE WORLD followed by the stable server ID")
 		return
 	}
+	snapshot := a.store.Snapshot()
+	record, exists := snapshot.Deletions[id]
+	if exists && record.Mode != input.Mode {
+		writeError(w, http.StatusConflict, "the recorded world-data choice cannot change on retry")
+		return
+	}
+	if exists && record.Completed {
+		writeJSON(w, http.StatusOK, record)
+		return
+	}
+	if exists {
+		server, serverExists := snapshot.Servers[id]
+		if serverExists && server.Status == StatusDeleting && record.DeadlineAt != nil && a.deletionNow().Before(record.DeadlineAt.UTC()) {
+			writeJSON(w, http.StatusAccepted, record)
+			return
+		}
+	}
 	if !a.lifecycleMu.TryLock() {
 		writeError(w, http.StatusConflict, "another server lifecycle operation is in progress; retry shortly")
 		return
@@ -116,8 +141,8 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	snapshot := a.store.Snapshot()
-	record, exists := snapshot.Deletions[id]
+	snapshot = a.store.Snapshot()
+	record, exists = snapshot.Deletions[id]
 	if exists && record.Mode != input.Mode {
 		writeError(w, http.StatusConflict, "the recorded world-data choice cannot change on retry")
 		return
@@ -135,15 +160,55 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, http.StatusServiceUnavailable, "deletion requires persistent C2 state storage")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
-	defer cancel()
 	k, kube := a.orchestrator.(*kubeOrchestrator)
 	if !a.demo && !kube {
 		writeError(w, http.StatusServiceUnavailable, "deletion requires Kubernetes access")
 		return
 	}
+	if exists {
+		if a.demo {
+			record.Completed, record.LastError = true, ""
+			if err := a.completeDeletion(record, server); err != nil {
+				writeError(w, http.StatusInternalServerError, "could not persist deletion receipt")
+				return
+			}
+			writeJSON(w, http.StatusOK, record)
+			return
+		}
+		if deadline, active := deletionDeadline(record); active && a.deletionNow().Before(deadline) && server.Status != StatusStale {
+			if server.Status != StatusDeleting {
+				server.Status = StatusDeleting
+				if err := a.store.Update(func(state *State) error {
+					state.Deletions[id] = record
+					state.Servers[id] = server
+					return nil
+				}); err != nil {
+					writeError(w, http.StatusInternalServerError, "could not persist deletion state")
+					return
+				}
+			}
+			writeJSON(w, http.StatusAccepted, record)
+			return
+		}
+		deadline := a.deletionNow().Add(deletionTimeout)
+		record.DeadlineAt, record.LastError = &deadline, ""
+		server.Status = StatusDeleting
+		if err := a.store.Update(func(state *State) error {
+			state.Deletions[id] = record
+			state.Servers[id] = server
+			return nil
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not persist deletion retry")
+			return
+		}
+		writeJSON(w, http.StatusAccepted, record)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), deletionAttemptTimeout)
+	defer cancel()
 	if !exists {
-		record = deletionRecord{ServerID: id, WorldLabel: worldLabel(server), Namespace: server.Namespace, Release: server.Release, Mode: input.Mode}
+		deadline := a.deletionNow().Add(deletionTimeout)
+		record = deletionRecord{ServerID: id, WorldLabel: worldLabel(server), Namespace: server.Namespace, Release: server.Release, Mode: input.Mode, DeadlineAt: &deadline}
 		if !a.demo {
 			plan, err := k.inspectDeletion(ctx, server, snapshot, input.Mode)
 			if err != nil {
@@ -157,6 +222,8 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 				state.Deletions = map[string]deletionRecord{}
 			}
 			state.Deletions[id] = record
+			server.Status = StatusDeleting
+			state.Servers[id] = server
 			cancelServerDeliveries(state, id)
 			return nil
 		}); err != nil {
@@ -164,52 +231,190 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 			return
 		}
 	}
-	if !a.demo {
-		if err := k.removeServer(ctx, record, a.store.Snapshot()); err != nil {
-			record.LastError = err.Error()
-			persistErr := a.store.Update(func(state *State) error { state.Deletions[id] = record; return nil })
-			message := record.LastError
-			if persistErr != nil {
-				message += "; could not persist the latest error"
-			}
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": message + "; deletion is pending, retry with the same choice", "deletion": record})
+	if a.demo {
+		record.Completed, record.LastError = true, ""
+		if err := a.completeDeletion(record, server); err != nil {
+			writeError(w, http.StatusInternalServerError, "resource cleanup finished; retry deletion to persist its receipt")
 			return
 		}
+		writeJSON(w, http.StatusOK, record)
+		return
 	}
-	record.Completed, record.LastError = true, ""
+	writeJSON(w, http.StatusAccepted, record)
+}
+
+func (a *App) deletionNow() time.Time {
+	if a.clock != nil {
+		return a.clock().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func (a *App) completeDeletion(record deletionRecord, server Server) error {
 	if err := a.store.Update(func(state *State) error {
-		delete(state.Servers, id)
-		delete(state.Producers, id)
+		delete(state.Servers, record.ServerID)
+		delete(state.Producers, record.ServerID)
 		for scheduleID, schedule := range state.RebootSchedules {
-			if schedule.Definition.ServerID == id {
+			if schedule.Definition.ServerID == record.ServerID {
 				delete(state.RebootSchedules, scheduleID)
 			}
 		}
 		for key, integration := range state.Integrations {
-			integration.ServerIDs = slices.DeleteFunc(integration.ServerIDs, func(value string) bool { return value == id })
+			integration.ServerIDs = slices.DeleteFunc(integration.ServerIDs, func(value string) bool { return value == record.ServerID })
 			state.Integrations[key] = integration
 		}
-		cancelServerDeliveries(state, id)
+		cancelServerDeliveries(state, record.ServerID)
 		if record.Mode == purgeWorld {
 			for _, seed := range record.Plan.Seeds {
 				delete(state.PendingSeeds, seed.Name)
 			}
 		}
-		state.Deletions[id] = record
+		state.Deletions[record.ServerID] = record
 		appendEvent(state, server, "system", "success", "Server deleted", "World data choice: "+string(record.Mode))
 		return nil
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "resource cleanup finished; retry deletion to persist its receipt")
-		return
+		return err
 	}
 	cache := a.observations()
 	cache.mu.Lock()
-	delete(cache.history, id)
+	delete(cache.history, record.ServerID)
 	cache.mu.Unlock()
 	if server.SaveSeed != nil {
 		a.cleanupSeed(server.SaveSeed.Claim)
 	}
-	writeJSON(w, http.StatusOK, record)
+	return nil
+}
+
+func (a *App) runDeletionReconciler(ctx context.Context) {
+	ticker := time.NewTicker(deletionReconcileInterval)
+	defer ticker.Stop()
+	for {
+		a.reconcileDeletions(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *App) reconcileDeletions(ctx context.Context) {
+	if a.demo || ctx.Err() != nil || !a.lifecycleMu.TryLock() {
+		return
+	}
+	defer a.lifecycleMu.Unlock()
+	if err := a.store.writable(); err != nil {
+		log.Printf("deletion reconciler cannot write state: %v", err)
+		return
+	}
+	snapshot := a.store.Snapshot()
+	k, kube := a.orchestrator.(*kubeOrchestrator)
+	if !kube {
+		return
+	}
+	for id := range snapshot.Deletions {
+		if ctx.Err() != nil {
+			return
+		}
+		current := a.store.Snapshot()
+		record, ok := current.Deletions[id]
+		if !ok || record.Completed {
+			continue
+		}
+		server, ok := current.Servers[id]
+		if !ok || server.Status == StatusStale {
+			continue
+		}
+		deadline, hasDeadline := deletionDeadline(record)
+		if !hasDeadline || !a.deletionNow().Before(deadline) {
+			if err := a.markDeletionStale(record, ""); err != nil {
+				log.Printf("could not mark deletion %s stale: %v", id, err)
+			}
+			continue
+		}
+		if server.Status != StatusDeleting {
+			server.Status = StatusDeleting
+			if err := a.store.Update(func(state *State) error {
+				if current, ok := state.Servers[id]; ok {
+					current.Status = StatusDeleting
+					state.Servers[id] = current
+				}
+				return nil
+			}); err != nil {
+				log.Printf("could not mark deletion %s in progress: %v", id, err)
+				continue
+			}
+		}
+		attemptContext, cancel := context.WithTimeout(ctx, deletionAttemptTimeout)
+		if a.clock == nil {
+			attemptDeadline := time.Now().UTC().Add(deletionAttemptTimeout)
+			if deadline.Before(attemptDeadline) {
+				cancel()
+				attemptContext, cancel = context.WithDeadline(ctx, deadline)
+			}
+		}
+		err := k.removeServer(attemptContext, record, a.store.Snapshot())
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			if !a.deletionNow().Before(deadline) {
+				if staleErr := a.markDeletionStale(record, err.Error()); staleErr != nil {
+					log.Printf("could not mark deletion %s stale: %v", id, staleErr)
+				}
+				continue
+			}
+			record.LastError = err.Error()
+			if updateErr := a.store.Update(func(state *State) error {
+				if current, ok := state.Deletions[id]; ok && !current.Completed {
+					state.Deletions[id] = record
+				}
+				return nil
+			}); updateErr != nil {
+				log.Printf("could not persist deletion %s error: %v", id, updateErr)
+			}
+			continue
+		}
+		if !a.deletionNow().Before(deadline) {
+			if staleErr := a.markDeletionStale(record, "cleanup finished after the deadline"); staleErr != nil {
+				log.Printf("could not mark deletion %s stale: %v", id, staleErr)
+			}
+			continue
+		}
+		record.Completed, record.LastError = true, ""
+		if err := a.completeDeletion(record, server); err != nil {
+			log.Printf("could not persist completed deletion %s: %v", id, err)
+		}
+	}
+}
+
+func deletionDeadline(record deletionRecord) (time.Time, bool) {
+	if record.DeadlineAt == nil || record.DeadlineAt.IsZero() {
+		return time.Time{}, false
+	}
+	return record.DeadlineAt.UTC(), true
+}
+
+func (a *App) markDeletionStale(record deletionRecord, cause string) error {
+	message := "deletion exceeded the 10-minute cleanup window; retry to continue"
+	if record.DeadlineAt == nil || record.DeadlineAt.IsZero() {
+		message = "deletion has no recorded cleanup deadline; retry to start a 10-minute cleanup window"
+	}
+	if cause != "" {
+		message += ": " + cause
+	}
+	record.LastError = message
+	return a.store.Update(func(state *State) error {
+		if current, ok := state.Deletions[record.ServerID]; ok && !current.Completed {
+			state.Deletions[record.ServerID] = record
+		}
+		if current, ok := state.Servers[record.ServerID]; ok {
+			current.Status = StatusStale
+			state.Servers[record.ServerID] = current
+		}
+		return nil
+	})
 }
 
 func cancelServerDeliveries(state *State, id string) {

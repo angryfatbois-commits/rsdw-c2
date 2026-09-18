@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Commands model one Helm release and an unrelated neighboring release.
@@ -22,6 +23,8 @@ type deletionRunner struct {
 	storage        deletionResource
 	calls, effects []string
 	failDelete     string
+	pendingDelete  string
+	pendingPolls   int
 	storePath      string
 }
 
@@ -152,6 +155,13 @@ func (r *deletionRunner) Run(_ context.Context, name string, args ...string) ([]
 		}
 		if len(args) == 8 && reflect.DeepEqual(args[5:], []string{"--ignore-not-found", "-o", "json"}) {
 			if obj, ok := r.objects[args[3]+"/"+args[4]]; ok {
+				if args[3]+"/"+args[4] == r.pendingDelete && obj.Metadata.DeletionTimestamp != nil && r.pendingPolls > 0 {
+					r.pendingPolls--
+					if r.pendingPolls == 0 {
+						delete(r.objects, r.pendingDelete)
+						return nil, nil
+					}
+				}
 				return json.Marshal(obj)
 			}
 			return nil, nil
@@ -183,6 +193,13 @@ func (r *deletionRunner) Run(_ context.Context, name string, args ...string) ([]
 					r.failDelete = ""
 					return nil, errors.New("scripted access failure")
 				}
+				if key == r.pendingDelete {
+					terminating := time.Now().UTC()
+					obj.Metadata.DeletionTimestamp = &terminating
+					r.objects[key] = obj
+					r.pendingPolls = 2
+					return nil, nil
+				}
 				delete(r.objects, key)
 				return nil, nil
 			}
@@ -199,10 +216,20 @@ func deleteRequest(t *testing.T, app *App, body string, status int) deletionReco
 		t.Fatalf("delete status %d, want %d: %s", w.Code, status, w.Body.String())
 	}
 	var record deletionRecord
-	if status == http.StatusOK {
+	if status >= http.StatusOK && status < http.StatusMultipleChoices {
 		if err := json.Unmarshal(w.Body.Bytes(), &record); err != nil {
 			t.Fatal(err)
 		}
+	}
+	return record
+}
+
+func reconcileDeletion(t *testing.T, app *App) deletionRecord {
+	t.Helper()
+	app.reconcileDeletions(context.Background())
+	record, ok := app.store.Snapshot().Deletions["world"]
+	if !ok {
+		t.Fatal("deletion receipt disappeared")
 	}
 	return record
 }
@@ -245,7 +272,11 @@ func TestDeletionKeepReceiptReloadAndLegacySecrets(t *testing.T) {
 			objects[key] = obj
 		}
 	}
-	record := deleteRequest(t, app, `{"confirm":"world"}`, 200)
+	accepted := deleteRequest(t, app, `{"confirm":"world"}`, http.StatusAccepted)
+	if accepted.Completed || app.store.Snapshot().Servers["world"].Status != StatusDeleting || len(runner.effects) != 0 {
+		t.Fatalf("deletion was not accepted as in progress: %+v", accepted)
+	}
+	record := reconcileDeletion(t, app)
 	if record.Mode != keepWorld || !record.Completed || record.WorldLabel != "Living World" || len(record.Plan.RetainedSecrets) != 2 || len(record.Plan.Secrets) != 0 {
 		t.Fatalf("wrong keep receipt: %+v", record)
 	}
@@ -303,7 +334,8 @@ func TestDeletionPurgePartialFailureRetryAndReplacement(t *testing.T) {
 			app, runner := deletionFixture(t, true, true, false)
 			runner.failDelete = "Secret/world-api"
 			body := `{"confirm":"world","mode":"purge","purgeConfirm":"DELETE WORLD world"}`
-			deleteRequest(t, app, body, 502)
+			deleteRequest(t, app, body, http.StatusAccepted)
+			reconcileDeletion(t, app)
 			reloaded, err := NewStore(app.store.path, false)
 			if err != nil {
 				t.Fatal(err)
@@ -329,13 +361,13 @@ func TestDeletionPurgePartialFailureRetryAndReplacement(t *testing.T) {
 				secret.Metadata.UID = "replacement-uid"
 				runner.objects["Secret/world-api"] = secret
 				effects := len(runner.effects)
-				deleteRequest(t, app, body, 502)
+				reconcileDeletion(t, app)
 				if len(runner.effects) != effects || app.store.Snapshot().Deletions["world"].Completed {
 					t.Fatal("replacement was deleted")
 				}
 				return
 			}
-			deleteRequest(t, app, body, 200)
+			reconcileDeletion(t, app)
 			if !reflect.DeepEqual(runner.effects, []string{"uninstall world", "delete ConfigMap/world-config", "delete PersistentVolumeClaim/world-rsdragonwilds", "delete Secret/world-api", "delete Secret/world-api", "delete Secret/world-settings"}) {
 				t.Fatalf("wrong cleanup: %v", runner.effects)
 			}
@@ -343,6 +375,60 @@ func TestDeletionPurgePartialFailureRetryAndReplacement(t *testing.T) {
 				t.Fatal("neighbor resources changed")
 			}
 		})
+	}
+}
+
+func TestDeletionPurgeWaitsForTerminatingWorldPVC(t *testing.T) {
+	app, runner := deletionFixture(t, true, true, false)
+	runner.pendingDelete = "PersistentVolumeClaim/world-rsdragonwilds"
+
+	accepted := deleteRequest(t, app, `{"confirm":"world","mode":"purge","purgeConfirm":"DELETE WORLD world"}`, http.StatusAccepted)
+	if accepted.Completed || app.store.Snapshot().Servers["world"].Status != StatusDeleting {
+		t.Fatalf("wrong accepted deletion state: %+v", accepted)
+	}
+	reloaded, err := NewStore(app.store.path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.store = reloaded
+	pending := reconcileDeletion(t, app)
+	if pending.Completed || pending.LastError == "" || app.store.Snapshot().Servers["world"].Status != StatusDeleting {
+		t.Fatalf("terminating PVC did not remain in progress: %+v", pending)
+	}
+	record := reconcileDeletion(t, app)
+	if !record.Completed || record.Mode != purgeWorld {
+		t.Fatalf("wrong deletion receipt: %+v", record)
+	}
+	if _, exists := runner.objects[runner.pendingDelete]; exists {
+		t.Fatal("terminating world PVC was not removed before completion")
+	}
+}
+
+func TestDeletionBecomesStaleAfterDeadlineAndRetryRearms(t *testing.T) {
+	app, runner := deletionFixture(t, true, true, false)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	app.clock = func() time.Time { return now }
+	body := `{"confirm":"world","mode":"purge","purgeConfirm":"DELETE WORLD world"}`
+	accepted := deleteRequest(t, app, body, http.StatusAccepted)
+	if accepted.DeadlineAt == nil || !accepted.DeadlineAt.Equal(now.Add(deletionTimeout)) {
+		t.Fatalf("wrong deletion deadline: %+v", accepted.DeadlineAt)
+	}
+	bootstrap := requestJSON(t, app, http.MethodGet, "/api/bootstrap", "")
+	if bootstrap.Code != http.StatusOK || !strings.Contains(bootstrap.Body.String(), `"status":"deleting"`) {
+		t.Fatalf("deleting status was not visible: %s", bootstrap.Body.String())
+	}
+	active := deleteRequest(t, app, body, http.StatusAccepted)
+	if active.DeadlineAt == nil || !active.DeadlineAt.Equal(*accepted.DeadlineAt) || len(runner.effects) != 0 {
+		t.Fatalf("active retry changed deletion: %+v", active)
+	}
+	now = now.Add(deletionTimeout)
+	stale := reconcileDeletion(t, app)
+	if stale.Completed || app.store.Snapshot().Servers["world"].Status != StatusStale || !strings.Contains(stale.LastError, "10-minute") {
+		t.Fatalf("deletion did not become stale: %+v", stale)
+	}
+	retry := deleteRequest(t, app, body, http.StatusAccepted)
+	if retry.Completed || retry.DeadlineAt == nil || !retry.DeadlineAt.After(*accepted.DeadlineAt) || app.store.Snapshot().Servers["world"].Status != StatusDeleting {
+		t.Fatalf("stale retry did not rearm deletion: %+v", retry)
 	}
 }
 
@@ -371,7 +457,7 @@ func TestDeletionAuthorizationAndCSRF(t *testing.T) {
 		t.Fatal("unauthorized deletion had effects")
 	}
 	w := authRequest(app, "DELETE", "/api/servers/world", admin, "https://console.example", csrf, `{"confirm":"world"}`)
-	if w.Code != 200 {
+	if w.Code != http.StatusAccepted {
 		t.Fatalf("admin deletion: %d %s", w.Code, w.Body.String())
 	}
 	w = authRequest(app, "GET", "/api/servers/world/deletion", viewer, "", "", "")
@@ -415,7 +501,8 @@ func TestDeletionRetainsForeignDirectSecret(t *testing.T) {
 	foreign := runner.objects["Secret/world-settings"]
 	foreign.Metadata.Annotations[ownershipAnnotation] = "another-owner"
 	runner.objects["Secret/world-settings"] = foreign
-	record := deleteRequest(t, app, `{"confirm":"world"}`, 200)
+	deleteRequest(t, app, `{"confirm":"world"}`, http.StatusAccepted)
+	record := reconcileDeletion(t, app)
 	if !reflect.DeepEqual(record.Plan.RetainedSecrets, []resourceIdentity{{Kind: "Secret", Namespace: "games", Name: "world-settings", UID: "uid-world-settings"}}) {
 		t.Fatalf("foreign Secret not recorded: %+v", record.Plan.RetainedSecrets)
 	}
@@ -463,7 +550,8 @@ func TestDeletionRetainsUnimportedSeedUnlessPurged(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer root.Close()
-			record := deleteRequest(t, app, `{"confirm":"world","mode":"`+mode+`","purgeConfirm":"DELETE WORLD world"}`, 200)
+			deleteRequest(t, app, `{"confirm":"world","mode":"`+mode+`","purgeConfirm":"DELETE WORLD world"}`, http.StatusAccepted)
+			record := reconcileDeletion(t, app)
 			if !reflect.DeepEqual(record.Plan.Seeds, []resourceIdentity{{Kind: "PersistentVolumeClaim", Namespace: "games", Name: "uploaded-seed", UID: "seed-uid"}}) {
 				t.Fatalf("seed identity missing from receipt: %+v", record.Plan.Seeds)
 			}

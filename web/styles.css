@@ -106,6 +106,10 @@ td:last-child.actions { text-align: right; }
 .status.online,.status.success,.status.healthy { color: var(--color-foreground); }
 .status.online:before,.status.success:before,.status.healthy:before { background: var(--success); }
 .status.attention,.status.starting,.status.warning { color: var(--warning); }
+.status.deleting { color: var(--link); }
+.status.deleting:before { background: var(--link); }
+.status.stale { color: var(--warning); }
+.status.stale:before { background: var(--warning); }
 .status.stopped,.status.critical,.status.error { color: var(--color-destructive); }
 .status.unknown { color: var(--color-muted-foreground); }
 .empty { text-align: center; padding: 56px 24px; }

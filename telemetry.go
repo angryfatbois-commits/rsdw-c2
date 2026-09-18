@@ -236,6 +236,7 @@ func (a *App) collectTelemetry(ctx context.Context) {
 }
 
 func joinObservation(server Server, result observation, now time.Time) Server {
+	lifecycleStatus := server.Status
 	server.Metrics = freshMetrics(result.metrics, now)
 	server.MetricsAvailable = false
 	server.Players, server.UptimeSeconds, server.MemoryUsedBytes, server.MemoryLimitBytes, server.NetworkBytesPerSecond = 0, 0, 0, 0, 0
@@ -269,6 +270,9 @@ func joinObservation(server Server, result observation, now time.Time) Server {
 	if !result.at.IsZero() && now.Sub(result.at) <= telemetryMaxAge {
 		server.Status = result.status
 		server.LastSeen = result.at.Format(time.RFC3339Nano)
+	}
+	if lifecycleStatus == StatusDeleting || lifecycleStatus == StatusStale {
+		server.Status = lifecycleStatus
 	}
 	server.CurrentImage = result.image
 	server.UpdateAvailable = server.CurrentImage != "" && server.DesiredImage != "" && server.CurrentImage != server.DesiredImage

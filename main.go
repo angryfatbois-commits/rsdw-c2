@@ -65,6 +65,8 @@ const (
 	StatusStarting  Status = "starting"
 	StatusAttention Status = "attention"
 	StatusStopped   Status = "stopped"
+	StatusDeleting  Status = "deleting"
+	StatusStale     Status = "stale"
 	StatusUnknown   Status = "unknown"
 )
 
@@ -272,6 +274,10 @@ func (s State) clone() State {
 	next := s
 	next.Deletions = maps.Clone(s.Deletions)
 	for id, record := range next.Deletions {
+		if record.DeadlineAt != nil {
+			deadline := *record.DeadlineAt
+			record.DeadlineAt = &deadline
+		}
 		record.Plan.Resources = append([]resourceIdentity(nil), record.Plan.Resources...)
 		record.Plan.World = append([]resourceIdentity(nil), record.Plan.World...)
 		record.Plan.Secrets = append([]resourceIdentity(nil), record.Plan.Secrets...)
@@ -1530,6 +1536,7 @@ func main() {
 	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
 	go app.runRebootScheduler(context.Background())
+	go app.runDeletionReconciler(context.Background())
 	go app.runDeliveries(context.Background())
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
 	server := &http.Server{Addr: addr, Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}

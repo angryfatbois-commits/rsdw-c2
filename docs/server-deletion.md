@@ -12,7 +12,7 @@ C2 never deletes the namespace. Other releases and unrelated resources remain. P
 
 ## Receipts and recovery
 
-Maintenance shows completed and pending receipts after reload. Preserve C2's persistent state file; it holds deletion intent, the fixed keep/purge choice, resource identities, and completion status. Deleted identities are not automatically reused.
+Maintenance shows completed, in-progress, and stale receipts after reload. Preserve C2's persistent state file; it holds deletion intent, the fixed keep/purge choice, resource identities, the cleanup deadline, and completion status. Deleted identities are not automatically reused. Once C2 accepts a deletion, the server remains in the fleet as **DELETING** while Kubernetes cleanup runs, so the confirmation dialog can be closed and the user can navigate away.
 
 For a kept world, an operator can verify the receipt's PVC UID and exclusive use, then configure `persistence.existingClaim` with that PVC name in the same namespace. C2 does not automatically restore a deleted inventory entry. Recovery requires a separately configured server and any needed credentials.
 
@@ -22,9 +22,11 @@ Unproven external or legacy direct Secrets are retained. Their identities appear
 
 ## Failure and retry
 
-C2 records the plan before resource deletion. A partial failure leaves the server pending and blocks its other lifecycle actions. Inspect the receipt's error, address the reported condition, and choose **Retry deletion**. Retry uses the recorded identities and keep/purge choice; the choice cannot change. Purge retries require the same additional confirmation text. A completed operation returns the saved receipt when repeated with the same choice.
+C2 records the plan before resource deletion. A valid request is accepted with `202` after the plan and a ten-minute cleanup deadline are durable; Kubernetes cleanup continues in the background. A partial failure leaves the server **DELETING**, blocks its other lifecycle actions, and records the latest diagnostic. A repeated request while cleanup is active returns the existing receipt without extending the deadline.
 
-Do not remove the receipt or recreate resources under the deleted identity to get past a failure. C2 refuses replacement UIDs or a changed Helm release identity, revision, or manifest. Claims must be Bound, not terminating, and free of owner references. Shared storage, unexplained resources, release hooks, or missing retention protection can prevent preflight from completing. Have the operator investigate the specific error before retrying.
+If cleanup has not completed after ten minutes, C2 changes the server to **STALE** and stops automatic attempts. Inspect the receipt's error, address the reported condition, and choose **Retry deletion**. Retry starts a new ten-minute window against the recorded identities and keep/purge choice; the choice cannot change. Purge retries require the same additional confirmation text. A completed operation returns the saved receipt with `200` when repeated with the same choice.
+
+Do not remove the receipt or recreate resources under the deleted identity to get past a failure. C2 refuses replacement UIDs or a changed Helm release identity, revision, or manifest. Retained claims must be Bound, not terminating, and free of owner references. A purge target that Kubernetes has already accepted for deletion can remain terminating temporarily; C2 keeps it **DELETING** and retries until it disappears, then marks the server **STALE** if the ten-minute window expires. Shared storage, unexplained resources, release hooks, or missing retention protection can prevent preflight from completing. Have the operator investigate the specific error before retrying.
 
 ## Operating constraints
 
@@ -32,7 +34,7 @@ Run one C2 writer with persistent writable state. Lifecycle serialization is loc
 
 Exclude external Helm upgrades, rollbacks, uninstalls, and Kubernetes changes to the target release, workloads, storage, and Secret references throughout deletion and any pending retry. C2 checks identities and references, but these checks do not lock out external actors. Pause other reconcilers or coordinate a maintenance window before starting. A failed operation may already have removed some resources.
 
-The API is `DELETE /api/servers/{id}` with JSON `{"confirm":"<id>","mode":"keep"}`. Omitting `mode` defaults to keep. Purge requires `"mode":"purge"` and `"purgeConfirm":"DELETE WORLD <id>"`. Admin authentication and the existing OIDC CSRF rules apply. Successful requests return the receipt with `200`.
+The API is `DELETE /api/servers/{id}` with JSON `{"confirm":"<id>","mode":"keep"}`. Omitting `mode` defaults to keep. Purge requires `"mode":"purge"` and `"purgeConfirm":"DELETE WORLD <id>"`. Admin authentication and the existing OIDC CSRF rules apply. Newly accepted or retried operations return the in-progress receipt with `202`; completed operations return the receipt with `200`.
 
 ## Verification boundary
 

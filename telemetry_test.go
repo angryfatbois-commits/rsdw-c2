@@ -28,6 +28,47 @@ func fixtureApp(t *testing.T) (*App, *telemetryRunner, Server) {
 	return app, runner, server
 }
 
+func TestJoinObservationPreservesDeletionLifecycleStatus(t *testing.T) {
+	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+	metrics := emptyMetrics()
+	setReading(metrics, "players", 2, now)
+	observed := observation{at: now, metrics: metrics, status: StatusOnline}
+	for _, test := range []struct {
+		persisted Status
+		want      Status
+	}{
+		{StatusDeleting, StatusDeleting},
+		{StatusStale, StatusStale},
+	} {
+		t.Run(string(test.persisted), func(t *testing.T) {
+			server := joinObservation(Server{ID: "world", Status: test.persisted}, observed, now)
+			if server.Status != test.want {
+				t.Fatalf("status = %q, want %q despite online telemetry", server.Status, test.want)
+			}
+			if server.LastSeen != now.Format(time.RFC3339Nano) || server.Players != 2 || !server.MetricsAvailable {
+				t.Fatalf("lifecycle status prevented fresh telemetry from being applied: %+v", server)
+			}
+		})
+	}
+}
+
+func TestViewerServerExposesDeletionLifecycleStatus(t *testing.T) {
+	for _, test := range []struct {
+		persisted Status
+		want      Status
+	}{
+		{StatusDeleting, StatusDeleting},
+		{StatusStale, StatusStale},
+	} {
+		t.Run(string(test.persisted), func(t *testing.T) {
+			server := viewerServer(Server{ID: "world", Status: test.persisted})
+			if server.Status != test.want {
+				t.Fatalf("viewer status = %q, want %q", server.Status, test.want)
+			}
+		})
+	}
+}
+
 func TestActualGameTickCapture(t *testing.T) {
 	data, err := os.ReadFile("verification/tick-live-observations.json")
 	if err != nil {
