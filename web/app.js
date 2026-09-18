@@ -7,6 +7,7 @@ const PATTERN = Object.freeze({
   dnsLabel: '[a-z0-9](([a-z0-9]|-)*[a-z0-9])?',
   snowflake: '[0-9]{1,20}',
 });
+const DEPLOY_WATCH_TIMEOUT_MS = 10 * 60 * 1000;
 const categoryLabels = { system:'System', player:'Players', health:'Health', update:'Updates' };
 const icons = {
   dashboard: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
@@ -46,6 +47,7 @@ const discordStatusCopy = {
 };
 const state = {
   deletions: {},
+  deployWatches: {},
   page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
@@ -204,6 +206,123 @@ function serverLabel(server) {
   const label = worldLabel(server);
   return state.servers.some((other) => other.id !== server.id && worldLabel(other) === label) ? `${label} (${server.id})` : label;
 }
+function parseAdminIds(value) {
+  const ids = [];
+  const seen = new Set();
+  for (const part of String(value || '').split(',')) {
+    const id = part.trim().toLowerCase();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+function normalizePlayerIdClient(value) {
+  const id = String(value || '').trim().toLowerCase();
+  if (!new RegExp(`^${PATTERN.eosId}$`).test(id)) throw new Error('Administrator IDs must contain exactly 32 hexadecimal characters, without spaces or separators.');
+  return id;
+}
+function adminIdsFields(users, selectedPlayerIds = []) {
+  const selected = new Set(parseAdminIds((selectedPlayerIds || []).join(',')));
+  const leftover = [...selected].filter((id) => !(users || []).some((user) => String(user.playerId || '').toLowerCase() === id));
+  const saved = (users || []).map((user) => {
+    const playerId = String(user.playerId || '');
+    const checked = selected.has(playerId.toLowerCase()) ? ' checked' : '';
+    return `<label class="choice-row"><input type="checkbox" name="adminPlayerId" value="${escapeHTML(playerId)}" data-testid="admin-saved-id"${checked}><span class="choice-copy"><strong>${escapeHTML(user.name || 'Saved ID')}</strong><small class="mono">${escapeHTML(playerId)}</small></span></label>`;
+  }).join('') || '<p>No saved IDs yet. Add them on the Saved IDs page, or enter a player ID below.</p>';
+  return `<fieldset class="form-section field full" data-testid="admin-ids"><legend>Administrator EOS IDs</legend><p>Optional. Tick saved IDs and/or type one extra 32-hex ID. Empty is allowed.</p>${saved}<label class="field">Additional administrator ID<input name="adminPlayerIdManual" data-testid="admin-manual-id" maxlength="32" pattern="${PATTERN.eosId}" value="${escapeHTML(leftover[0] || '')}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Optional extra ID that is not in Saved IDs.</small></label></fieldset>`;
+}
+function adminIdsFromForm(form) {
+  const ids = [];
+  const seen = new Set();
+  for (const value of [...form.getAll('adminPlayerId'), ...form.getAll('adminPlayerIdManual')]) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) continue;
+    const id = normalizePlayerIdClient(trimmed);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids.join(',');
+}
+function serviceTypeField() {
+  return `<label class="field full">Service exposure<select name="serviceType" data-testid="server-service-type"><option value="LoadBalancer" selected>LoadBalancer (requires a provider)</option><option value="NodePort">NodePort (local kind testing)</option><option value="ClusterIP">ClusterIP (cluster network only)</option></select></label>`;
+}
+function createSettingsFromForm(form) {
+  const values = Object.fromEntries(form);
+  const save = form.get('save');
+  return {
+    name: values.name,
+    worldName: values.worldName,
+    ownerId: values.ownerId,
+    imageTag: values.imageTag,
+    namespace: values.namespace,
+    maxPlayers: Number(values.maxPlayers),
+    memoryLimitMiB: Number(values.memoryLimitMiB),
+    cpuLimitMillis: Number(values.cpuLimitMillis),
+    gamePort: Number(values.gamePort),
+    storageGiB: Number(values.storageGiB),
+    serviceType: values.serviceType,
+    adminIds: adminIdsFromForm(form),
+    debugLevel: Number(values.debugLevel),
+    validateGameFiles: values.validateGameFiles === 'true',
+    autoStopOnUpdate: values.autoStopOnUpdate === 'true',
+    additionalArgs: values.additionalArgs,
+    serverPassword: values.serverPassword,
+    adminPassword: values.adminPassword,
+    ...(save && save.name ? {save} : {}),
+  };
+}
+function createdServerFromResponse(result) {
+  const id = String(result?.id ?? '').trim();
+  if (!id) throw new Error('The server was created, but the response did not include an ID.');
+  return {id, status: String(result.status || ''), label: worldLabel(result) || id};
+}
+function rememberCreatedServer(result) {
+  const created = createdServerFromResponse(result);
+  const record = {...result, id: created.id};
+  const index = state.servers.findIndex((server) => server.id === created.id);
+  if (index === -1) state.servers.push(record);
+  else state.servers[index] = {...state.servers[index], ...record};
+  return created;
+}
+function beginDeployWatch(created, startedAt = Date.now()) {
+  const id = createdServerFromResponse(created).id;
+  state.deployWatches[id] = {
+    serverId: id,
+    startedAt,
+    // Demo 201 is already online; latch so a later unknown bootstrap cannot un-ready this watch.
+    ready: created.status === 'online',
+  };
+}
+function deployProgress(server, now = Date.now()) {
+  const watch = server?.id ? state.deployWatches[server.id] : null;
+  if (!watch) return null;
+  const elapsedMs = Math.max(0, now - watch.startedAt);
+  const statusValue = server.status || 'unknown';
+  const label = serverLabel(server);
+  const progress = (phase, title, detail) => ({serverId: watch.serverId, phase, status: statusValue, title, detail, elapsedMs});
+  if (watch.ready || statusValue === 'online') {
+    watch.ready = true;
+    return progress('ready', `${label} is ready`, 'The game pod is ready and the engine reported healthy.');
+  }
+  if (['attention', 'error', 'stopped', 'stale', 'deleting'].includes(statusValue)) {
+    return progress('failed', 'Deploy needs attention', `Bootstrap reports ${statusValue}. Use lifecycle details below.`);
+  }
+  if (elapsedMs >= DEPLOY_WATCH_TIMEOUT_MS) {
+    return progress('timed_out', 'Deploy is taking longer than expected', 'Still not ready after 10 minutes. This is not a ready server.');
+  }
+  return progress('starting', `Deploying ${label}`, 'Helm accepted. Waiting for the game pod and engine. A successful install is not a ready server. Join address is not reported yet.');
+}
+function deployProgressPanel(progress) {
+  const steps = progress.phase === 'ready'
+    ? [['done', 'Accepted'], ['done', 'Starting'], ['done', 'Healthy']]
+    : progress.phase === 'failed'
+      ? [['done', 'Accepted'], ['failed', 'Starting'], ['pending', 'Healthy']]
+      : [['done', 'Accepted'], ['current', 'Starting'], ['pending', 'Healthy']];
+  const tone = {ready:'online', failed:'error', timed_out:'warning', starting:'starting'}[progress.phase] || 'starting';
+  return `<section class="panel deploy-progress" data-testid="deploy-progress" data-phase="${escapeHTML(progress.phase)}" role="status"><div class="panel-heading"><div><h2>${escapeHTML(progress.title)}</h2></div>${status(tone)}</div><ol class="deploy-steps">${steps.map(([stateName, label]) => `<li data-step="${stateName}">${escapeHTML(label)}</li>`).join('')}</ol><p>${escapeHTML(progress.detail)}</p></section>`;
+}
 function eventServerLabel(event) { const server = state.servers.find((item) => item.id === event.serverId); return server ? serverLabel(server) : event.serverName || event.serverId || 'Cluster'; }
 function scopedServers() { return state.servers.filter((server) => !state.serverId || server.id === state.serverId); }
 function notice(message) {
@@ -249,7 +368,7 @@ function clearProtectedState() {
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
   clearTimeout(rosterExpiryTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', eventRange:'24h', eventTotal:0, eventWarnings:0, eventCritical:0, logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', eventRange:'24h', eventTotal:0, eventWarnings:0, eventCritical:0, logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0, deployWatches:{}});
   Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:'', reboots:[], rebootHistory:[], rebootsAvailable:true, rebootsDemo:false});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
@@ -448,7 +567,11 @@ function dashboard() {
   const filtered = servers.filter((server) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? server.status === 'online' : server.status === 'attention' || server.status === 'stale' || server.updateAvailable));
   const stats = `<div class="stats">${stat('Registered servers', servers.length, 'server')}${stat('Online', online, 'pulse', 'green')}${stat('Needs attention', attention, 'warning', 'amber')}${can('updateCheck') ? stat('Updates available', servers.filter((server) => server.updateAvailable).length, 'refresh') : stat('Reporting metrics', servers.filter((server) => server.metricsAvailable).length, 'pulse')}</div>`;
   if (!state.servers.length) return stats + emptyState();
-  return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => `<tr><td><strong>${escapeHTML(serverLabel(server))}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${metricText(server, 'players')} / ${number(server.maxPlayers)}</td><td>${metricText(server, 'tickRate', ' TPS')}</td><td>${metricText(server, 'cpuPercent', '%')}</td><td class="mono">${duration(metricValue(server, 'uptimeSeconds'))}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section>${can('events') ? `<section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>` : ''}`;
+  return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => {
+    const progress = deployProgress(server);
+    const deploying = progress && progress.phase !== 'ready' && progress.phase !== 'failed';
+    return `<tr${deploying ? ' class="deploying"' : ''}><td><strong>${escapeHTML(serverLabel(server))}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${metricText(server, 'players')} / ${number(server.maxPlayers)}</td><td>${metricText(server, 'tickRate', ' TPS')}</td><td>${metricText(server, 'cpuPercent', '%')}</td><td class="mono">${duration(metricValue(server, 'uptimeSeconds'))}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`;
+  }).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section>${can('events') ? `<section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>` : ''}`;
 }
 function chart(key, label, secondaryKey = '', secondaryLabel = '') {
   const points = samples();
@@ -542,13 +665,15 @@ function maintenance() {
   if (!can('maintenance')) return dashboard();
   const server = selectedServer();
   if (!server) return deletionReceipts() + emptyState();
+  const progress = deployProgress(server);
+  const banner = progress ? deployProgressPanel(progress) : '';
   if (state.deletions[server.id]) {
     const message = server.status === 'deleting' ? 'Deletion is in progress. You can leave this page; C2 will keep working and update the receipt.' : server.status === 'stale' ? 'Deletion exceeded the 10-minute cleanup window. Retry the recorded operation below.' : 'Deletion is pending. Retry the recorded operation below. Other lifecycle actions are unavailable.';
-    return deletionReceipts() + `<section class="panel"><h2>${escapeHTML(serverLabel(server))}</h2><p>${message}</p></section>`;
+    return banner + deletionReceipts() + `<section class="panel"><h2>${escapeHTML(serverLabel(server))}</h2><p>${message}</p></section>`;
   }
   const activity = state.events.filter((event) => event.serverId === server.id);
   const changes = activity.filter((event) => ['system', 'update'].includes(event.category));
-  return `<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(serverLabel(server))}</p></div>${status(server.status)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Endpoint unavailable. Ask your cluster operator for the server address and game port.')}</dd></div><div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div><div><dt>Creator</dt><dd>${escapeHTML(server.name || 'Not recorded')}</dd></div><div><dt>Stable server ID</dt><dd class="mono">${escapeHTML(server.id)}</dd></div></dl><div class="action-grid"><div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div></div><p class="inline-note">Restart and update actions require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(server.status)}</dd></div><div><dt>Players connected</dt><dd>${metricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
+  return `${banner}<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(serverLabel(server))}</p></div>${status(server.status)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Endpoint unavailable. Ask your cluster operator for the server address and game port.')}</dd></div><div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div><div><dt>Creator</dt><dd>${escapeHTML(server.name || 'Not recorded')}</dd></div><div><dt>Stable server ID</dt><dd class="mono">${escapeHTML(server.id)}</dd></div></dl><div class="action-grid"><div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div></div><p class="inline-note">Restart and update actions require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(server.status)}</dd></div><div><dt>Players connected</dt><dd>${metricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
 }
 function deletionServer(record) { return state.servers.find((server) => server.id === record.serverId); }
 function deletionInProgress(record) { return !record.completed && deletionServer(record)?.status === 'deleting'; }
@@ -992,7 +1117,7 @@ function openModal(action, userId = '') {
     $('[data-testid="server-owner"]').pattern = PATTERN.eosId;
     $('[data-testid="server-owner"]').title = 'Exactly 32 hexadecimal characters, without spaces or separators';
     $('[data-testid="server-owner"]').parentElement.insertAdjacentHTML('beforebegin', `<label class="field full">Saved player ID<select id="saved-user" data-testid="saved-user"><option value="">Enter an ID manually</option>${state.users.map((user) => `<option value="${escapeHTML(user.id)}">${escapeHTML(user.name)} (${escapeHTML(user.playerId)})</option>`).join('')}</select><small>Select a saved ID to copy it into the editable owner ID field.</small></label>`);
-    $('#server-advanced .form-grid').insertAdjacentHTML('beforeend', `<label class="field">Game UDP port<input name="gamePort" type="number" min="1024" max="65535" value="7777" required></label><label class="field">World storage (GiB)<input name="storageGiB" type="number" min="1" max="2048" value="40" required></label><label class="field full">Service exposure<select name="serviceType"><option value="NodePort">NodePort (local kind testing)</option><option value="ClusterIP">ClusterIP (cluster network only)</option><option value="LoadBalancer">LoadBalancer (requires a provider)</option></select></label><label class="field">Server password<input name="serverPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Empty allows passwordless joins.</small></label><label class="field">Admin password<input name="adminPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Stored in a Kubernetes Secret.</small></label><label class="field full">Administrator EOS IDs<input name="adminIds" maxlength="2048" placeholder="Comma-separated EOS player IDs"></label><label class="field">Logging<select name="debugLevel"><option value="0">Normal</option><option value="1">SteamCMD debug</option><option value="2">Game debug</option><option value="3">SteamCMD and game debug</option></select></label><label class="field">Validate game files<select name="validateGameFiles"><option value="false">No</option><option value="true">Yes (slower startup)</option></select></label><label class="field full">Stop on game update<select name="autoStopOnUpdate"><option value="false">Disabled</option><option value="true">Enabled (game-build dependent)</option></select></label><label class="field full">Additional startup arguments<input name="additionalArgs" maxlength="2048" placeholder="Optional Unreal startup arguments"><small>The player-count override is appended automatically. API authentication is configured automatically.</small></label>`);
+    $('#server-advanced .form-grid').insertAdjacentHTML('beforeend', `<label class="field">Game UDP port<input name="gamePort" type="number" min="1024" max="65535" value="7777" required></label><label class="field">World storage (GiB)<input name="storageGiB" type="number" min="1" max="2048" value="40" required></label>${serviceTypeField()}<label class="field">Server password<input name="serverPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Empty allows passwordless joins.</small></label><label class="field">Admin password<input name="adminPassword" type="password" maxlength="2048" autocomplete="new-password"><small>Optional. Stored in a Kubernetes Secret.</small></label>${adminIdsFields(state.users, [])}<label class="field">Logging<select name="debugLevel"><option value="0">Normal</option><option value="1">SteamCMD debug</option><option value="2">Game debug</option><option value="3">SteamCMD and game debug</option></select></label><label class="field">Validate game files<select name="validateGameFiles"><option value="false">No</option><option value="true">Yes (slower startup)</option></select></label><label class="field full">Stop on game update<select name="autoStopOnUpdate"><option value="false">Disabled</option><option value="true">Enabled (game-build dependent)</option></select></label><label class="field full">Additional startup arguments<input name="additionalArgs" maxlength="2048" placeholder="Optional Unreal startup arguments"><small>The player-count override is appended automatically. API authentication is configured automatically.</small></label>`);
   }
   $('#modal').showModal();
   if (action === 'add-reboot' || action === 'edit-reboot') $('#modal-form input[name="enabled"]')?.setAttribute('id', 'enabled');
@@ -1115,10 +1240,15 @@ async function submitModal(event) {
       method = 'DELETE';
       message = 'Saved ID deleted. Existing servers are unchanged.';
       break;
+    case 'add-server':
+      body = createSettingsFromForm(new FormData($('#modal-form')));
+      path = '/api/servers';
+      message = 'Server deployment requested. C2 is waiting for the game to become ready.';
+      break;
     default:
-      body = action === 'add-server' ? {...values, maxPlayers:Number(values.maxPlayers), memoryLimitMiB:Number(values.memoryLimitMiB), cpuLimitMillis:Number(values.cpuLimitMillis), gamePort:Number(values.gamePort), storageGiB:Number(values.storageGiB), debugLevel:Number(values.debugLevel), validateGameFiles:values.validateGameFiles === 'true', autoStopOnUpdate:values.autoStopOnUpdate === 'true'} : action === 'update' ? {imageTag:values.imageTag} : {};
-      path = action === 'add-server' ? '/api/servers' : `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/${action}`;
-      message = action === 'add-server' ? 'Server deployment requested.' : action === 'restart' ? 'Server restart requested.' : 'Image update requested.';
+      body = action === 'update' ? {imageTag:values.imageTag} : {};
+      path = `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/${action}`;
+      message = action === 'restart' ? 'Server restart requested.' : 'Image update requested.';
   }
   state.modalBusy = true;
   $('#modal-form').setAttribute('aria-busy','true');
@@ -1128,6 +1258,17 @@ async function submitModal(event) {
   try {
     const result = await api(path,{method,body:action === 'add-server' ? createRequestBody(body) : body ? JSON.stringify(body) : undefined});
     if (epoch !== state.epoch) return;
+    if (action === 'add-server') {
+      const created = rememberCreatedServer(result);
+      beginDeployWatch(created);
+      state.serverId = created.id;
+      state.modalBusy = false;
+      closeModal();
+      notice(message);
+      if (parseLocationHash(location.hash).page === 'maintenance') await refresh();
+      else location.hash = 'maintenance';
+      return;
+    }
     state.modalBusy = false;
     closeModal();
     notice(action === 'delete' && !result.completed ? 'Deletion started. You can leave this page.' : message);

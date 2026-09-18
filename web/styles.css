@@ -97,6 +97,20 @@ main { padding: 24px 30px 30px; min-width: 0; width: 100%; }
 #content > .panel + .panel,.section-gap { margin-top: 16px; }
 .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }
 .panel-heading p { font-size: 14px; margin-top: 4px; }
+.deploy-progress { border-color: var(--color-primary); background: var(--color-info-surface); margin-bottom: 16px; }
+.deploy-progress[data-phase="ready"] { border-color: var(--success); }
+.deploy-progress[data-phase="failed"] { border-color: var(--color-destructive); background: var(--color-notice-error-bg); }
+.deploy-progress[data-phase="timed_out"] { border-color: var(--warning); }
+.deploy-progress .panel-heading { margin-bottom: 12px; }
+.deploy-progress p { color: var(--color-foreground); }
+.deploy-steps { display: flex; gap: 8px; list-style: none; margin: 0 0 12px; padding: 0; }
+.deploy-steps li { flex: 1; min-height: var(--control-min-size); display: flex; align-items: center; justify-content: center; padding: 8px 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); font-size: 13px; font-weight: 600; text-align: center; }
+.deploy-steps li[data-step="done"] { border-color: var(--color-primary); color: var(--link); }
+.deploy-steps li[data-step="current"] { border-color: var(--color-primary); background: var(--color-info-surface); color: var(--color-foreground); }
+.deploy-steps li[data-step="failed"] { border-color: var(--color-destructive); color: var(--color-notice-error-fg); }
+.deploy-steps li[data-step="pending"] { color: var(--color-muted-foreground); }
+tbody tr.deploying { box-shadow: inset 3px 0 0 var(--color-primary); background: var(--color-info-surface); }
+tbody tr.deploying:hover { background: var(--color-nav-current); }
 .provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
 .provider-card { display: flex; align-items: flex-start; gap: 16px; min-width: 0; min-height: var(--control-min-size); max-width: 420px; padding: 20px 24px; background: var(--color-card); border: 1px solid var(--color-divider); border-radius: 4px; color: var(--color-foreground); cursor: pointer; }
 .provider-card:hover, .provider-card:focus-visible { color: var(--color-foreground); }
