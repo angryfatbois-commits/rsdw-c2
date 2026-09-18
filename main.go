@@ -326,6 +326,10 @@ func (s State) clone() State {
 		next.Integrations[id] = integration
 	}
 	for id, producer := range next.Producers {
+		if producer.MemoryPressure != nil {
+			pressure := *producer.MemoryPressure
+			producer.MemoryPressure = &pressure
+		}
 		if producer.Restart != nil {
 			restart := *producer.Restart
 			producer.Restart = &restart
@@ -854,15 +858,16 @@ type App struct {
 	deliveryMu       sync.Mutex
 	discordTransport http.RoundTripper
 	// ponytail: one C2 writer serializes lifecycle changes; use durable coordination before multiple replicas.
-	lifecycleMu   sync.Mutex
-	store         *Store
-	orchestrator  Orchestrator
-	demo          bool
-	auth          *Auth
-	imageRepo     string
-	telemetryOnce sync.Once
-	telemetry     *telemetryStore
-	clock         func() time.Time
+	lifecycleMu    sync.Mutex
+	store          *Store
+	orchestrator   Orchestrator
+	demo           bool
+	memoryPressure MemoryPressurePolicy
+	auth           *Auth
+	imageRepo      string
+	telemetryOnce  sync.Once
+	telemetry      *telemetryStore
+	clock          func() time.Time
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1520,6 +1525,10 @@ func max(a, b int) int {
 var startedAt = time.Now()
 
 func main() {
+	memoryPressure, err := memoryPressurePolicyFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	demo := strings.EqualFold(os.Getenv("RSDW_DEMO_DATA"), "true")
 	auth, err := authFromEnv(context.Background(), demo)
 	if err != nil {
@@ -1534,7 +1543,7 @@ func main() {
 	if demo {
 		orchestrator = demoOrchestrator{}
 	}
-	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth}
+	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure}
 	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
 	go app.runRebootScheduler(context.Background())

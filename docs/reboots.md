@@ -32,6 +32,24 @@ History distinguishes `awaiting_reconciliation`, `uncertain`, `completed`, `fail
 
 Scheduled reboots proceed even when players are connected. The form always shows the disconnect warning, and enabling a schedule requires an explicit acknowledgment. An unavailable player count is shown as unavailable; it is never interpreted as zero.
 
+## Memory pressure restarts
+
+Memory pressure restarts are disabled by default. The policy applies to every server and is configured at C2 startup, without a policy API or UI.
+
+| Environment variable | Helm value | Default |
+| --- | --- | --- |
+| `RSDW_MEMORY_PRESSURE_ENABLED` | `memoryPressure.enabled` | `false` |
+| `RSDW_MEMORY_PRESSURE_THRESHOLD_PERCENT` | `memoryPressure.thresholdPercent` | `85` |
+| `RSDW_MEMORY_PRESSURE_DURATION` | `memoryPressure.duration` | `10m` |
+
+The enabled value must be a boolean, the threshold must be between 0 and 100 inclusive, and the duration must be a positive Go duration such as `10m` or `1m30s`. Invalid values prevent startup, even when the policy is disabled.
+
+The existing collector checks fresh container memory usage against its observed memory limit. Usage at or above the threshold must persist for the configured duration on the same runtime. The streak uses collection completion timestamps. Missing or invalid readings, stale observations, gaps longer than 45 seconds, runtime changes, stopped or deleting servers, and pending restarts reset the streak. C2 restart also clears the streak, so downtime never counts toward a restart.
+
+A pressure claim persists before dispatch and uses the existing restart reconciliation. It emits `memory_pressure_restart_requested` with warning severity, followed by the shared `restart_completed` or `restart_failed` event. Manual and scheduled requests retain `restart_requested`. Enable the pressure rule separately in a Discord integration to receive those requests. Restarts can disconnect active players.
+
+Demo mode checks synthetic observations from the seeded server's memory fields and simulates completion. It never calls Kubernetes or Discord for this flow.
+
 ## API
 
 All routes require an admin principal. Anonymous requests receive `401`, viewers receive `403` before body parsing or schedule calculation, and OIDC writes—including preview—use the existing Origin and CSRF checks.

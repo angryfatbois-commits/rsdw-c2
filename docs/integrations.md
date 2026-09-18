@@ -14,7 +14,7 @@ In Integrations, open **Discord**. The card shows Not connected, Connected, or D
 
 Use **Configure** to change server associations, rules, enabled state, or the Secret reference. Updating the referenced Secret also rotates the token because each attempt reads it again. The bot verifies that the channel belongs to the configured guild before sending. **Send test** queues a test even when automatic alerts are disabled. Recent messages lists each delivery with the Dragonwilds server it belongs to.
 
-Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. Production telemetry is not simulated in demo mode.
+Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. The memory pressure policy uses synthetic observations from seeded memory fields in demo mode.
 
 ## Discord messages
 
@@ -44,6 +44,7 @@ Each event has an immutable `id`, `kind`, `source`, `accuracy`, timestamp, serve
 | Kind | Meaning |
 | --- | --- |
 | `restart_requested` | C2 durably recorded a restart operation before issuing the Kubernetes command. This does not assert that Kubernetes accepted it. |
+| `memory_pressure_restart_requested` | Sustained memory pressure triggered a durable restart claim. This warning uses the shared completion and failure events. See [memory pressure configuration](reboots.md#memory-pressure-restarts). |
 | `restart_completed` | A fresh, owned runtime has the operation's Pod-template annotation, a different runtime identity, a start time at or after the request at Kubernetes' second precision, and both Pod and engine readiness. |
 | `restart_failed` | After five minutes, a fresh definitive observation still cannot confirm a ready marked replacement. |
 | `player_joined` | An approximate increase between fresh player counts on the same healthy runtime. C2 event details include the count delta. The Discord embed describes the observation without raw details. No identities or exact joins are inferred. |

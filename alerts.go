@@ -18,17 +18,18 @@ type RestartOperation struct {
 }
 
 type AlertProducer struct {
-	Runtime         string            `json:"runtime"`
-	LastAt          time.Time         `json:"lastAt"`
-	PlayerAt        time.Time         `json:"playerAt"`
-	Players         int               `json:"players"`
-	PlayerLimit     int               `json:"playerLimit"`
-	HealthyBaseline bool              `json:"healthyBaseline"`
-	Outage          bool              `json:"outage"`
-	Streak          string            `json:"streak"`
-	StreakCount     int               `json:"streakCount"`
-	StreakSince     time.Time         `json:"streakSince"`
-	Restart         *RestartOperation `json:"restart,omitempty"`
+	Runtime         string               `json:"runtime"`
+	LastAt          time.Time            `json:"lastAt"`
+	PlayerAt        time.Time            `json:"playerAt"`
+	Players         int                  `json:"players"`
+	PlayerLimit     int                  `json:"playerLimit"`
+	HealthyBaseline bool                 `json:"healthyBaseline"`
+	Outage          bool                 `json:"outage"`
+	Streak          string               `json:"streak"`
+	StreakCount     int                  `json:"streakCount"`
+	StreakSince     time.Time            `json:"streakSince"`
+	Restart         *RestartOperation    `json:"restart,omitempty"`
+	MemoryPressure  *MemoryPressureState `json:"memoryPressure,omitempty"`
 }
 
 func (p *AlertProducer) resetStreak() {
@@ -53,6 +54,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	p.LastAt = o.at
 	defer func() { state.Producers[server.ID] = p }()
 	if p.Restart != nil {
+		p.MemoryPressure = nil
 		op := p.Restart
 		p.resetStreak()
 		p.PlayerAt = time.Time{}

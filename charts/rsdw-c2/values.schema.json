@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "replicaCount", "service", "ingress", "cluster", "auth", "state", "rbac", "resources", "podSecurityContext", "containerSecurityContext", "nodeSelector", "tolerations", "affinity"],
+  "required": ["image", "replicaCount", "memoryPressure", "service", "ingress", "cluster", "auth", "state", "rbac", "resources", "podSecurityContext", "containerSecurityContext", "nodeSelector", "tolerations", "affinity"],
   "properties": {
     "image": {
       "type": "object",
@@ -15,6 +15,20 @@
       }
     },
     "replicaCount": {"type": "integer", "minimum": 1, "maximum": 1},
+    "memoryPressure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "thresholdPercent", "duration"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "thresholdPercent": {"type": "number", "minimum": 0, "maximum": 100},
+        "duration": {
+          "type": "string",
+          "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$",
+          "not": {"pattern": "^\\+?([0.]+(ns|us|µs|μs|ms|s|m|h))+$"}
+        }
+      }
+    },
     "service": {
       "type": "object",
       "additionalProperties": false,

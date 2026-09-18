@@ -368,7 +368,7 @@ func TestOIDCRoutePolicyAndZeroEffects(t *testing.T) {
 			t.Fatalf("admin %v = %d %s", route, res.Code, res.Body.String())
 		}
 	}
-	if orchestrator.calls != 5 {
+	if orchestrator.calls != 4 {
 		t.Fatalf("admin operations = %d", orchestrator.calls)
 	}
 	for _, bearer := range []string{"Bearer fixture-secret", "Bearer old-admin"} {

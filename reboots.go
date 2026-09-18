@@ -684,7 +684,7 @@ type rebootDispatch struct {
 	op     RestartOperation
 }
 
-func reserveRestart(state *State, serverID string, now time.Time) (rebootDispatch, error) {
+func reserveRestart(state *State, serverID string, now time.Time, kind EventKind) (rebootDispatch, error) {
 	server, ok := state.Servers[serverID]
 	if !ok {
 		return rebootDispatch{}, errRebootNotFound
@@ -695,12 +695,13 @@ func reserveRestart(state *State, serverID string, now time.Time) (rebootDispatc
 	}
 	op := RestartOperation{ID: randomID(), Runtime: p.Runtime, RequestedAt: now.UTC()}
 	p.Restart = &op
+	p.MemoryPressure = nil
 	p.resetStreak()
 	p.PlayerAt = time.Time{}
 	state.Producers[serverID] = p
 	server.Status, server.LastRestart, server.RestartOperation = StatusStarting, op.RequestedAt.Format(time.RFC3339Nano), op.ID
 	state.Servers[serverID] = server
-	emitAlert(state, server, RestartRequested, op.ID, "Restart recorded; completion requires a ready marked replacement runtime", op.RequestedAt)
+	emitAlert(state, server, kind, op.ID, "Restart recorded; completion requires a ready marked replacement runtime", op.RequestedAt)
 	return rebootDispatch{server: server, op: op}, nil
 }
 
@@ -708,16 +709,13 @@ func (a *App) claimManualRestart(serverID string, now time.Time) (rebootDispatch
 	var dispatch rebootDispatch
 	err := a.store.Update(func(state *State) error {
 		var err error
-		dispatch, err = reserveRestart(state, serverID, now)
+		dispatch, err = reserveRestart(state, serverID, now, RestartRequested)
 		return err
 	})
 	return dispatch, err
 }
 
 func (a *App) dispatchRestartOperation(ctx context.Context, dispatch rebootDispatch) (commandErr, persistenceErr error) {
-	commandCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	commandErr = a.orchestrator.Restart(commandCtx, dispatch.server)
 	if a.demo {
 		persistenceErr = a.store.Update(func(state *State) error {
 			p := state.Producers[dispatch.server.ID]
@@ -735,6 +733,9 @@ func (a *App) dispatchRestartOperation(ctx context.Context, dispatch rebootDispa
 		})
 		return commandErr, persistenceErr
 	}
+	commandCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	commandErr = a.orchestrator.Restart(commandCtx, dispatch.server)
 	if commandErr != nil {
 		persistenceErr = a.store.Update(func(state *State) error {
 			p := state.Producers[dispatch.server.ID]
@@ -852,7 +853,7 @@ func (a *App) claimScheduledReboots(serverID string, ids []string) (rebootDispat
 			return nil
 		}
 		var err error
-		dispatch, err = reserveRestart(state, serverID, claimNow)
+		dispatch, err = reserveRestart(state, serverID, claimNow, RestartRequested)
 		if err != nil {
 			return err
 		}

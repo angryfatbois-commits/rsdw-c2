@@ -43,6 +43,7 @@ type discordMessageSpec struct {
 }
 
 var discordMessageSpecs = []discordMessageSpec{
+	{MemoryPressureRestartRequested, "Memory pressure restart requested", "The server kept hogging memory. C2 requested a restart before it ate the whole damn limit.", 0xF59E0B, true},
 	{RestartRequested, "Restart requested", "The server was told to get its act together. It chose a dramatic reboot instead.", 0xF59E0B, true},
 	{RestartCompleted, "Restart completed", "The corpse has staggered back online. It did the bare minimum and expects a fucking parade.", 0x22C55E, true},
 	{RestartFailed, "Restart not confirmed", "The restart fucked off into the void and never bothered to report back. Even the server can't explain what the hell it's doing.", 0xEF4444, true},
