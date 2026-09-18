@@ -33,6 +33,7 @@ const icons = {
 const icon = (name) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.server}</svg>`;
 const pages = {
   dashboard: ['Dashboard', 'Monitor every server from one place.'],
+  servers: ['Server overview', 'Status, players, and server controls.'],
   telemetry: ['Telemetry', 'Live performance and resource usage.'],
   events: ['Events', 'Search every server event in one place.'],
   maintenance: ['Maintenance', 'Make safe changes to your servers.'],
@@ -47,6 +48,8 @@ const discordStatusCopy = {
 };
 const state = {
   deletions: {},
+  routeError: '',
+  routeScope: false,
   deployWatches: {},
   page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
@@ -62,16 +65,46 @@ let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
 let rosterExpiryTimer;
-const can = (capability) => state.capabilities[({users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
+const can = (capability) => state.capabilities[({servers:'telemetry', users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
 function parseLocationHash(hash) {
   const raw = String(hash ?? '').replace(/^#/, '').split('?')[0];
   const slash = raw.indexOf('/');
   const pageKey = slash === -1 ? raw : raw.slice(0, slash);
   const view = slash === -1 ? '' : raw.slice(slash + 1);
+  if (pageKey === 'servers') {
+    try {
+      const serverId = decodeURIComponent(view);
+      return {page:'servers', integrationView:'hub', serverId, scoped:true, malformed: !serverId || view.includes('/')};
+    } catch { return {page:'servers', integrationView:'hub', serverId:'', scoped:true, malformed:true}; }
+  }
+  if (['telemetry','maintenance','events','reboots'].includes(pageKey)) {
+    const query = String(hash).split('?').slice(1).join('?');
+    if (query) {
+      const params = new URLSearchParams(query);
+      return {page:pageKey, integrationView:'hub', serverId:params.get('serverId') || '', scoped:params.has('serverId')};
+    }
+  }
   if (pageKey === 'integrations') {
     return {page:'integrations', integrationView: view === 'discord' ? 'discord' : 'hub'};
   }
   return {page: pages[pageKey] ? pageKey : 'dashboard', integrationView:'hub'};
+}
+function scopedHash(page, id = state.serverId) {
+  return `#${page}${id ? `?serverId=${encodeURIComponent(id)}` : ''}`;
+}
+function applyRouteScope() {
+  const route = parseLocationHash(location.hash);
+  state.routeScope = route.scoped === true;
+  if (route.serverId !== undefined) state.serverId = route.serverId;
+  if (route.page === 'servers' && can('telemetry')) state.page = 'servers';
+  if (route.page === 'servers' && state.loaded && (route.malformed || !state.servers.some((server) => server.id === state.serverId))) {
+    state.routeError = `Server overview unavailable: ${route.malformed || !state.serverId ? 'malformed server ID' : `unknown server ID "${state.serverId}"`}.`;
+    state.page = 'dashboard';
+    state.serverId = '';
+    state.routeScope = false;
+    clearTelemetry();
+    history.replaceState(null, '', '#dashboard');
+  }
 }
 function pageHeading() {
   if (state.page === 'integrations' && state.integrationView === 'discord') {
@@ -200,7 +233,7 @@ function stat(label, value, name, tone = '') {
   if ((tone === 'amber' || tone === 'red') && !(Number(value) > 0)) tone = '';
   return `<section class="panel stat">${icon(name)}<div><div class="stat-value ${tone} ${String(value).length > 10 ? 'stat-text' : ''}">${escapeHTML(value)}</div><div class="stat-label">${escapeHTML(label)}</div></div></section>`;
 }
-function selectedServer() { return state.servers.find((server) => server.id === state.serverId) || state.servers[0]; }
+function selectedServer() { return state.servers.find((server) => server.id === state.serverId) || (state.routeScope || state.page === 'servers' ? undefined : state.servers[0]); }
 function worldLabel(server) { return [server.worldName, server.name, server.id].map((value) => String(value || '').trim()).find(Boolean) || ''; }
 function serverLabel(server) {
   const label = worldLabel(server);
@@ -362,13 +395,14 @@ async function api(path, options = {}) {
   return data;
 }
 function clearProtectedState() {
+  state.routeError = '';
   state.deletions = {};
   state.epoch++;
   state.request?.abort();
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
   clearTimeout(rosterExpiryTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', eventRange:'24h', eventTotal:0, eventWarnings:0, eventCritical:0, logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0, deployWatches:{}});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', eventRange:'24h', eventTotal:0, eventWarnings:0, eventCritical:0, logQuery:'', serverId:'', routeScope:false, selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0, deployWatches:{}});
   Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:'', reboots:[], rebootHistory:[], rebootsAvailable:true, rebootsDemo:false});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
@@ -616,6 +650,33 @@ function telemetry() {
   const text = (key, suffix = '') => metricText(server, key, suffix);
   return `<div class="toolbar"><strong>${escapeHTML(serverLabel(server))}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', text('tickRate', ' TPS'), 'pulse')}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(server.status)}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div>${connectedPlayers()}</div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${tickDurations(server)}${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section>${can('logs') ? `<section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(serverLabel(server))}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>` : ''}`;
 }
+function serverOverview() {
+  const selected = selectedServer();
+  if (!selected) return '<section class="panel empty"><p>Loading server inventory…</p></section>';
+  const data = state.telemetry?.server?.id === selected.id ? state.telemetry : null;
+  const server = {...selected, ...(data?.server || {}), metrics:data?.metrics || selected.metrics};
+  const next = state.rebootsAvailable ? state.reboots.filter((item) => item.serverId === selected.id && item.enabled && Number.isFinite(Date.parse(item.nextRun))).sort((a,b) => Date.parse(a.nextRun) - Date.parse(b.nextRun))[0] : null;
+  const actions = [
+    can('restart') ? '<div class="action-card"><button data-action="restart" data-testid="restart-server">Restart server</button></div>' : '',
+    can('edit-settings') ? '<div class="action-card"><button data-action="edit-settings" data-testid="edit-settings">Edit settings</button></div>' : '',
+    can('update') ? '<div class="action-card"><button data-action="update" data-testid="update-image">Update image</button></div>' : '',
+    can('updateCheck') ? '<div class="action-card"><button data-action="check-update" data-testid="check-update">Check update</button></div>' : '',
+    can('delete') ? '<div class="action-card"><button class="danger" data-action="delete" data-testid="delete-server">Delete server</button></div>' : '',
+  ].filter(Boolean).join('');
+  const engine = server.metrics?.engineReady;
+  const evidence = engine ? `<p>Engine readiness: ${escapeHTML(metricValue(server, 'engineReady') === 1 ? 'Ready' : metricValue(server, 'engineReady') === 0 ? 'Not ready' : metricText(server, 'engineReady'))}${engine.reason ? ` · ${escapeHTML(engine.reason)}` : ''}</p>` : '';
+  const links = ['telemetry','maintenance','events','reboots']
+    .filter((page) => can(page))
+    .map((page) => `<a href="${escapeHTML(scopedHash(page, selected.id))}">${pages[page][0]}</a>`)
+    .join('');
+  const details = can('maintenance') || can('reboots')
+    ? `<section class="panel"><dl class="detail-list">${can('reboots') ? `<div><dt>Next reboot</dt><dd data-testid="overview-next-reboot">${next ? escapeHTML(zonedDate(next.nextRun, state.displayTimezone || 'UTC')) : 'Unavailable'}</dd></div>` : ''}${can('maintenance') ? `<div><dt>Join endpoint</dt><dd class="mono">${escapeHTML(selected.endpoint || 'Unavailable')}${selected.endpoint ? ' <button data-action="copy-endpoint" data-testid="copy-endpoint">Copy endpoint</button>' : ''}</dd></div>` : ''}</dl></section>`
+    : '';
+  const actionPanel = actions && !state.deletions[selected.id] && selected.status !== 'deleting'
+    ? `<section class="panel"><div class="panel-heading"><h2>Server actions</h2></div><div class="action-grid">${actions}</div><p class="inline-note">Restart and update actions require confirmation and disconnect active players.</p></section>`
+    : '';
+  return `<section class="panel" data-testid="server-overview"><div class="panel-heading"><h2>${escapeHTML(serverLabel(server))}</h2>${status(server.status)}</div>${evidence}<div class="toolbar">${links}</div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', metricText(server, 'tickRate', ' TPS'), 'pulse')}${stat('Memory working set', metricValue(server, 'memoryUsedBytes') == null ? metricText(server, 'memoryUsedBytes') : bytes(metricValue(server, 'memoryUsedBytes')), 'cpu')}${stat('Memory limit', metricValue(server, 'memoryLimitBytes') == null ? metricText(server, 'memoryLimitBytes') : bytes(metricValue(server, 'memoryLimitBytes')), 'cpu')}</div></section><div class="stack section-gap">${connectedPlayers()}${details}${actionPanel}</div>`;
+}
 function connectedPlayers() {
   const data = state.telemetry;
   const reading = data?.metrics?.players;
@@ -819,8 +880,8 @@ function rebootsPage() {
   const selected = state.displayTimezone || browserTimezone();
   const availability = state.rebootsAvailable ? '' : '<p class="notice info" role="status">Scheduled execution is disabled for this deployment. Existing schedules remain visible so you can inspect, disable, or delete them.</p>';
   const demo = state.rebootsDemo ? '<p class="notice info">Demo mode simulates scheduled restarts. No Kubernetes operation is sent.</p>' : '';
-  const schedules = state.reboots || [];
-  const history = state.rebootHistory || [];
+  const schedules = (state.reboots || []).filter((item) => !state.routeScope || item.serverId === state.serverId);
+  const history = (state.rebootHistory || []).filter((item) => !state.routeScope || item.serverId === state.serverId);
   return `${availability}${demo}<section class="panel"><div class="panel-heading"><div><h2>Scheduled reboots</h2><p>Each schedule targets one server. A claimed restart can no longer be canceled.</p></div><div class="page-controls"><label class="field timezone-control">Display timezone${timezoneSelect('display-timezone', selected, 'display-timezone')}</label>${can('reboots') && state.rebootsAvailable ? `<button class="primary" data-action="add-reboot" data-testid="add-reboot">${icon('plus')}Add schedule</button>` : ''}</div></div><p class="inline-note">Connected players may be disconnected. An unknown player count is never treated as zero. Preview and execution use the schedule's execution timezone; this preference only formats the console.</p>${schedules.length ? `<div class="table-wrap"><table><thead><tr><th>Server</th><th>Timing</th><th>Execution zone</th><th>State</th><th>Next run</th><th>Last result</th><th>Actions</th></tr></thead><tbody>${schedules.map((schedule) => `<tr><td><strong>${escapeHTML(schedule.serverName || schedule.serverId)}</strong><small class="mono">${escapeHTML(schedule.serverId)}</small></td><td>${rebootTimingLabel(schedule)}</td><td class="mono">${escapeHTML(schedule.executionTimezone)}</td><td>${schedule.enabled ? '<span class="result result-success">Enabled</span>' : '<span class="result result-unknown">Disabled</span>'}</td><td class="mono">${schedule.nextRun ? escapeHTML(zonedDate(schedule.nextRun, selected)) : '—'}</td><td>${rebootResult(schedule.lastResult)}${schedule.lastReason ? `<small>${escapeHTML(schedule.lastReason)}</small>` : ''}</td><td class="actions"><button data-action="edit-reboot" data-id="${escapeHTML(schedule.id)}" data-testid="edit-reboot">Edit</button><button class="danger" data-action="delete-reboot" data-id="${escapeHTML(schedule.id)}" data-testid="delete-reboot">Delete</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><div class="empty-icon">'+icon('clock')+'</div><h3>No reboot schedules</h3><p>Create a per-server schedule. Saving never triggers an immediate restart.</p></div>'}</section><section class="panel section-gap"><div class="panel-heading"><div><h2>Execution history</h2><p>History is retained for audit and distinguishes requested work from observed completion.</p></div></div>${history.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Server</th><th>Occurrence</th><th>Result</th><th>Operation</th><th>Details</th></tr></thead><tbody>${history.map((execution) => `<tr><td class="mono">${escapeHTML(zonedDate(execution.recordedAt, selected))}</td><td>${escapeHTML(execution.serverName || execution.serverId)}</td><td class="mono">${escapeHTML(zonedDate(execution.occurrenceAt, selected))}<small>${escapeHTML(execution.occurrenceId || execution.id || '')}</small></td><td>${rebootResult(execution.result)}</td><td class="mono">${escapeHTML(execution.operationId || '—')}</td><td>${escapeHTML(execution.reason || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No scheduled reboot executions recorded yet.</p>'}</section>`;
 }
 function rebootForm(item) {
@@ -894,7 +955,7 @@ async function previewReboot() {
   }
 }
 function navHTML() {
-  return Object.entries(pages).filter(([page]) => can(page)).map(([page,[label]])=>`<a href="#${page}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
+  return Object.entries(pages).filter(([page]) => page !== 'servers' && can(page)).map(([page,[label]])=>`<a href="${escapeHTML(['telemetry','maintenance','events','reboots'].includes(page) ? scopedHash(page) : `#${page}`)}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
 }
 function render() {
   if (state.authRequired) { lockedState(); return; }
@@ -912,8 +973,8 @@ function render() {
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(serverLabel(server))}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
   $('#server-filter').disabled = !state.servers.length;
-  $('#server-filter').hidden = ['users','integrations','reboots'].includes(state.page);
-  $('#content').innerHTML = ({dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage,reboots:rebootsPage})[state.page]();
+  $('#server-filter').hidden = ['servers','users','integrations','reboots'].includes(state.page);
+  $('#content').innerHTML = `${state.routeError ? `<p class="notice error" role="alert" data-testid="route-error">${escapeHTML(state.routeError)}</p>` : ''}${({servers:serverOverview,dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage,reboots:rebootsPage})[state.page]()}`;
   for (const key of openCharts) {
     const disclosure = document.querySelector(`details[data-chart="${CSS.escape(key)}"]`);
     if (disclosure) disclosure.open = true;
@@ -930,7 +991,7 @@ function render() {
   const rosterExpiresIn = state.rosterObservation === key && Number.isFinite(state.rosterDeadline)
     ? state.rosterDeadline - monotonicNow()
     : Date.parse(state.telemetry?.metrics?.players?.observedAt) + 45001 - Date.now();
-  if (state.page === 'telemetry' && state.telemetry?.metrics?.players?.status === 'available' && rosterExpiresIn > 0) {
+  if (['telemetry','servers'].includes(state.page) && state.telemetry?.metrics?.players?.status === 'available' && rosterExpiresIn > 0) {
     rosterExpiryTimer = setTimeout(render, rosterExpiresIn);
   }
   if (testId) {
@@ -978,6 +1039,7 @@ async function refresh() {
     if (!current()) return;
     state.request = null;
     if (!applyAuth(auth)) return;
+    applyRouteScope();
     epoch = state.epoch;
     page = state.page;
     eventRange = state.eventRange;
@@ -990,6 +1052,8 @@ async function refresh() {
     state.servers = bootstrap.servers;
     state.deletions = bootstrap.deletions || {};
     state.loaded = true;
+    applyRouteScope();
+    page = state.page;
     if (state.serverId && !state.servers.some((server) => server.id === state.serverId)) state.serverId = '';
     if (selectedId !== selectedServer()?.id) { clearTelemetry(); state.logs = ''; render(); }
     serverId = state.serverId;
@@ -1003,8 +1067,8 @@ async function refresh() {
     const requests = [eventsPromise];
     if (can('users')) requests.push(api('/api/users',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.users = result.users; }));
     if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
-    if (can('reboots')) requests.push(api('/api/reboots',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{reboots:result.schedules || [], rebootHistory:result.history || [], rebootsAvailable:result.available !== false, rebootsDemo:result.demo === true}); }));
-    if (state.page === 'telemetry' && server) {
+    if (can('reboots')) requests.push(api('/api/reboots',{signal:controller.signal}).then((result) => { if (current()) Object.assign(state,{reboots:result.schedules || [], rebootHistory:result.history || [], rebootsAvailable:result.available !== false, rebootsDemo:result.demo === true}); }).catch((error) => { if (current()) state.rebootsAvailable = false; throw error; }));
+    if (['telemetry','servers'].includes(state.page) && server) {
       const telemetryStartedAt = monotonicNow();
       requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(range)}`,{signal:controller.signal}).then((result) => {
         if (!current()) return;
@@ -1013,7 +1077,7 @@ async function refresh() {
         telemetryReceived = true;
         render();
       }));
-      if (can('logs')) requests.push(loadLogs(controller.signal));
+      if (state.page === 'telemetry' && can('logs')) requests.push(loadLogs(controller.signal));
     }
     const results = await Promise.allSettled(requests);
     if (!current()) return;
@@ -1349,8 +1413,12 @@ async function handleAction(event) {
       case 'close-modal': closeModal(); break;
       case 'retry': await refresh(); break;
       case 'fleet-filter': state.fleetFilter = button.dataset.value; render(); break;
-      case 'view-server': state.serverId = button.dataset.id; location.hash = 'telemetry'; break;
-      case 'view-events': location.hash = 'events'; break;
+      case 'view-server': location.hash = `servers/${encodeURIComponent(button.dataset.id)}`; break;
+      case 'view-events': location.hash = scopedHash('events'); break;
+      case 'copy-endpoint':
+        if (!can('maintenance') || !selectedServer()?.endpoint) return;
+        await navigator.clipboard.writeText(selectedServer().endpoint);
+        notice('Endpoint copied.'); break;
       case 'event-category': state.category = button.dataset.value; state.selectedEventId = ''; await refresh(); break;
       case 'select-event': state.selectedEventId = button.dataset.id; render(); break;
       case 'copy-event': {
@@ -1387,6 +1455,8 @@ function navigate() {
   const parsed = parseLocationHash(location.hash);
   state.page = pages[parsed.page] && (!state.identity || can(parsed.page)) ? parsed.page : 'dashboard';
   state.integrationView = state.page === 'integrations' ? parsed.integrationView : 'hub';
+  state.routeError = '';
+  applyRouteScope();
   const [title, description] = pageHeading();
   $('#navigation').innerHTML = navHTML();
   $('#page-title').textContent = title;
@@ -1412,7 +1482,14 @@ function handleChange(event) {
   if (event.target.id === 'event-range') { state.eventRange = event.target.value; state.selectedEventId = ''; render(); refresh(); }
   if (event.target.id === 'reboot-mode') { syncRebootModeFields(); updateDailyTimeControls(); }
   if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
-  if (event.target.id === 'server-filter') { state.serverId = event.target.value; clearTelemetry(); state.logs = ''; state.selectedEventId = ''; render(); refresh(); }
+  if (event.target.id === 'server-filter') {
+    state.serverId = event.target.value; clearTelemetry(); state.logs = ''; state.selectedEventId = '';
+    if (['telemetry','maintenance','events','reboots'].includes(state.page)) {
+      state.routeScope = Boolean(state.serverId);
+      history.replaceState(null, '', scopedHash(state.page));
+    }
+    render(); refresh();
+  }
 }
 $('#refresh').innerHTML = icon('refresh');
 $('#refresh').addEventListener('click',refresh);
@@ -1445,7 +1522,7 @@ document.addEventListener('change',handleChange);
 window.addEventListener('hashchange',navigate);
 document.addEventListener('visibilitychange',() => {
   if (document.hidden) return;
-  if (state.page === 'telemetry' && state.loaded) render();
+  if (['telemetry','servers'].includes(state.page) && state.loaded) render();
   if (!state.paused && !$('#modal').open) refresh();
 });
 setInterval(() => {
