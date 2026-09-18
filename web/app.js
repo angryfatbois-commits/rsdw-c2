@@ -97,7 +97,10 @@ function applyRouteScope() {
   state.routeScope = route.scoped === true;
   if (route.serverId !== undefined) state.serverId = route.serverId;
   if (route.page === 'servers' && can('telemetry')) state.page = 'servers';
-  if (route.page === 'servers' && state.loaded && (route.malformed || !state.servers.some((server) => server.id === state.serverId))) {
+}
+function validateOverviewRoute() {
+  const route = parseLocationHash(location.hash);
+  if (route.page === 'servers' && (route.malformed || !state.servers.some((server) => server.id === state.serverId))) {
     state.routeError = `Server overview unavailable: ${route.malformed || !state.serverId ? 'malformed server ID' : `unknown server ID "${state.serverId}"`}.`;
     state.page = 'dashboard';
     state.serverId = '';
@@ -1053,8 +1056,9 @@ async function refresh() {
     state.deletions = bootstrap.deletions || {};
     state.loaded = true;
     applyRouteScope();
+    validateOverviewRoute();
     page = state.page;
-    if (state.serverId && !state.servers.some((server) => server.id === state.serverId)) state.serverId = '';
+    if (!state.routeScope && state.serverId && !state.servers.some((server) => server.id === state.serverId)) state.serverId = '';
     if (selectedId !== selectedServer()?.id) { clearTelemetry(); state.logs = ''; render(); }
     serverId = state.serverId;
     selectedId = selectedServer()?.id;

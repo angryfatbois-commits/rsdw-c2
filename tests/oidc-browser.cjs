@@ -60,13 +60,26 @@ async function run() {
   const newer = await context.newPage();
   const independent = await otherContext.newPage();
   const auth = (page) => page.evaluate(async () => (await fetch('/api/auth')).json());
+  const deniedOverview = async (page, id) => {
+    await page.goto(`${base}/#servers/${encodeURIComponent(id)}`);
+    await page.getByRole('heading',{name:'Sign in required',exact:true}).waitFor();
+    assert.equal(await page.getByTestId('server-overview').count(),0);
+    for (const endpoint of ['/api/bootstrap', `/api/servers/${encodeURIComponent(id)}/telemetry`, '/api/reboots']) {
+      assert.equal(await page.evaluate(async (url) => (await fetch(url)).status,endpoint),401);
+    }
+  };
   const choose = async (page, role) => {
     await page.getByRole('link',{name:role,exact:true}).click();
     await page.waitForURL(base+'/');
     assert.equal((await auth(page)).role,role.toLowerCase());
   };
+  await deniedOverview(independent,'unauthenticated');
   await independent.goto(base+'/api/auth/login');
   await choose(independent,'Admin');
+  const inventory = await independent.evaluate(async () => (await fetch('/api/bootstrap')).json());
+  const serverId = inventory.servers[0].id;
+  await independent.goto(`${base}/#servers/${encodeURIComponent(serverId)}`);
+  await independent.getByTestId('server-overview').waitFor();
 
   const initial = await holdResponse(newer,'/api/auth/login');
   const newerNavigation = newer.goto(base+'/api/auth/login',{timeout:60000});
@@ -86,10 +99,14 @@ async function run() {
   initial.release();
   await newerNavigation;
   await choose(newer,'Viewer');
+  await newer.goto(`${base}/#servers/${encodeURIComponent(serverId)}`);
+  await newer.getByTestId('server-overview').waitFor();
+  assert.doesNotMatch(await newer.locator('#content').innerText(),/Server actions|Join endpoint|Next reboot/);
   const logout = newer.waitForResponse((response) => response.url() === base+'/api/auth/logout');
   await newer.getByTestId('logout').click();
   assert.equal((await logout).status(),204);
   assert.equal((await auth(newer)).authenticated,false);
+  await deniedOverview(newer,serverId);
   callback.release();
   await olderSelection;
   await older.waitForURL(base+'/');

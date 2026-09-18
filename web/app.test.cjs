@@ -673,6 +673,34 @@ test('invalid overview falls back only after inventory succeeds and route error 
   assert.match(f.element('#content').innerHTML,/Unable to connect/);
 });
 
+test('unknown scoped Events keeps its server filter after inventory reconciliation', async () => {
+  const f = refreshFixture(false,{events:true});
+  f.sandbox.location.hash = '#events?serverId=missing';
+  f.ui.navigate();
+  await f.discover();
+  const request = f.requests.find((item) => item.path.startsWith('/api/events?'));
+  assert.equal(new URLSearchParams(request.path.split('?')[1]).get('serverId'),'missing');
+  assert.equal(f.ui.state.serverId,'missing');
+  f.reply(request.path,{events:[]});
+  await f.flush();
+});
+
+test('overview waits for fresh inventory before rejecting a newly created server', async () => {
+  const f = refreshFixture();
+  f.sandbox.location.hash = '#servers/new';
+  f.ui.navigate();
+  assert.equal(f.sandbox.location.hash,'#servers/new');
+  f.reply('/api/auth',{mode:'oidc',authenticated:true,subject:'test',role:'viewer',csrfToken:'session',capabilities:{dashboard:true,telemetry:true}});
+  await f.flush();
+  f.reply('/api/bootstrap',{servers:[{id:'new',worldName:'New world',maxPlayers:4}]});
+  await f.flush();
+  f.reply('/api/servers/new/telemetry?range=60s',rosterResponse('new'));
+  await f.flush();
+  assert.equal(f.sandbox.location.hash,'#servers/new');
+  assert.equal(f.ui.state.routeError,'');
+  assert.match(f.element('#content').innerHTML,/data-testid="server-overview"/);
+});
+
 test('overview restores URL scope after auth reset, rejects late responses, and expires paused roster', async () => {
   const f = refreshFixture();
   f.sandbox.location.hash = '#servers/b';
