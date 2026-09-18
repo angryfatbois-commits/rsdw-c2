@@ -68,7 +68,7 @@ POST /api/servers
 POST /api/servers/:id/actions/restart
 POST /api/servers/:id/actions/update
 POST /api/servers/:id/actions/check-update
-GET  /api/events
+GET  /api/events?query=&category=&serverId=&since=&limit=&offset=
 GET  /api/reboots
 POST /api/reboots
 PUT  /api/reboots/:id

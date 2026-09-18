@@ -104,6 +104,13 @@ html = eventsPage();
 assert.match(html, /data-id="one" data-testid="event-row" aria-pressed="true"/);
 assert.match(html, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
 assert.match(html, /data-testid="copy-event"/);
+assert.match(html, /data-testid="event-range"/);
+assert.match(html, /data-testid="export-events"/);
+assert.doesNotMatch(html, /data-testid="load-older-events"/);
+state.eventTotal = state.events.length + 1;
+assert.match(eventsPage(), /data-testid="load-older-events"/);
+state.eventTotal = state.events.length;
+assert.doesNotMatch(eventsPage(), /data-testid="load-older-events"/);
 html = maintenance();
 assert.match(html, /Endpoint unavailable\. Ask your cluster operator for the server address and game port\./);
 state.servers[0].endpoint = 'game.example:7777';
@@ -286,7 +293,7 @@ state.logs = 'SECRET LOG';
 for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance, context.ui.usersPage]) {
   html = render();
   assert.doesNotMatch(html, /Alice|0123456789abcdef|data-action="(?:add-user|edit-user|delete-user)"/);
-  assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output)"/);
+  assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output|event-search|event-range|export-events|load-older-events)"/);
 }
 html = telemetry();
 assert.match(html, /data-testid="export-telemetry"/);
