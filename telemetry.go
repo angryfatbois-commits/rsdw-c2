@@ -193,6 +193,16 @@ func (a *App) collectTelemetry(ctx context.Context) {
 					result = k.collectObservation(ctx, server, previous)
 				}
 				result.at = time.Now().UTC()
+				if a.demo {
+					result.runtime = "demo/" + server.ID + "/" + server.LastRestart
+					result.status = server.Status
+					for key, value := range map[string]int64{"memoryUsedBytes": server.MemoryUsedBytes, "memoryLimitBytes": server.MemoryLimitBytes} {
+						setReading(result.metrics, key, float64(value), result.at)
+						reading := result.metrics[key]
+						reading.Source = "Demo seeded server"
+						result.metrics[key] = reading
+					}
+				}
 				if !a.lifecycleMu.TryLock() {
 					continue
 				}
@@ -210,13 +220,25 @@ func (a *App) collectTelemetry(ctx context.Context) {
 				}
 				cache.history[server.ID] = retainObservations(history, result)
 				cache.mu.Unlock()
+				var dispatch rebootDispatch
 				if err := a.store.Update(func(state *State) error {
 					if current, ok := state.Servers[server.ID]; ok {
-						observeAlerts(state, current, result, time.Now().UTC())
+						now := time.Now().UTC()
+						observeAlerts(state, current, result, now)
+						var err error
+						dispatch, err = a.memoryPressure.observe(state, current, result, now)
+						return err
 					}
 					return nil
 				}); err != nil {
 					log.Print("could not persist alert observations")
+				} else if dispatch.server.ID != "" {
+					commandErr, persistenceErr := a.dispatchRestartOperation(ctx, dispatch)
+					if persistenceErr != nil {
+						log.Printf("memory pressure restart result for %s: %v", server.ID, persistenceErr)
+					} else if commandErr != nil {
+						log.Printf("memory pressure restart command for %s: %v", server.ID, commandErr)
+					}
 				}
 				a.lifecycleMu.Unlock()
 			}

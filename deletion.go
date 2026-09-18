@@ -225,6 +225,9 @@ func (a *App) handleDelete(w http.ResponseWriter, r *http.Request, id string) {
 			server.Status = StatusDeleting
 			state.Servers[id] = server
 			cancelServerDeliveries(state, id)
+			producer := state.Producers[id]
+			producer.MemoryPressure = nil
+			state.Producers[id] = producer
 			return nil
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not persist deletion intent; no deletion started")

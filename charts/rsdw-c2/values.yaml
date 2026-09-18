@@ -5,6 +5,11 @@ image:
 
 replicaCount: 1
 
+memoryPressure:
+  enabled: false
+  thresholdPercent: 85
+  duration: 10m
+
 service:
   type: ClusterIP
   port: 8080

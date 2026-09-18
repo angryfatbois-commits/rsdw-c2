@@ -17,20 +17,21 @@ import (
 type EventKind string
 
 const (
-	RestartRequested      EventKind = "restart_requested"
-	RestartCompleted      EventKind = "restart_completed"
-	RestartFailed         EventKind = "restart_failed"
-	PlayerJoined          EventKind = "player_joined"
-	PlayerLimitReached    EventKind = "player_limit_reached"
-	ServerDown            EventKind = "server_down"
-	ServerRecovered       EventKind = "server_recovered"
-	BackupStarted         EventKind = "backup_started"
-	BackupCompleted       EventKind = "backup_completed"
-	BackupFailed          EventKind = "backup_failed"
-	IntegrationTest       EventKind = "integration_test"
-	RebootScheduleChanged EventKind = "reboot_schedule_changed"
-	ServerStopped         EventKind = "server_stopped"
-	ServerStarted         EventKind = "server_started"
+	RestartRequested               EventKind = "restart_requested"
+	MemoryPressureRestartRequested EventKind = "memory_pressure_restart_requested"
+	RestartCompleted               EventKind = "restart_completed"
+	RestartFailed                  EventKind = "restart_failed"
+	PlayerJoined                   EventKind = "player_joined"
+	PlayerLimitReached             EventKind = "player_limit_reached"
+	ServerDown                     EventKind = "server_down"
+	ServerRecovered                EventKind = "server_recovered"
+	BackupStarted                  EventKind = "backup_started"
+	BackupCompleted                EventKind = "backup_completed"
+	BackupFailed                   EventKind = "backup_failed"
+	IntegrationTest                EventKind = "integration_test"
+	RebootScheduleChanged          EventKind = "reboot_schedule_changed"
+	ServerStopped                  EventKind = "server_stopped"
+	ServerStarted                  EventKind = "server_started"
 )
 
 type AlertRule struct {
@@ -43,6 +44,7 @@ type AlertRule struct {
 
 var alertRules = []AlertRule{
 	{RestartRequested, "Restart requested", true, "C2 restart operation", "observed"},
+	{MemoryPressureRestartRequested, "Memory pressure restart requested", true, "Sustained fresh container memory usage at or above the fleet threshold", "observed"},
 	{RestartCompleted, "Restart completed", true, "Owned replacement runtime and fresh engine readiness", "observed"},
 	{RestartFailed, "Restart failed", true, "Restart deadline and fresh runtime observation", "observed"},
 	{PlayerJoined, "Player joined (approximate count increase)", true, "Fresh game API player counts on the same runtime", "approximate"},
@@ -127,6 +129,7 @@ func (s *State) recoverAlerts() {
 		}
 	}
 	for id, p := range s.Producers {
+		p.MemoryPressure = nil
 		p.Runtime, p.PlayerAt, p.LastAt = "", time.Time{}, time.Time{}
 		p.resetStreak()
 		s.Producers[id] = p
@@ -187,7 +190,7 @@ func emitAlert(state *State, server Server, kind EventKind, operation, details s
 	case ServerDown, ServerRecovered:
 		category = "health"
 	}
-	if kind == RestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
+	if kind == RestartRequested || kind == MemoryPressureRestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
 		severity = "warning"
 	}
 	if kind == RestartFailed || kind == ServerDown {
