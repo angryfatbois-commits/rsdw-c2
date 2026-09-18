@@ -14,10 +14,11 @@ type MemoryPressurePolicy struct {
 }
 
 type MemoryPressureState struct {
-	Runtime  string    `json:"runtime"`
-	Since    time.Time `json:"since"`
-	LastAt   time.Time `json:"lastAt"`
-	SampleAt time.Time `json:"sampleAt"`
+	WarningOccurrence string    `json:"warningOccurrence,omitempty"`
+	Runtime           string    `json:"runtime"`
+	Since             time.Time `json:"since"`
+	LastAt            time.Time `json:"lastAt"`
+	SampleAt          time.Time `json:"sampleAt"`
 }
 
 func memoryPressurePolicyFromEnv() (MemoryPressurePolicy, error) {
@@ -70,6 +71,14 @@ func (policy MemoryPressurePolicy) observe(state *State, server Server, o observ
 	advanced := sampleAt.After(streak.SampleAt)
 	streak.SampleAt = sampleAt
 	streak.LastAt = o.at
+	if streak.WarningOccurrence == "" && restartWarningEnabled(state, server.ID) {
+		restartAt := streak.Since.Add(policy.Duration)
+		if restartAt.After(now) {
+			streak.WarningOccurrence = memoryPressureWarningOccurrence(server.ID, *streak)
+			minutes := int(math.Ceil(restartAt.Sub(now).Minutes()))
+			emitAlertEvidence(state, server, RestartWarning, "", "Memory pressure restart approaching", o.at, AlertEvidence{RestartWarning: &RestartWarningEvidence{Trigger: "memory-pressure", RestartAt: restartAt, Minutes: minutes}}, "", streak.WarningOccurrence)
+		}
+	}
 	p.MemoryPressure = streak
 	state.Producers[server.ID] = p
 	if !advanced || sampleAt.Sub(streak.Since) < policy.Duration {

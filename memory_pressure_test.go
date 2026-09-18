@@ -110,6 +110,33 @@ func TestMemoryPressureDurationAndSharedRestartLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryPressureWarningCancelsWhenPressureClears(t *testing.T) {
+	state, server, start := alertFixture(t)
+	integration := state.Integrations["bot"]
+	integration.Rules[RestartWarning] = true
+	state.Integrations["bot"] = integration
+	policy := MemoryPressurePolicy{Enabled: true, ThresholdPercent: 85, Duration: 10 * time.Minute}
+
+	observePressure(t, policy, state, server, pressureSample(start), start)
+	if len(state.Events) != 1 || state.Events[0].Kind != RestartWarning {
+		t.Fatalf("pressure warning = %+v", state.Events)
+	}
+	warning := state.Events[0]
+	if warning.Evidence.RestartWarning == nil || warning.Evidence.RestartWarning.Trigger != "memory-pressure" || warning.Evidence.RestartWarning.Minutes != 10 || warning.OccurrenceID == "" || len(state.Deliveries) != 1 {
+		t.Fatalf("pressure warning evidence = %+v", warning)
+	}
+
+	cleared := pressureSample(start.Add(30 * time.Second))
+	setReading(cleared.metrics, "memoryUsedBytes", 50, cleared.at)
+	observePressure(t, policy, state, server, cleared, cleared.at)
+	cancelObsoleteWarnings(state, cleared.at)
+	for _, delivery := range state.Deliveries {
+		if delivery.Status != DeliveryFailed || !strings.Contains(delivery.Result, "cancelled") {
+			t.Fatalf("pressure warning remained active: %+v", delivery)
+		}
+	}
+}
+
 func TestMemoryPressureResetsContinuity(t *testing.T) {
 	for _, tc := range []string{"low", "negative used", "zero limit", "negative limit", "NaN", "infinity", "missing used", "missing limit", "unavailable", "stale metric", "missing timestamp", "future metric", "stale observation", "future observation", "zero observation", "gap", "duplicate", "out of order", "runtime change", "missing runtime", "stopped", "observed stopped", "deleting", "deletion receipt", "pending", "disabled"} {
 		t.Run(tc, func(t *testing.T) {

@@ -227,6 +227,9 @@ func (a *App) collectTelemetry(ctx context.Context) {
 						observeAlerts(state, current, result, now)
 						var err error
 						dispatch, err = a.memoryPressure.observe(state, current, result, now)
+						if err == nil {
+							cancelObsoleteWarnings(state, now)
+						}
 						return err
 					}
 					return nil
