@@ -469,6 +469,40 @@ test('saved IDs refresh only for admins and late results cannot survive a sessio
   assert.equal(ui.state.users.length, 0);
 });
 
+test('stopped telemetry does not fetch logs or show a stale-data error', async () => {
+  const elements = new Map();
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, close(){}, setAttribute(){}, classList:{remove(){}, toggle(){}}});
+    return elements.get(selector);
+  };
+  const auth = {mode:'oidc', authenticated:true, subject:'admin', role:'admin', csrfToken:'admin-session', capabilities:{dashboard:true,telemetry:true,logs:true,events:true}};
+  const paths = [];
+  const response = (body, status = 200) => ({status, ok:status >= 200 && status < 300, headers:{get:()=>null}, text:async()=>JSON.stringify(body)});
+  const sandbox = vm.createContext({
+    DOMException, AbortController, URLSearchParams, clearTimeout, setTimeout,
+    document:{querySelector:element}, sessionStorage:{getItem:()=>'', removeItem(){}},
+    fetch: async (path) => {
+      paths.push(path);
+      if (path === '/api/auth') return response(auth);
+      if (path === '/api/bootstrap') return response({servers:[{id:'world',name:'World',status:'stopped',maxPlayers:4}],cluster:'test',mode:'demo'});
+      if (path.startsWith('/api/events?')) return response({events:[]});
+      if (path.startsWith('/api/servers/world/telemetry?')) return response({server:{id:'world',name:'World',status:'stopped',maxPlayers:4},metrics:{players:{value:0,status:'stale',reason:'Server is stopped'}},samples:[]});
+      if (path.startsWith('/api/servers/world/logs?')) return response({error:'server is stopped; start it before this action'}, 409);
+      throw new Error(`Unexpected request ${path}`);
+    },
+  });
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nrender = () => {}; this.ui = {state, applyAuth, refresh, telemetry};', sandbox);
+  const ui = sandbox.ui;
+  ui.applyAuth(auth);
+  Object.assign(ui.state, {page:'telemetry', serverId:'world'});
+  await ui.refresh();
+  assert.equal(paths.filter((path) => path.startsWith('/api/servers/world/logs?')).length, 0);
+  assert.equal(element('#error-banner').hidden, true);
+  assert.equal(element('#connection-status').textContent, 'Connected · refreshes every 10s');
+  ui.state.logs = 'old logs must not be shown while stopped';
+  assert.doesNotMatch(ui.telemetry(), /data-testid="(?:log-output|refresh-logs|export-logs)"/);
+});
+
 function rosterResponse(id = 'a', players = [{name:'Alice', characterName:'Mage'}], count = 1) {
   return {server:{id, name:`World ${id}`, maxPlayers:4}, playerRoster:{status:'available', freshForMs:45000, players}, metrics:{players:{value:count, status:'available', observedAt:new Date().toISOString()}}, samples:[]};
 }
