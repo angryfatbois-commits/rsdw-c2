@@ -35,7 +35,7 @@ const state = {
   page: 'dashboard', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
-  query: '', category: '', range: '60s', telemetry: null, logs: '', logQuery: '',
+  query: '', category: '', range: '60s', telemetry: null, rosterObservation: '', rosterDeadline: 0, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
   modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, modalInitialSettings: {}, request: null,
   authRequired: false, loginBusy: false, authMode: '', identity: '', csrfToken: '', role: 'denied', capabilities: {}, epoch: 0, logoutCSRF: '', signInFailed: false,
@@ -45,8 +45,32 @@ let searchTimer;
 let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
+let rosterExpiryTimer;
 const can = (capability) => state.capabilities[({users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
+const monotonicNow = () => typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+const rosterObservationKey = (telemetry) => telemetry?.server?.id && telemetry?.metrics?.players?.observedAt ? `${telemetry.server.id}\n${telemetry.metrics.players.observedAt}` : '';
+
+function clearTelemetry() {
+  state.telemetry = null;
+  state.rosterObservation = '';
+  state.rosterDeadline = 0;
+}
+
+function acceptTelemetry(result, startedAt, receivedAt) {
+  const key = rosterObservationKey(result);
+  const metric = result?.metrics?.players;
+  const freshForMs = Number(result?.playerRoster?.freshForMs);
+  state.telemetry = result;
+  if (key && metric?.status === 'available' && result.playerRoster?.status === 'available' && Number.isFinite(freshForMs) && freshForMs >= 0 && freshForMs <= 45000) {
+    const deadline = receivedAt + Math.max(0, freshForMs - Math.max(0, receivedAt - startedAt));
+    state.rosterDeadline = state.rosterObservation === key && state.rosterDeadline > 0 ? Math.min(state.rosterDeadline, deadline) : deadline;
+    state.rosterObservation = key;
+  } else {
+    state.rosterObservation = '';
+    state.rosterDeadline = 0;
+  }
+}
 
 function number(value, suffix = '') {
   return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toLocaleString(undefined, Math.abs(Number(value)) < 1 ? {maximumSignificantDigits:3} : {maximumFractionDigits:1})}${suffix}`;
@@ -166,7 +190,8 @@ function clearProtectedState() {
   state.request?.abort();
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0});
+  clearTimeout(rosterExpiryTimer);
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0});
   Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:'', reboots:[], rebootHistory:[], rebootsAvailable:true, rebootsDemo:false});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
@@ -224,12 +249,12 @@ function applyAuth(auth) {
   if (!can(state.page)) state.page = 'dashboard';
   return true;
 }
-async function discoverAuth() {
-  let auth = await api('/api/auth');
+async function discoverAuth(signal) {
+  let auth = await api('/api/auth', {signal});
   if (auth.mode === 'oidc' && state.authMode !== 'oidc') {
     state.authMode = 'oidc';
     try { sessionStorage.removeItem(tokenKey); } catch {}
-    auth = await api('/api/auth');
+    auth = await api('/api/auth', {signal});
   }
   return auth;
 }
@@ -381,7 +406,38 @@ function telemetry() {
   server.metrics = state.telemetry?.metrics || server.metrics;
   const value = (key) => metricValue(server, key);
   const text = (key, suffix = '') => metricText(server, key, suffix);
-  return `<div class="toolbar"><strong>${escapeHTML(serverLabel(server))}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', text('tickRate', ' TPS'), 'pulse')}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(server.status)}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div></div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${tickDurations(server)}${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section>${can('logs') ? `<section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(serverLabel(server))}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>` : ''}`;
+  return `<div class="toolbar"><strong>${escapeHTML(serverLabel(server))}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', text('tickRate', ' TPS'), 'pulse')}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(server.status)}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div>${connectedPlayers()}</div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${tickDurations(server)}${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section>${can('logs') ? `<section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(serverLabel(server))}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>` : ''}`;
+}
+function connectedPlayers() {
+  const data = state.telemetry;
+  const reading = data?.metrics?.players;
+  const roster = data?.playerRoster;
+  const players = roster?.players;
+  const key = rosterObservationKey(data);
+  const expired = state.rosterObservation === key && Number.isFinite(state.rosterDeadline) ? monotonicNow() >= state.rosterDeadline : (() => {
+    const age = Date.now() - Date.parse(reading?.observedAt);
+    return !Number.isFinite(age) || age > 45000 || age < -5000;
+  })();
+  const playerField = (value, fallback) => escapeHTML(typeof value === 'string' && value.trim() ? value : fallback);
+  let content = '<p class="no-results">Connected players are unavailable.</p>';
+  if (data?.server?.id === selectedServer()?.id) {
+    if (reading?.status === 'stale' || (reading?.status === 'available' && expired)) {
+      content = '<p class="no-results">Connected players are stale. Refresh telemetry to see the current roster.</p>';
+    } else if (reading?.status === 'error') {
+      content = '<p class="no-results">Connected players are unavailable. The latest collection failed.</p>';
+    } else if (reading?.status === 'available' && roster?.status === 'error') {
+      content = '<p class="no-results">Connected players are unavailable. The game API returned an invalid roster.</p>';
+    } else if (reading?.status === 'available' && roster?.status === 'unavailable') {
+      content = '<p class="no-results">Connected player names are unavailable. The game API did not provide roster details.</p>';
+    } else if (reading?.status === 'available' && Number.isFinite(reading.value) && Array.isArray(players)) {
+      if (players.length) {
+        content = `<ul class="player-roster">${players.map((player) => `<li><dl><div><dt>Name</dt><dd>${playerField(player?.name, 'Name unavailable')}</dd></div><div><dt>Character name</dt><dd>${playerField(player?.characterName, 'Character name unavailable')}</dd></div></dl></li>`).join('')}</ul>`;
+      } else {
+        content = `<p class="no-results">${reading.value === 0 ? 'No players are connected.' : `The server reports ${escapeHTML(number(reading.value))} connected players, but the roster returned no entries.`}</p>`;
+      }
+    }
+  }
+  return `<section class="panel" aria-labelledby="connected-players-heading" data-testid="connected-players"><div class="panel-heading"><h2 id="connected-players-heading">Connected players</h2></div>${content}</section>`;
 }
 function tickDurations(server) {
   return `<section class="panel section-gap"><div class="panel-heading"><h2>Tick execution duration</h2></div><p class="inline-note">Elapsed time inside UDomGameEngine::Tick, including its world tick. Excludes work outside that call. Each point is a separate measurement window, not a percentile of the selected chart range.</p><div class="stats">${stat('p50 duration', metricText(server, 'tickP50Ms', ' ms'), 'clock')}${stat('p95 duration', metricText(server, 'tickP95Ms', ' ms'), 'clock')}${stat('p99 duration', metricText(server, 'tickP99Ms', ' ms'), 'clock')}${stat('Completed ticks', metricText(server, 'tickSampleCount'), 'pulse')}</div><p class="inline-note">Latest measurement window: ${metricText(server, 'tickWindowSeconds', ' seconds')}.</p>${chart('tickP95Ms', 'p95 tick duration (ms)', 'tickP99Ms', 'p99 tick duration (ms)')}</section>`;
@@ -592,6 +648,14 @@ function render() {
     $('#content').insertAdjacentHTML('beforeend', deletionReceipts());
   }
   $('#content').setAttribute('aria-busy','false');
+  clearTimeout(rosterExpiryTimer);
+  const key = rosterObservationKey(state.telemetry);
+  const rosterExpiresIn = state.rosterObservation === key && Number.isFinite(state.rosterDeadline)
+    ? state.rosterDeadline - monotonicNow()
+    : Date.parse(state.telemetry?.metrics?.players?.observedAt) + 45001 - Date.now();
+  if (state.page === 'telemetry' && state.telemetry?.metrics?.players?.status === 'available' && rosterExpiresIn > 0) {
+    rosterExpiryTimer = setTimeout(render, rosterExpiresIn);
+  }
   if (testId) {
     const identity = focused.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : '';
     const replacement = document.querySelector(`[data-testid="${CSS.escape(testId)}"]${identity}`);
@@ -619,28 +683,42 @@ async function loadLogs(signal) {
 async function refresh() {
   if (state.logoutCSRF) return;
   const sequence = ++refreshSequence;
-  let controller;
+  state.request?.abort();
+  const controller = new AbortController();
+  state.request = controller;
+  let epoch = state.epoch;
+  let page = state.page;
+  const range = state.range;
+  let serverId = state.serverId;
+  let selectedId = selectedServer()?.id;
+  let telemetryReceived = false;
+  const current = () => sequence === refreshSequence && epoch === state.epoch && page === state.page && range === state.range && serverId === state.serverId && selectedId === selectedServer()?.id && state.request === controller && !controller.signal.aborted;
   state.refreshing = true;
   $('#refresh').disabled = true;
   try {
-    const auth = await discoverAuth();
-    if (sequence !== refreshSequence) return;
+    const auth = await discoverAuth(controller.signal);
+    if (!current()) return;
+    state.request = null;
     if (!applyAuth(auth)) return;
-    state.request?.abort();
-    controller = new AbortController();
+    epoch = state.epoch;
+    page = state.page;
+    serverId = state.serverId;
+    selectedId = selectedServer()?.id;
     state.request = controller;
     const bootstrap = await api('/api/bootstrap',{signal:controller.signal});
-    if (controller.signal.aborted) return;
+    if (!current()) return;
     if (!Array.isArray(bootstrap.servers)) throw new Error('The server inventory response is missing. Please refresh to try again.');
     state.servers = bootstrap.servers;
     state.deletions = bootstrap.deletions || {};
     state.loaded = true;
     if (state.serverId && !state.servers.some((server) => server.id === state.serverId)) state.serverId = '';
+    if (selectedId !== selectedServer()?.id) { clearTelemetry(); state.logs = ''; render(); }
+    serverId = state.serverId;
+    selectedId = selectedServer()?.id;
     $('#cluster-name').textContent = typeof bootstrap.cluster === 'string' ? bootstrap.cluster : bootstrap.cluster?.name || bootstrap.clusterName || 'Local cluster';
     state.mode = bootstrap.mode;
     $('#environment').textContent = bootstrap.mode === 'demo' ? 'Demo mode' : 'Kubernetes';
     const eventParams = new URLSearchParams({query:state.page === 'events' ? state.query : '', category:state.page === 'events' ? state.category : '', serverId:state.serverId});
-    const epoch = state.epoch;
     const eventsPromise = can('events') ? api(`/api/events?${eventParams}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.events = eventArray(result); }) : Promise.resolve();
     const server = selectedServer();
     const requests = [eventsPromise];
@@ -648,11 +726,18 @@ async function refresh() {
     if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
     if (can('reboots')) requests.push(api('/api/reboots',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{reboots:result.schedules || [], rebootHistory:result.history || [], rebootsAvailable:result.available !== false, rebootsDemo:result.demo === true}); }));
     if (state.page === 'telemetry' && server) {
-      requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(state.range)}`,{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.telemetry = result; }));
+      const telemetryStartedAt = monotonicNow();
+      requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(range)}`,{signal:controller.signal}).then((result) => {
+        if (!current()) return;
+        if (result.server?.id !== selectedId) throw new Error('Telemetry returned a different server. Please refresh to try again.');
+        acceptTelemetry(result, telemetryStartedAt, monotonicNow());
+        telemetryReceived = true;
+        render();
+      }));
       if (can('logs')) requests.push(loadLogs(controller.signal));
     }
     const results = await Promise.allSettled(requests);
-    if (controller.signal.aborted) return;
+    if (!current()) return;
     const failure = results.find((result) => result.status === 'rejected');
     if (failure) throw failure.reason;
     state.lastUpdated = new Date();
@@ -660,10 +745,11 @@ async function refresh() {
     render();
     connection();
   } catch (error) {
-    if (controller?.signal.aborted || error.name === 'AbortError' || sequence !== refreshSequence) return;
+    if (!current() || error.name === 'AbortError') return;
     if (state.authRequired) { lockedState(); return; }
     $('#error-banner').textContent = error.message;
     $('#error-banner').hidden = false;
+    if (!telemetryReceived) clearTelemetry();
     if (state.loaded) render();
     else $('#content').innerHTML = '<section class="panel empty"><div class="empty-icon">'+icon('warning')+'</div><h2>Unable to connect</h2><p>Your server inventory could not be loaded. Check the connection and try again.</p><button data-action="retry" data-testid="retry-connection">Try again</button></section>';
     $('#content').setAttribute('aria-busy','false');
@@ -998,7 +1084,7 @@ function navigate() {
   $('#navigation').innerHTML = Object.entries(pages).filter(([name]) => can(name)).map(([name,[label]])=>`<a href="#${name}" data-testid="nav-${name}" ${name===state.page?'aria-current="page"':''}>${icon(name)}${label}</a>`).join('');
   $('#page-title').textContent = pages[state.page][0];
   $('#page-description').textContent = pages[state.page][1];
-  state.telemetry = null;
+  clearTelemetry();
   state.logs = '';
   if (state.loaded) render();
   refresh();
@@ -1015,14 +1101,14 @@ function handleChange(event) {
     const user = state.users.find((item) => item.id === event.target.value);
     if (user) $('[data-testid="server-owner"]').value = user.playerId;
   }
-  if (event.target.id === 'telemetry-range') { state.range = event.target.value; state.telemetry = null; refresh(); }
+  if (event.target.id === 'telemetry-range') { state.range = event.target.value; clearTelemetry(); render(); refresh(); }
   if (event.target.id === 'reboot-mode') { syncRebootModeFields(); updateDailyTimeControls(); }
   if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
+  if (event.target.id === 'server-filter') { state.serverId = event.target.value; clearTelemetry(); state.logs = ''; state.selectedEventId = ''; render(); refresh(); }
 }
 $('#refresh').innerHTML = icon('refresh');
 $('#refresh').addEventListener('click',refresh);
 $('#pause').addEventListener('click',() => { state.paused = !state.paused; connection(); if (!state.paused) refresh(); });
-$('#server-filter').addEventListener('change',(event) => { state.serverId = event.target.value; state.telemetry = null; state.logs = ''; state.selectedEventId = ''; refresh(); });
 $('#modal-form').addEventListener('invalid', (event) => {
   const advanced = event.target.closest('details');
   if (advanced) advanced.open = true;
@@ -1049,7 +1135,11 @@ document.addEventListener('input',(event) => {
 });
 document.addEventListener('change',handleChange);
 window.addEventListener('hashchange',navigate);
-document.addEventListener('visibilitychange',() => { if (!document.hidden && !state.paused && !$('#modal').open) refresh(); });
+document.addEventListener('visibilitychange',() => {
+  if (document.hidden) return;
+  if (state.page === 'telemetry' && state.loaded) render();
+  if (!state.paused && !$('#modal').open) refresh();
+});
 setInterval(() => {
   if (state.paused || state.authRequired || state.refreshing || document.hidden || $('#modal').open || $('#login-dialog').open || ['INPUT','SELECT'].includes(document.activeElement.tagName)) return;
   refresh();

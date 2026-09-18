@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +15,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-const telemetryCommandTimeout = 1500 * time.Millisecond
+const (
+	telemetryCommandTimeout = 1500 * time.Millisecond
+	maxPlayerResponseBytes  = 256 << 10
+	maxPlayerRosterEntries  = 256
+	maxPlayerFieldBytes     = 4096
+)
 
 type kubeMetadata struct {
 	Labels            map[string]string `json:"labels"`
@@ -220,7 +226,11 @@ func (k *kubeOrchestrator) podGameAPI(ctx context.Context, target podTarget, end
 	if endpoint != "health" && endpoint != "players" && endpoint != "metrics" {
 		return nil, errors.New("unsupported game API endpoint")
 	}
-	script := fmt.Sprintf("curl -fsS --max-time 3 -H \"Authorization: Bearer $(cat /run/rsdwapi/token)\" http://127.0.0.1:%d/api/%s", port, endpoint)
+	limit := ""
+	if endpoint == "players" {
+		limit = fmt.Sprintf(" --max-filesize %d", maxPlayerResponseBytes)
+	}
+	script := fmt.Sprintf("curl -fsS --max-time 3%s -H \"Authorization: Bearer $(cat /run/rsdwapi/token)\" http://127.0.0.1:%d/api/%s", limit, port, endpoint)
 	return k.podExec(ctx, target, "sh", "-ec", script)
 }
 
@@ -234,7 +244,7 @@ var errNoActivePod = errors.New("no active owned Pod")
 func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server, previous *networkCounters) observation {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	result := observation{metrics: emptyMetrics(), status: StatusUnknown}
+	result := observation{metrics: emptyMetrics(), playerRoster: unavailableRoster("Player roster was not collected"), status: StatusUnknown}
 	target, status, err := k.resolvePod(ctx, server)
 	result.status = status
 	if err != nil {
@@ -278,7 +288,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 	sourceCtx, cancelSources := context.WithDeadline(ctx, deadline.Add(-telemetryCommandTimeout))
 	defer cancelSources()
 	k.collectResources(sourceCtx, target, result.metrics)
-	k.collectGame(sourceCtx, target, result.metrics)
+	result.playerRoster = k.collectGame(sourceCtx, target, result.metrics)
 	k.collectDisk(sourceCtx, target, result.metrics)
 	if target.pod.Spec.HostNetwork {
 		failReadings(result.metrics, networkKeys, "unsupported", "Host-network counters cannot be attributed to this Pod", nil)
@@ -309,6 +319,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 			failReadings(result.metrics, []string{key}, "unavailable", reason, nil)
 		}
 		result.network = nil
+		result.playerRoster = unavailableRoster("Pod identity verification failed")
 		result.image = ""
 		result.status = StatusUnknown
 		return result
@@ -441,7 +452,8 @@ func (k *kubeOrchestrator) collectResources(ctx context.Context, target podTarge
 	}
 }
 
-func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, metrics map[string]MetricReading) {
+func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, metrics map[string]MetricReading) PlayerRoster {
+	roster := unavailableRoster("Player roster was not collected")
 	for _, endpoint := range []string{"health", "players"} {
 		keys := []string{"engineReady", "uptimeSeconds"}
 		if endpoint == "players" {
@@ -451,6 +463,9 @@ func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, me
 		at := time.Now().UTC()
 		if err != nil {
 			failReadings(metrics, keys, "error", "Game API "+endpoint+": "+err.Error(), &at)
+			if endpoint == "players" {
+				roster = unavailableRoster("The game API player roster could not be collected")
+			}
 			continue
 		}
 		if endpoint == "health" {
@@ -479,16 +494,54 @@ func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, me
 				setReading(metrics, "uptimeSeconds", *uptime, at)
 			}
 		} else {
+			if len(data) > maxPlayerResponseBytes {
+				failReadings(metrics, keys, "error", "Game API players response exceeded the size limit", &at)
+				roster = errorRoster("The game API player roster exceeded the size limit")
+				continue
+			}
 			var payload struct {
-				Count *float64 `json:"count"`
+				Count   *float64        `json:"count"`
+				Players json.RawMessage `json:"players"`
 			}
 			if json.Unmarshal(data, &payload) != nil || payload.Count == nil || math.Trunc(*payload.Count) != *payload.Count || *payload.Count > float64(math.MaxInt32) {
 				failReadings(metrics, keys, "error", "Invalid or missing player count", &at)
+				roster = unavailableRoster("The game API player count was not available")
 			} else {
 				setReading(metrics, "players", *payload.Count, at)
+				if metrics["players"].Status == "available" {
+					roster = decodePlayerRoster(payload.Players)
+				}
 			}
 		}
 	}
+	return roster
+}
+
+func decodePlayerRoster(data json.RawMessage) PlayerRoster {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return unavailableRoster("The game API did not provide player roster details")
+	}
+	var players []*ConnectedPlayer
+	if json.Unmarshal(trimmed, &players) != nil || players == nil {
+		return errorRoster("The game API returned an invalid player roster")
+	}
+	if len(players) > maxPlayerRosterEntries {
+		return errorRoster("The game API player roster exceeded the entry limit")
+	}
+	roster := PlayerRoster{Status: RosterAvailable, Players: make([]ConnectedPlayer, len(players))}
+	for i, player := range players {
+		if player == nil {
+			return errorRoster("The game API returned an invalid player roster")
+		}
+		player.Name = strings.TrimSpace(player.Name)
+		player.CharacterName = strings.TrimSpace(player.CharacterName)
+		if len([]byte(player.Name)) > maxPlayerFieldBytes || len([]byte(player.CharacterName)) > maxPlayerFieldBytes {
+			return errorRoster("The game API player roster field exceeded the size limit")
+		}
+		roster.Players[i] = *player
+	}
+	return roster
 }
 
 func (k *kubeOrchestrator) collectTicks(ctx context.Context, target podTarget, metrics map[string]MetricReading) {

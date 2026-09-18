@@ -29,6 +29,34 @@ type MetricReading struct {
 	Reason     string     `json:"reason"`
 }
 
+type ConnectedPlayer struct {
+	Name          string `json:"name"`
+	CharacterName string `json:"characterName"`
+}
+
+type RosterStatus string
+
+const (
+	RosterAvailable   RosterStatus = "available"
+	RosterUnavailable RosterStatus = "unavailable"
+	RosterError       RosterStatus = "error"
+)
+
+type PlayerRoster struct {
+	Status     RosterStatus      `json:"status,omitempty"`
+	Reason     string            `json:"reason,omitempty"`
+	FreshForMs int64             `json:"freshForMs,omitempty"`
+	Players    []ConnectedPlayer `json:"players"`
+}
+
+func unavailableRoster(reason string) PlayerRoster {
+	return PlayerRoster{Status: RosterUnavailable, Reason: reason}
+}
+
+func errorRoster(reason string) PlayerRoster {
+	return PlayerRoster{Status: RosterError, Reason: reason}
+}
+
 var metricCatalog = []struct{ key, unit, source, description string }{
 	{"players", "players", "game API /api/players", "Connected players reported by the authenticated game API."},
 	{"uptimeSeconds", "seconds", "game API /api/health", "Game API process uptime."},
@@ -97,6 +125,7 @@ type observation struct {
 	health           string
 	at               time.Time
 	metrics          map[string]MetricReading
+	playerRoster     PlayerRoster
 	status           Status
 	image            string
 	network          *networkCounters
@@ -179,18 +208,7 @@ func (a *App) collectTelemetry(ctx context.Context) {
 					a.lifecycleMu.Unlock()
 					continue
 				}
-				first := 0
-				for first < len(history) && !history[first].at.After(result.at.Add(-telemetryRetention)) {
-					first++
-				}
-				history = history[first:]
-				if len(history) >= telemetryMaxSamples {
-					history = history[len(history)-telemetryMaxSamples+1:]
-				}
-				retained := make([]observation, len(history)+1)
-				copy(retained, history)
-				retained[len(history)] = result
-				cache.history[server.ID] = retained
+				cache.history[server.ID] = retainObservations(history, result)
 				cache.mu.Unlock()
 				if err := a.store.Update(func(state *State) error {
 					if current, ok := state.Servers[server.ID]; ok {
@@ -262,11 +280,42 @@ func (a *App) markTelemetryPending(server Server) {
 	cache := a.observations()
 	cache.mu.Lock()
 	history := cache.history[server.ID]
+	cache.history[server.ID] = retainObservations(history, pending)
+	cache.mu.Unlock()
+}
+
+func retainObservations(history []observation, next observation) []observation {
+	first := 0
+	if !next.at.IsZero() {
+		for first < len(history) && !history[first].at.After(next.at.Add(-telemetryRetention)) {
+			first++
+		}
+	}
+	history = history[first:]
 	if len(history) >= telemetryMaxSamples {
 		history = history[len(history)-telemetryMaxSamples+1:]
 	}
-	cache.history[server.ID] = append(history, pending)
-	cache.mu.Unlock()
+	retained := make([]observation, len(history)+1)
+	copy(retained, history)
+	for i := range history {
+		retained[i].playerRoster = PlayerRoster{}
+	}
+	retained[len(history)] = next
+	return retained
+}
+
+func playerRosterFreshForMs(reading MetricReading, now time.Time) int64 {
+	if reading.Status != "available" || reading.ObservedAt == nil {
+		return 0
+	}
+	remaining := telemetryMaxAge - now.Sub(*reading.ObservedAt)
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining > telemetryMaxAge {
+		remaining = telemetryMaxAge
+	}
+	return remaining.Milliseconds()
 }
 
 func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
@@ -288,6 +337,26 @@ func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 	}
 	server = joinObservation(server, current, now)
 	result := Telemetry{Server: server, Metrics: server.Metrics, MetricsAvailable: server.MetricsAvailable, Samples: []MetricSample{}, HealthChecks: []HealthCheck{}, MetricDefinitions: []MetricDefinition{}}
+	result.PlayerRoster = unavailableRoster("Player count is not currently available")
+	if players := result.Metrics["players"]; players.Status == "available" && players.Value != nil {
+		result.PlayerRoster = current.playerRoster
+		if result.PlayerRoster.Status == "" {
+			if result.PlayerRoster.Players == nil {
+				result.PlayerRoster = unavailableRoster("Player roster details were not provided")
+			} else {
+				result.PlayerRoster.Status = RosterAvailable
+			}
+		}
+		if result.PlayerRoster.Status == RosterAvailable {
+			result.PlayerRoster.FreshForMs = playerRosterFreshForMs(players, now)
+		} else {
+			result.PlayerRoster.FreshForMs = 0
+		}
+	} else if players.Status == "stale" {
+		result.PlayerRoster = unavailableRoster("Player count is stale")
+	} else if players.Status == "error" {
+		result.PlayerRoster = unavailableRoster("Player count collection failed")
+	}
 	for _, item := range metricCatalog {
 		result.MetricDefinitions = append(result.MetricDefinitions, MetricDefinition{Metric: item.key, Description: item.description})
 	}

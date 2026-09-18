@@ -371,3 +371,268 @@ test('saved IDs refresh only for admins and late results cannot survive a sessio
   assert.deepEqual(paths, ['/api/auth', '/api/bootstrap']);
   assert.equal(ui.state.users.length, 0);
 });
+
+function rosterResponse(id = 'a', players = [{name:'Alice', characterName:'Mage'}], count = 1) {
+  return {server:{id, name:`World ${id}`, maxPlayers:4}, playerRoster:{status:'available', freshForMs:45000, players}, metrics:{players:{value:count, status:'available', observedAt:new Date().toISOString()}}, samples:[]};
+}
+
+test('connected players show labeled escaped fields, preserve duplicates, and distinguish empty from unavailable', () => {
+  const sandbox = vm.createContext({});
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry};', sandbox);
+  const {state, telemetry} = sandbox.ui;
+  Object.assign(state, {servers:[{id:'a', name:'World A', maxPlayers:4}], serverId:'a', capabilities:{telemetry:true}});
+  state.telemetry = rosterResponse('a', [{name:'<Alice>',characterName:'<script>bad()</script>'}, {name:'<Alice>'}, {characterName:'Mage'}, {name:' \t',characterName:'\n'}], 4);
+  let html = telemetry();
+  assert.equal((html.match(/<dt>Name<\/dt>/g) || []).length, 4);
+  assert.equal((html.match(/<dt>Character name<\/dt>/g) || []).length, 4);
+  assert.equal((html.match(/&lt;Alice&gt;/g) || []).length, 2);
+  assert.match(html, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>|<Alice>/);
+  assert.match(html, /Name unavailable/);
+  assert.match(html, /Character name unavailable/);
+  assert.match(html, /4 \/ 4/);
+  assert.match(html, /Player count/);
+  assert.match(html, /export-telemetry/);
+  for (const [players, count, message] of [
+    [[], 0, /No players are connected/],
+    [[], 4, /reports 4 connected players, but the roster returned no entries/],
+    [null, 0, /Connected players are unavailable/],
+    [undefined, 4, /Connected players are unavailable/],
+    ['broken', 4, /Connected players are unavailable/],
+  ]) {
+    state.telemetry = rosterResponse('a', [], count);
+    state.telemetry.playerRoster.players = players;
+    html = telemetry();
+    assert.match(html, message);
+    assert.doesNotMatch(html, /<dt>Name<\/dt>/);
+    if (count !== 0 || !Array.isArray(players)) assert.doesNotMatch(html, /No players are connected/);
+  }
+  for (const status of ['stale','error','unavailable']) {
+    state.telemetry = rosterResponse();
+    state.telemetry.metrics.players.status = status;
+    html = telemetry();
+    assert.doesNotMatch(html, /Alice|Mage|<dt>Name<\/dt>|No players are connected/);
+    assert.match(html, status === 'stale' ? /Connected players are stale/ : /Connected players are unavailable/);
+  }
+  for (const observedAt of [new Date(Date.now()-46000).toISOString(), null, 'invalid']) {
+    state.telemetry = rosterResponse();
+    state.telemetry.metrics.players.observedAt = observedAt;
+    assert.doesNotMatch(telemetry(), /Alice|Mage|<dt>Name<\/dt>/);
+    assert.match(telemetry(), /Connected players are stale/);
+  }
+  state.telemetry = rosterResponse('other');
+  assert.doesNotMatch(telemetry(), /Alice|Mage|<dt>Name<\/dt>/);
+  state.telemetry = rosterResponse('a', [null, {name:42, characterName:{}}], 2);
+  html = telemetry();
+  assert.match(html, /Name unavailable/);
+  assert.match(html, /Character name unavailable/);
+});
+
+function refreshFixture(admin = false) {
+  const elements = new Map();
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, open:false, close(){this.open=false;}, setAttribute(){}, classList:{remove(){}, toggle(){}}});
+    return elements.get(selector);
+  };
+  const requests = [];
+  const timers = new Map();
+  let timerID = 0;
+  const clock = {now:Date.now()};
+  let monotonicNow = clock.now;
+  const sandbox = vm.createContext({
+    DOMException, AbortController, URLSearchParams, HTMLInputElement:class {},
+    Date:class extends Date {static now(){return clock.now;}},
+    performance:{now:()=>monotonicNow},
+    clearTimeout:(id)=>timers.delete(id), setTimeout:(fn,delay)=>{timers.set(++timerID,{fn,delay});return timerID;},
+    document:{querySelector:element, querySelectorAll:()=>[], activeElement:null},
+    sessionStorage:{getItem:()=>'', removeItem(){}},
+    window:{scrollTo(){}}, location:{hash:'#dashboard'},
+    fetch:(path,options)=>new Promise((resolve,reject)=>requests.push({path,options,resolve,reject})),
+  });
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, logout, navigate, render};', sandbox);
+  const ui = sandbox.ui;
+  const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin}};
+  ui.applyAuth(auth);
+  Object.assign(ui.state, {page:'telemetry', loaded:true, serverId:'a', servers:[{id:'a',name:'World A',maxPlayers:4},{id:'b',name:'World B',maxPlayers:4}]});
+  const reply = (path, body, status=200) => {
+    const request = requests.find((request)=>request.path === path && !request.done);
+    assert.ok(request, `No pending request for ${path}`);
+    request.done = true;
+    request.resolve({status,ok:status===200,headers:{get:()=>null},text:async()=>JSON.stringify(body)});
+    return request;
+  };
+  const flush = () => new Promise(setImmediate);
+  const discover = async () => {
+    reply('/api/auth',auth);
+    await flush();
+    reply('/api/bootstrap',{servers:[{id:'a',name:'World A',maxPlayers:4},{id:'b',name:'World B',maxPlayers:4}]});
+    await flush();
+  };
+  return {ui, element, requests, reply, flush, discover, clock, timers, sandbox, advanceMonotonic:(delta)=>{monotonicNow += delta;}};
+}
+
+test('switching servers clears rendered names immediately and aborts before auth discovery', async () => {
+  const f = refreshFixture();
+  f.ui.state.telemetry = rosterResponse();
+  f.ui.render();
+  const first = f.ui.refresh();
+  await f.discover();
+  const oldRequest = f.requests.at(-1);
+  f.ui.handleChange({target:{id:'server-filter',value:'b'}});
+  assert.equal(oldRequest.options.signal.aborted,true);
+  assert.equal(f.ui.state.telemetry,null);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  await first;
+  assert.equal(f.ui.state.telemetry,null);
+  assert.equal(f.ui.state.refreshing,true);
+  await f.discover();
+  f.reply('/api/servers/b/telemetry?range=60s',rosterResponse('b',[{name:'Bob',characterName:'Warrior'}]));
+  await f.flush();
+  assert.match(f.element('#content').innerHTML,/Bob/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+});
+
+test('inventory reconciliation clears old names before replacement telemetry settles', async () => {
+  const f = refreshFixture();
+  f.ui.state.telemetry = rosterResponse();
+  f.ui.render();
+  const pending = f.ui.refresh();
+  f.reply('/api/auth',{mode:'oidc',authenticated:true,subject:'test',role:'viewer',csrfToken:'session',capabilities:{dashboard:true,telemetry:true}});
+  await f.flush();
+  f.reply('/api/bootstrap',{servers:[{id:'b',name:'World B',maxPlayers:4}],cluster:'test',mode:'demo'});
+  await f.flush();
+  assert.equal(f.ui.state.serverId,'');
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+  f.reply('/api/servers/b/telemetry?range=60s',rosterResponse('b',[{name:'Bob',characterName:'Warrior'}]));
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Bob/);
+});
+
+test('accepted telemetry renders before an unrelated slow request settles', async () => {
+  const f = refreshFixture(true);
+  const pending = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  await f.flush();
+  assert.match(f.element('#content').innerHTML,/Alice|Mage/);
+  f.reply('/api/servers/a/logs?tail=100',{error:'Logs unavailable'},500);
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Alice|Mage/);
+});
+
+test('A to B to A rejects the first A generation and late errors', async () => {
+  const f = refreshFixture();
+  const oldA = f.ui.refresh();
+  await f.discover();
+  const firstRequest = f.requests.at(-1);
+  f.ui.handleChange({target:{id:'server-filter',value:'b'}});
+  await f.discover();
+  const bRequest = f.requests.at(-1);
+  f.ui.handleChange({target:{id:'server-filter',value:'a'}});
+  await f.discover();
+  const latestRequest = f.requests.at(-1);
+  const response = (body) => ({status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify(body)});
+  latestRequest.resolve(response(rosterResponse('a',[{name:'Current A',characterName:'Current mage'}])));
+  await f.flush();
+  const currentHTML = f.element('#content').innerHTML;
+  firstRequest.resolve(response(rosterResponse('a',[{name:'Old A',characterName:'Old mage'}])));
+  bRequest.reject(new Error('Old B error'));
+  await oldA;
+  await f.flush();
+  assert.equal(f.element('#content').innerHTML,currentHTML);
+  assert.equal(f.element('#error-banner').hidden,true);
+  assert.equal(f.ui.state.telemetry.playerRoster.players[0].name,'Current A');
+});
+
+test('range and page changes, response identity, failures, and logout cannot expose late names', async () => {
+  for (const change of ['range','page','response identity','failure','logout','session']) {
+    const f = refreshFixture();
+    f.ui.state.telemetry = rosterResponse();
+    f.ui.render();
+    const pending = f.ui.refresh();
+    await f.discover();
+    if (change === 'range') {
+      f.ui.handleChange({target:{id:'telemetry-range',value:'5m'}});
+      assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+    } else if (change === 'page') {
+      f.ui.navigate();
+    } else if (change === 'logout') {
+      const logout = f.ui.logout();
+      f.reply('/api/auth/logout',{});
+      await logout;
+    } else if (change === 'session') {
+      f.ui.applyAuth({mode:'oidc',authenticated:true,subject:'new',role:'viewer',csrfToken:'new',capabilities:{dashboard:true,telemetry:true}});
+    }
+    f.reply('/api/servers/a/telemetry?range=60s', change === 'failure' ? {error:'Collection unavailable'} : rosterResponse(change === 'response identity' ? 'b' : 'a'), change === 'failure' ? 500 : 200);
+    await pending;
+    assert.equal(f.ui.state.telemetry,null,change);
+    assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage|<dt>Name<\/dt>/,change);
+    if (change === 'response identity' || change === 'failure') assert.equal(f.element('#error-banner').hidden,false);
+  }
+});
+
+test('paused telemetry expires names locally without another request', () => {
+  const f = refreshFixture();
+  f.ui.state.telemetry = rosterResponse();
+  f.ui.state.telemetry.metrics.players.observedAt = new Date(f.clock.now).toISOString();
+  f.ui.state.paused = true;
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  const timer = [...f.timers.values()][0];
+  assert.ok(timer.delay > 0 && timer.delay <= 45001);
+  f.clock.now += 45001;
+  timer.fn();
+  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+  assert.equal(f.requests.length,0);
+});
+
+test('accepted roster freshness ignores browser wall-clock skew', async () => {
+  const f = refreshFixture();
+  const pending = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  f.clock.now += 10 * 60 * 1000;
+  f.advanceMonotonic(1000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  f.advanceMonotonic(45000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+});
+
+test('repeated telemetry for one observation cannot renew roster freshness', async () => {
+  const f = refreshFixture();
+  const response = rosterResponse();
+  const first = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',response);
+  await first;
+  const firstDeadline = f.ui.state.rosterDeadline;
+  f.advanceMonotonic(1000);
+  const second = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',response);
+  await second;
+  assert.equal(f.ui.state.rosterDeadline,firstDeadline);
+  f.advanceMonotonic(45000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+});
+
+test('an independent log failure keeps successfully refreshed telemetry', async () => {
+  const f = refreshFixture(true);
+  const pending = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  f.reply('/api/servers/a/logs?tail=100',{error:'Logs unavailable'},500);
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Alice|Mage/);
+  assert.match(f.element('#content').innerHTML,/1 \/ 4/);
+  assert.equal(f.element('#error-banner').textContent,'Logs unavailable');
+});

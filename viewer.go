@@ -75,6 +75,7 @@ func viewerMetrics(metrics map[string]MetricReading) map[string]ViewerMetric {
 
 type ViewerTelemetry struct {
 	Server            ViewerServer            `json:"server"`
+	PlayerRoster      PlayerRoster            `json:"playerRoster"`
 	Metrics           map[string]ViewerMetric `json:"metrics"`
 	MetricsAvailable  bool                    `json:"metricsAvailable"`
 	Samples           []MetricSample          `json:"samples"`
@@ -82,8 +83,35 @@ type ViewerTelemetry struct {
 	HealthChecks      []ViewerHealthCheck     `json:"healthChecks"`
 }
 
+func viewerPlayerRoster(roster PlayerRoster, players ViewerMetric) PlayerRoster {
+	status := roster.Status
+	if status == "" && roster.Players != nil {
+		status = RosterAvailable
+	}
+	result := PlayerRoster{Status: status}
+	switch status {
+	case RosterAvailable:
+		if players.Status != "available" || players.Value == nil || roster.Players == nil {
+			return unavailableRoster("Player roster details are not currently available")
+		}
+		result.FreshForMs = roster.FreshForMs
+		result.Players = make([]ConnectedPlayer, len(roster.Players))
+		for i, player := range roster.Players {
+			result.Players[i] = ConnectedPlayer{Name: player.Name, CharacterName: player.CharacterName}
+		}
+	case RosterError:
+		result.Reason = "The game API returned an invalid player roster"
+	case RosterUnavailable:
+		result.Reason = "Player roster details are not currently available"
+	default:
+		return unavailableRoster("Player roster details are not currently available")
+	}
+	return result
+}
+
 func viewerTelemetry(telemetry Telemetry) ViewerTelemetry {
 	result := ViewerTelemetry{Server: viewerServer(telemetry.Server), Metrics: viewerMetrics(telemetry.Metrics), MetricsAvailable: telemetry.MetricsAvailable, Samples: []MetricSample{}, MetricDefinitions: []MetricDefinition{}}
+	result.PlayerRoster = viewerPlayerRoster(telemetry.PlayerRoster, result.Metrics["players"])
 	result.HealthChecks = []ViewerHealthCheck{}
 	if ready := result.Metrics["engineReady"]; ready.ObservedAt != nil {
 		status := ready.Status

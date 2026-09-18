@@ -191,6 +191,7 @@ type UpdateServerRequest struct {
 
 type Telemetry struct {
 	Server            Server                   `json:"server"`
+	PlayerRoster      PlayerRoster             `json:"playerRoster"`
 	Metrics           map[string]MetricReading `json:"metrics"`
 	MetricsAvailable  bool                     `json:"metricsAvailable"`
 	Samples           []MetricSample           `json:"samples"`
@@ -412,18 +413,78 @@ type CommandRunner interface {
 
 type shellRunner struct{}
 
+const (
+	maxCommandStdoutBytes  = 8 << 20
+	maxCommandStderrBytes  = 64 << 10
+	commandDiagnosticBytes = 4 << 10
+	commandWaitDelay       = 100 * time.Millisecond
+)
+
+var errCommandOutputLimit = errors.New("command output exceeded limit")
+
+type boundedOutput struct {
+	data     []byte
+	limit    int
+	cancel   context.CancelFunc
+	overflow bool
+}
+
+func (b *boundedOutput) Write(data []byte) (int, error) {
+	if b.overflow {
+		return len(data), nil
+	}
+	remaining := b.limit - len(b.data)
+	if len(data) > remaining {
+		if remaining > 0 {
+			b.data = append(b.data, data[:remaining]...)
+		}
+		b.overflow = true
+		if b.cancel != nil {
+			b.cancel()
+		}
+		return len(data), nil
+	}
+	b.data = append(b.data, data...)
+	return len(data), nil
+}
+
+func commandDiagnostic(stdout, stderr []byte) string {
+	data := stderr
+	if len(data) == 0 {
+		data = stdout
+	}
+	data = []byte(strings.TrimSpace(string(data)))
+	if len(data) > commandDiagnosticBytes {
+		data = data[:commandDiagnosticBytes]
+	}
+	return string(data)
+}
+
 func (shellRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	output, err := cmd.CombinedOutput()
+	runContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(runContext, name, args...)
+	cmd.WaitDelay = commandWaitDelay
+	stdout := &boundedOutput{limit: maxCommandStdoutBytes, cancel: cancel}
+	stderr := &boundedOutput{limit: maxCommandStderrBytes, cancel: cancel}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	err := cmd.Run()
+	if stdout.overflow || stderr.overflow {
+		return nil, fmt.Errorf("%w: %s", errCommandOutputLimit, name)
+	}
 	if err != nil {
 		for _, arg := range args {
 			if strings.HasPrefix(arg, "--from-literal=") {
 				return nil, fmt.Errorf("%s: %w (Secret command details omitted)", name, err)
 			}
 		}
-		return output, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+		diagnostic := commandDiagnostic(stdout.data, stderr.data)
+		if diagnostic == "" {
+			return stdout.data, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		}
+		return stdout.data, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, diagnostic)
 	}
-	return output, nil
+	return stdout.data, nil
 }
 
 type Orchestrator interface {

@@ -149,6 +149,12 @@ td:last-child.actions { text-align: right; }
 .mini-charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
 .mini-charts .chart { height: 130px; }
 .telemetry-layout h2,.metric-definitions h2 { font-size: 22px; }
+.player-roster { list-style: none; margin: 0; padding: 0; }
+.player-roster li + li { border-top: 1px solid var(--color-divider); }
+.player-roster dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 0; padding: 12px 0; }
+.player-roster dl > div { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.player-roster dt { color: var(--color-muted-foreground); font-size: 14px; }
+.player-roster dd { margin: 4px 0 0; }
 .metric-definitions th,.metric-definitions td { padding-top: 6px; padding-bottom: 6px; }
 .metric-bar { height: 12px; background: var(--color-secondary); border-radius: 8px; margin-top: 10px; overflow: hidden; }
 .metric-bar span { display: block; background: var(--color-primary); height: 100%; border-radius: inherit; }
@@ -253,6 +259,8 @@ dialog.create-server-dialog { width: min(800px,calc(100% - 32px)); }
   .panel-heading { align-items: flex-start; flex-wrap: wrap; }
   h2 { font-size: 24px; }
   .mini-charts { grid-template-columns: 1fr; }
+  .player-roster dl { flex-direction: column; }
+  .player-roster dl > div { flex-basis: auto; }
   .lifecycle-details { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .toolbar > button { flex-grow: 1; }
   .toolbar .search-field { flex-basis: 100%; }

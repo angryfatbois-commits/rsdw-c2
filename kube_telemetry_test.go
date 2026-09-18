@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -86,7 +88,7 @@ func TestIdentityLookupFailureReason(t *testing.T) {
 	if got.metrics["players"].Reason != "Pod identity verification failed: fixture lookup denied" {
 		t.Fatalf("incorrect lookup failure reason: %q", got.metrics["players"].Reason)
 	}
-	if got.image != "" || got.network != nil || got.status != StatusUnknown {
+	if got.image != "" || got.network != nil || got.playerRoster.Players != nil || got.status != StatusUnknown {
 		t.Fatalf("unverified identity retained: %+v", got)
 	}
 }
@@ -192,6 +194,90 @@ func TestCollectRealSourceContract(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(runner.calls, "\n"), `-H "Authorization: Bearer $(cat /run/rsdwapi/token)"`) {
 		t.Fatal("game API not authenticated")
+	}
+	for _, call := range runner.calls {
+		if strings.Contains(call, "/api/players") && !strings.Contains(call, "--max-filesize") {
+			t.Fatalf("player API response is not bounded: %s", call)
+		}
+	}
+}
+
+func TestConnectedPlayerRosterCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload string
+		count         *float64
+		players       []ConnectedPlayer
+		status        RosterStatus
+	}{
+		{"populated", `{"count":3,"players":[{"name":"Alice","characterName":"Mage","playerId":"private","token":"secret"},{"name":"Bob","characterName":"Warrior"},{"name":"Alice","characterName":"Mage"}]}`, number(3), []ConnectedPlayer{{"Alice", "Mage"}, {"Bob", "Warrior"}, {"Alice", "Mage"}}, RosterAvailable},
+		{"trimmed", `{"count":1,"players":[{"name":" Alice ","characterName":" Mage "}]}`, number(1), []ConnectedPlayer{{"Alice", "Mage"}}, RosterAvailable},
+		{"empty", `{"count":0,"players":[]}`, number(0), []ConnectedPlayer{}, RosterAvailable},
+		{"mismatch", `{"count":4,"players":[]}`, number(4), []ConnectedPlayer{}, RosterAvailable},
+		{"partial", `{"count":4,"players":[{"name":"Alice"},{"characterName":"Mage"},{},{"name":" \t","characterName":"\n"}]}`, number(4), []ConnectedPlayer{{"Alice", ""}, {"", "Mage"}, {}, {}}, RosterAvailable},
+		{"count only", `{"count":4}`, number(4), nil, RosterUnavailable},
+		{"null", `{"count":4,"players":null}`, number(4), nil, RosterUnavailable},
+		{"object", `{"count":4,"players":{}}`, number(4), nil, RosterError},
+		{"string", `{"count":4,"players":"broken"}`, number(4), nil, RosterError},
+		{"bad entry", `{"count":4,"players":[{"name":"Alice"},7]}`, number(4), nil, RosterError},
+		{"null entry", `{"count":4,"players":[null]}`, number(4), nil, RosterError},
+		{"bad field", `{"count":4,"players":[{"name":42}]}`, number(4), nil, RosterError},
+		{"missing count", `{"players":[{"name":"Alice"}]}`, nil, nil, RosterUnavailable},
+		{"bad count", `{"count":"4","players":[{"name":"Alice"}]}`, nil, nil, RosterUnavailable},
+		{"negative count", `{"count":-1,"players":[{"name":"Alice"}]}`, nil, nil, RosterUnavailable},
+		{"fractional count", `{"count":1.5,"players":[]}`, nil, nil, RosterUnavailable},
+		{"oversized count", `{"count":2147483648,"players":[]}`, nil, nil, RosterUnavailable},
+		{"invalid JSON", `{"count":4,"players":[`, nil, nil, RosterUnavailable},
+		{"invalid top level", `[]`, nil, nil, RosterUnavailable},
+		{"failed request", "", nil, nil, RosterUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k, runner, server := collectorFixture()
+			runner.override = func(call string) ([]byte, error, bool) {
+				if strings.Contains(call, "/api/players") {
+					if tc.payload == "" {
+						return nil, errors.New("upstream failure"), true
+					}
+					return []byte(tc.payload), nil, true
+				}
+				return nil, nil, false
+			}
+			got := k.collectObservation(context.Background(), server, nil)
+			status := "available"
+			if tc.count == nil {
+				status = "error"
+			}
+			expectMetric(t, got.metrics, "players", status, tc.count)
+			expectMetric(t, got.metrics, "engineReady", "available", number(1))
+			if !reflect.DeepEqual(got.playerRoster.Players, tc.players) {
+				t.Fatalf("roster = %#v, want %#v", got.playerRoster.Players, tc.players)
+			}
+			if got.playerRoster.Status != tc.status {
+				t.Fatalf("roster status = %q, want %q (%s)", got.playerRoster.Status, tc.status, tc.name)
+			}
+			calls := 0
+			for _, call := range runner.calls {
+				if strings.Contains(call, "/api/players") {
+					calls++
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("players fetched %d times", calls)
+			}
+		})
+	}
+}
+
+func TestPlayerRosterBounds(t *testing.T) {
+	tooMany := make([]string, maxPlayerRosterEntries+1)
+	for i := range tooMany {
+		tooMany[i] = `{"name":"Player"}`
+	}
+	if roster := decodePlayerRoster([]byte("[" + strings.Join(tooMany, ",") + "]")); roster.Status != RosterError || roster.Players != nil {
+		t.Fatalf("too many players = %+v", roster)
+	}
+	longName := `{"name":` + strconv.Quote(strings.Repeat("x", maxPlayerFieldBytes+1)) + `}`
+	if roster := decodePlayerRoster([]byte("[" + longName + "]")); roster.Status != RosterError || roster.Players != nil {
+		t.Fatalf("overlong name = %+v", roster)
 	}
 }
 
@@ -300,6 +386,9 @@ func TestOwnershipAndReplacement(t *testing.T) {
 			}
 			if result.network != nil {
 				t.Fatal("unsafe baseline retained")
+			}
+			if result.playerRoster.Players != nil {
+				t.Fatal("roster retained for unsafe target")
 			}
 		})
 	}

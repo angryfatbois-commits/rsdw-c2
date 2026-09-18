@@ -157,6 +157,24 @@ func TestShellRunnerSecretFailure(t *testing.T) {
 	}
 }
 
+func TestShellRunnerRejectsOutputOverflow(t *testing.T) {
+	for _, tc := range []struct {
+		name, redirect string
+	}{
+		{"stdout", ""},
+		{"stderr", " >&2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := (shellRunner{}).Run(ctx, "sh", "-c", "while :; do printf 0123456789abcdef"+tc.redirect+"; done")
+			if !errors.Is(err, errCommandOutputLimit) {
+				t.Fatalf("overflow error = %v", err)
+			}
+		})
+	}
+}
+
 type secretFailureRunner struct{ token string }
 
 func (r *secretFailureRunner) Run(ctx context.Context, _ string, args ...string) ([]byte, error) {
