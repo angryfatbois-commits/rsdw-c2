@@ -129,6 +129,16 @@ func (a *App) handleStart(w http.ResponseWriter, r *http.Request, server Server)
 		return
 	}
 	defer a.lifecycleMu.Unlock()
+	if a.store.Snapshot().Producers[server.ID].Restart != nil {
+		writeError(w, http.StatusConflict, "a restart is already awaiting reconciliation")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := a.orchestrator.Scale(ctx, server, 1); err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
 	server, started, err := a.persistStart(server.ID)
 	if err != nil {
 		writeLifecycleError(w, err)
@@ -136,12 +146,6 @@ func (a *App) handleStart(w http.ResponseWriter, r *http.Request, server Server)
 	}
 	if started {
 		a.markTelemetryPending(server)
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	if err := a.orchestrator.Scale(ctx, server, 1); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
 	}
 	if a.demo {
 		if err := a.store.Update(func(state *State) error {

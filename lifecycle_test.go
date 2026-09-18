@@ -24,8 +24,8 @@ func (r *scaleRecorder) Run(_ context.Context, name string, args ...string) ([]b
 		if strings.Contains(joined, "--replicas=0") && status != StatusStopped {
 			return nil, errors.New("scale zero before persist")
 		}
-		if strings.Contains(joined, "--replicas=1") && status != StatusStarting && status != StatusOnline {
-			return nil, errors.New("scale one without start persist")
+		if strings.Contains(joined, "--replicas=1") && status != StatusStopped && status != StatusStarting && status != StatusOnline {
+			return nil, errors.New("scale one from an unexpected status")
 		}
 	}
 	r.calls = append(r.calls, joined)
@@ -138,8 +138,11 @@ func TestKubeStartKeepsInventoryOnScaleFailure(t *testing.T) {
 		t.Fatalf("failed start = %d %s", res.Code, res.Body.String())
 	}
 	server := app.store.Snapshot().Servers["world"]
-	if server.ID != "world" || server.Status != StatusStarting {
+	if server.ID != "world" || server.Status != StatusStopped {
 		t.Fatalf("inventory after failed start = %+v", server)
+	}
+	if res := requestJSON(t, app, http.MethodPost, "/api/servers/world/actions/restart", ""); res.Code != http.StatusConflict {
+		t.Fatalf("restart after failed start = %d %s", res.Code, res.Body.String())
 	}
 	recorder.err = nil
 	res = requestJSON(t, app, http.MethodPost, "/api/servers/world/actions/start", "")
