@@ -29,6 +29,8 @@ const (
 	BackupFailed          EventKind = "backup_failed"
 	IntegrationTest       EventKind = "integration_test"
 	RebootScheduleChanged EventKind = "reboot_schedule_changed"
+	ServerStopped         EventKind = "server_stopped"
+	ServerStarted         EventKind = "server_started"
 )
 
 type AlertRule struct {
@@ -47,6 +49,8 @@ var alertRules = []AlertRule{
 	{PlayerLimitReached, "Player limit reached", true, "Fresh game API count crossing the configured limit", "observed"},
 	{ServerDown, "Server down", true, "Three definitive unhealthy observations over at least 30 seconds", "observed"},
 	{ServerRecovered, "Server recovered", true, "Two healthy observations over at least 15 seconds after an outage", "observed"},
+	{ServerStopped, "Server stopped", true, "C2 operator parked the world without deleting inventory or volumes", "observed"},
+	{ServerStarted, "Server started", true, "C2 operator started a parked world", "observed"},
 	{BackupStarted, "Backup started (unavailable until a backup producer exists)", false, "No backup producer", "unavailable"},
 	{BackupCompleted, "Backup completed (unavailable until a backup producer exists)", false, "No backup producer", "unavailable"},
 	{BackupFailed, "Backup failed (unavailable until a backup producer exists)", false, "No backup producer", "unavailable"},
@@ -183,7 +187,7 @@ func emitAlert(state *State, server Server, kind EventKind, operation, details s
 	case ServerDown, ServerRecovered:
 		category = "health"
 	}
-	if kind == RestartRequested || kind == PlayerLimitReached {
+	if kind == RestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
 		severity = "warning"
 	}
 	if kind == RestartFailed || kind == ServerDown {

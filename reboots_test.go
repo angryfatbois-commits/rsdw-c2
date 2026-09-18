@@ -21,6 +21,7 @@ func (o *rebootTestOrchestrator) Restart(_ context.Context, server Server) error
 	o.calls = append(o.calls, server)
 	return o.err
 }
+func (o *rebootTestOrchestrator) Scale(context.Context, Server, int) error { return nil }
 func (o *rebootTestOrchestrator) Logs(context.Context, Server, int) ([]LogLine, error) {
 	return nil, nil
 }
@@ -240,6 +241,38 @@ func TestScheduledRebootDeletionReceiptBlocksClaimsAndNewSchedules(t *testing.T)
 	created := requestJSON(t, app, http.MethodPost, "/api/reboots", `{"serverId":"world","enabled":false,"mode":"daily","dailyTimes":["05:00"],"executionTimezone":"UTC"}`)
 	if created.Code != http.StatusBadRequest || !strings.Contains(created.Body.String(), "serverId") {
 		t.Fatalf("new schedule for deleting target = %d: %s", created.Code, created.Body.String())
+	}
+}
+
+func TestScheduledRebootStoppedTargetSkipsOccurrences(t *testing.T) {
+	app := newTestApp(t, false)
+	runner := &rebootTestOrchestrator{}
+	app.orchestrator = runner
+	now := rebootAt("2026-09-17T12:00:00Z")
+	app.clock = func() time.Time { return now }
+	due := now.Add(-15 * time.Second)
+	if err := app.store.Update(func(state *State) error {
+		state.initReboots()
+		state.Servers["world"] = Server{ID: "world", Name: "World", Status: StatusStopped}
+		state.RebootSchedules["parked"] = rebootSchedule{ID: "parked", Definition: rebootDefinition{ServerID: "world", Mode: rebootModeDaily, DailyTimes: []string{"05:00"}, ExecutionTimezone: "UTC"}, Enabled: true, Revision: 1, NextRun: cloneTimePtr(&due)}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.scanReboots(context.Background(), now)
+	if len(runner.calls) != 0 {
+		t.Fatalf("stopped target dispatched = %+v", runner.calls)
+	}
+	state := app.store.Snapshot()
+	if len(state.RebootHistory) != 1 || state.RebootHistory[0].Result != rebootSkipped || !strings.Contains(state.RebootHistory[0].Reason, "stopped") {
+		t.Fatalf("stopped target result = %+v", state.RebootHistory)
+	}
+	if schedule := state.RebootSchedules["parked"]; schedule.LastResult != rebootSkipped || !strings.Contains(schedule.LastReason, "stopped") {
+		t.Fatalf("schedule = %+v", schedule)
+	}
+	created := requestJSON(t, app, http.MethodPost, "/api/reboots", `{"serverId":"world","enabled":false,"mode":"daily","dailyTimes":["05:00"],"executionTimezone":"UTC"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("new schedule for stopped target = %d: %s", created.Code, created.Body.String())
 	}
 }
 

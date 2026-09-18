@@ -291,7 +291,7 @@ func (a *Auth) authenticate(r *http.Request) (Principal, authSession) {
 
 func capabilities(role Role) map[string]bool {
 	read, admin := role == RoleViewer || role == RoleAdmin, role == RoleAdmin
-	return map[string]bool{"dashboard": read, "telemetry": read, "events": admin, "maintenance": admin, "integrations": admin, "reboots": admin, "create": admin, "delete": admin, "restart": admin, "update": admin, "logs": admin, "updateCheck": admin}
+	return map[string]bool{"dashboard": read, "telemetry": read, "events": admin, "maintenance": admin, "integrations": admin, "reboots": admin, "create": admin, "delete": admin, "restart": admin, "stop": admin, "start": admin, "update": admin, "logs": admin, "updateCheck": admin}
 }
 
 func viewerRoute(r *http.Request) bool {

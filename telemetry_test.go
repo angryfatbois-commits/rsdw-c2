@@ -39,6 +39,7 @@ func TestJoinObservationPreservesDeletionLifecycleStatus(t *testing.T) {
 	}{
 		{StatusDeleting, StatusDeleting},
 		{StatusStale, StatusStale},
+		{StatusStopped, StatusStopped},
 	} {
 		t.Run(string(test.persisted), func(t *testing.T) {
 			server := joinObservation(Server{ID: "world", Status: test.persisted}, observed, now)
@@ -52,6 +53,17 @@ func TestJoinObservationPreservesDeletionLifecycleStatus(t *testing.T) {
 	}
 }
 
+func TestJoinObservationKeepsCurrentImageWhenObservationOmitsIt(t *testing.T) {
+	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+	server := joinObservation(Server{ID: "world", Status: StatusStopped, CurrentImage: "example/server:keep", DesiredImage: "example/server:keep"}, observation{at: now, image: "", status: StatusUnknown, metrics: emptyMetrics()}, now)
+	if server.Status != StatusStopped {
+		t.Fatalf("status = %q", server.Status)
+	}
+	if server.CurrentImage != "example/server:keep" {
+		t.Fatalf("current image = %q", server.CurrentImage)
+	}
+}
+
 func TestViewerServerExposesDeletionLifecycleStatus(t *testing.T) {
 	for _, test := range []struct {
 		persisted Status
@@ -59,6 +71,7 @@ func TestViewerServerExposesDeletionLifecycleStatus(t *testing.T) {
 	}{
 		{StatusDeleting, StatusDeleting},
 		{StatusStale, StatusStale},
+		{StatusStopped, StatusStopped},
 	} {
 		t.Run(string(test.persisted), func(t *testing.T) {
 			server := viewerServer(Server{ID: "world", Status: test.persisted})

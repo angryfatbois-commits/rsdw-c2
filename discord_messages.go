@@ -50,6 +50,8 @@ var discordMessageSpecs = []discordMessageSpec{
 	{PlayerLimitReached, "Player limit reached", "It's full. Stop cramming people into this overcrowded shit-casket before it bursts and sprays everyone's problems across Discord.", 0xF59E0B, true},
 	{ServerDown, "Server unhealthy", "The server has stopped pretending to be functional. How honest of it.", 0xEF4444, true},
 	{ServerRecovered, "Server recovered", "It is back. Nobody knows why, and nobody should trust it.", 0x22C55E, true},
+	{ServerStopped, "Server stopped", "The operator parked this world. The volume is still here. The players are not.", 0xF59E0B, true},
+	{ServerStarted, "Server started", "Same world, same id, same disk. Try not to immediately fill it with tragedy.", 0x22C55E, true},
 	{IntegrationTest, "Discord integration test", "The bot successfully vomited into Discord and called it a test. The webhook works; civilization remains a mistake.", 0x8B5CF6, false},
 }
 

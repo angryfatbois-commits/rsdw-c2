@@ -107,7 +107,7 @@ func TestUpdateReturnsObservedImage(t *testing.T) {
 		demo                      bool
 	}{
 		{"observed", "example/server:1", "example/server:1", false},
-		{"unobserved", "", "", false},
+		{"unobserved", "", "example/server:stored", false},
 		{"demo", "", "example/server:2", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,7 +136,7 @@ func TestUpdateReturnsObservedImage(t *testing.T) {
 				if tc.observed != "" {
 					wantSeen = observedAt.Format(time.RFC3339Nano)
 				}
-				if got.LastSeen != wantSeen || got.UpdateAvailable != (tc.observed != "") {
+				if got.LastSeen != wantSeen || got.UpdateAvailable != (tc.wantImage != "" && tc.wantImage != "example/server:2") {
 					t.Fatalf("update lastSeen=%q updateAvailable=%t", got.LastSeen, got.UpdateAvailable)
 				}
 			}
@@ -711,6 +711,8 @@ func TestDemoAPIExercisesMutations(t *testing.T) {
 		path string
 		body string
 	}{
+		{"/api/servers/" + server.ID + "/actions/stop", ""},
+		{"/api/servers/" + server.ID + "/actions/start", ""},
 		{"/api/servers/" + server.ID + "/actions/restart", ""},
 		{"/api/servers/" + server.ID + "/actions/update", `{"imageTag":"0.1.2"}`},
 		{"/api/servers/" + server.ID + "/actions/check-update", ""},

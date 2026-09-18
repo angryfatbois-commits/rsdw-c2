@@ -801,10 +801,10 @@ func (a *App) claimScheduledReboots(serverID string, ids []string) (rebootDispat
 		state.initReboots()
 		claimNow := a.rebootNow()
 		_, ok := state.Servers[serverID]
-		if state.deleting(serverID) {
+		if skip, reason := state.skipsAutomatedRestarts(serverID); skip {
 			for _, id := range ids {
 				if schedule, exists := state.RebootSchedules[id]; exists && schedule.Enabled && schedule.NextRun != nil && !schedule.NextRun.After(claimNow) {
-					recordAndAdvanceReboot(state, schedule, rebootSkipped, "Target server deletion is in progress or recorded", claimNow)
+					recordAndAdvanceReboot(state, schedule, rebootSkipped, reason, claimNow)
 				}
 			}
 			return nil
