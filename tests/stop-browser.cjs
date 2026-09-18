@@ -1,9 +1,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {spawn} = require('node:child_process');
-const {once} = require('node:events');
 const {chromium} = require('playwright');
+const {fixtureProcesses} = require('./fixture-processes.cjs');
 
 const root = path.resolve(__dirname, '..');
 fs.mkdirSync(path.join(root, '.tmp'), {recursive:true});
@@ -12,27 +11,8 @@ const stateFile = path.join(output, 'state.json');
 const token = 'stop-browser-token';
 const world = {id:'world-1', name:'PETZKO', worldName:'PC2-US-EAST-01', namespace:'dragonwilds', release:'world-1', status:'online', maxPlayers:4, currentImage:'ghcr.io/petzkod5/rsdragonwilds-server:0.1.1'};
 fs.writeFileSync(stateFile, JSON.stringify({servers:{[world.id]:world}}));
-const children = [];
 let browser;
-
-async function start(command, args, env, pattern, detached = false) {
-  const child = spawn(command, args, {cwd:root, env:{...process.env, ...env}, detached, stdio:['ignore','pipe','pipe']});
-  const exited = once(child, 'exit');
-  children.push({child, exited, detached});
-  return new Promise((resolve, reject) => {
-    let logs = '';
-    const timeout = setTimeout(() => reject(new Error(`Fixture did not start: ${logs}`)), 30000);
-    child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-    child.on('exit', (code) => { clearTimeout(timeout); reject(new Error(`Fixture exited ${code}: ${logs}`)); });
-    const read = (chunk) => {
-      logs += chunk;
-      const match = logs.match(pattern);
-      if (match) { clearTimeout(timeout); resolve(match[1]); }
-    };
-    child.stdout.on('data', read);
-    child.stderr.on('data', read);
-  });
-}
+const {start, close} = fixtureProcesses(root);
 
 async function waitForToast(page) {
   await page.locator('#toast').waitFor({state:'hidden', timeout:5000}).catch(() => {});
@@ -140,11 +120,5 @@ async function run() {
 
 run().catch((error) => { console.error(error); process.exitCode = 1; }).finally(async () => {
   if (browser) await browser.close();
-  for (const {child, exited, detached} of children.reverse()) {
-    if (child.exitCode === null && child.signalCode === null) {
-      if (detached) process.kill(-child.pid, 'SIGTERM');
-      else child.kill();
-    }
-    await exited;
-  }
+  await close();
 });

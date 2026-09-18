@@ -37,16 +37,18 @@ func cancelStoppedHealthDeliveries(state *State, id string) {
 	}
 }
 
-func writeStoppedConflict(w http.ResponseWriter) {
+func rejectStopped(w http.ResponseWriter, server Server) bool {
+	if server.Status != StatusStopped {
+		return false
+	}
 	writeError(w, http.StatusConflict, errServerStopped.Error())
+	return true
 }
 
 func writeLifecycleError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errRebootConflict):
 		writeError(w, http.StatusConflict, "a restart is already awaiting reconciliation")
-	case errors.Is(err, errRebootNotFound):
-		writeError(w, http.StatusNotFound, "server not found")
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}
@@ -55,10 +57,7 @@ func writeLifecycleError(w http.ResponseWriter, err error) {
 func (a *App) persistStop(id string) (Server, error) {
 	var server Server
 	err := a.store.Update(func(state *State) error {
-		current, ok := state.Servers[id]
-		if !ok {
-			return errRebootNotFound
-		}
+		current := state.Servers[id]
 		if state.Producers[id].Restart != nil {
 			return errRebootConflict
 		}
@@ -84,13 +83,7 @@ func (a *App) persistStart(id string) (Server, bool, error) {
 	var server Server
 	started := false
 	err := a.store.Update(func(state *State) error {
-		current, ok := state.Servers[id]
-		if !ok {
-			return errRebootNotFound
-		}
-		if state.Producers[id].Restart != nil {
-			return errRebootConflict
-		}
+		current := state.Servers[id]
 		if current.Status == StatusStopped {
 			current.Status = StatusStarting
 			emitAlert(state, current, ServerStarted, "", "The operator started this world", time.Now().UTC())

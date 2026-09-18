@@ -62,8 +62,7 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	defer a.lifecycleMu.Unlock()
-	if server.Status == StatusStopped {
-		writeStoppedConflict(w)
+	if rejectStopped(w, server) {
 		return
 	}
 	if request.WorldName != nil && strings.TrimSpace(*request.WorldName) != defaultValue(server.WorldName, server.Name) && !request.ConfirmWorldName {

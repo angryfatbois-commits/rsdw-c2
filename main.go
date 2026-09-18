@@ -1190,8 +1190,7 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[1] == "logs" && r.Method == http.MethodGet {
-		if server.Status == StatusStopped {
-			writeStoppedConflict(w)
+		if rejectStopped(w, server) {
 			return
 		}
 		tail := boundedInt(r.URL.Query().Get("tail"), 100, 1, 500)
@@ -1242,8 +1241,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server
 		return
 	}
 	defer a.lifecycleMu.Unlock()
-	if server.Status == StatusStopped {
-		writeStoppedConflict(w)
+	if rejectStopped(w, server) {
 		return
 	}
 	var request UpdateServerRequest
@@ -1288,8 +1286,7 @@ func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server S
 		return
 	}
 	defer a.lifecycleMu.Unlock()
-	if server.Status == StatusStopped {
-		writeStoppedConflict(w)
+	if rejectStopped(w, server) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)

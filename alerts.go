@@ -133,8 +133,7 @@ func (a *App) handleRestart(w http.ResponseWriter, r *http.Request, server Serve
 		return
 	}
 	defer a.lifecycleMu.Unlock()
-	if server.Status == StatusStopped {
-		writeStoppedConflict(w)
+	if rejectStopped(w, server) {
 		return
 	}
 	dispatch, err := a.claimManualRestart(server.ID, a.rebootNow())
