@@ -146,9 +146,75 @@ async function run() {
   await page.locator('#modal').waitFor({state:'hidden'});
   assert.equal(saved().servers[target.id].name, 'Retry creator');
 
+  const savedID = '11111111111111111111111111111111';
+  const manualID = 'abcdef0123456789abcdef0123456789';
+  const secondManualID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const savedUser = await page.request.post(`${base}/api/users`, {
+    headers:{Authorization:`Bearer ${token}`}, data:{name:'Settings administrator', playerId:savedID},
+  });
+  assert.equal(savedUser.status(), 201, await savedUser.text());
+  await page.reload();
+  await page.getByTestId('server-filter').selectOption(target.id);
+  await page.getByTestId('edit-settings').click();
+  const serverPassword = page.locator('#modal-form input[name="serverPassword"]');
+  const adminPassword = page.locator('#modal-form input[name="adminPassword"]');
+  assert.equal(await serverPassword.inputValue(), '');
+  assert.equal(await adminPassword.inputValue(), '');
+  assert.equal(await serverPassword.getAttribute('type'), 'password');
+  assert.equal(await adminPassword.getAttribute('type'), 'password');
+  await serverPassword.fill('browser join secret');
+  await adminPassword.fill('browser admin secret');
+  await page.locator(`input[name="adminPlayerId"][value="${savedID}"]`).check();
+  await page.getByTestId('admin-manual-id').first().fill(manualID.toUpperCase());
+  await page.getByRole('button', {name:'Add administrator ID', exact:true}).click();
+  await page.getByTestId('admin-manual-id').nth(1).fill(secondManualID.toUpperCase());
+  const accessResponse = page.waitForResponse((item) => item.url() === `${base}/api/servers/${encodeURIComponent(target.id)}/actions/edit-settings` && item.request().method() === 'POST');
+  await page.getByTestId('confirm-modal').click();
+  const access = await accessResponse;
+  assert.deepEqual(access.request().postDataJSON(), {
+    serverPassword:'browser join secret', adminPassword:'browser admin secret',
+    adminIds:'11111111111111111111111111111111,abcdef0123456789abcdef0123456789,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', confirm:true,
+  });
+  assert.equal(access.status(), 200, await access.text());
+  assert.doesNotMatch(await access.text(), /browser join secret|browser admin secret/);
+  await page.locator('#modal').waitFor({state:'hidden'});
+  assert.equal(saved().servers[target.id].adminIds, `${savedID},${manualID},${secondManualID}`);
+  assert.doesNotMatch(fs.readFileSync(stateFile, 'utf8'), /browser join secret|browser admin secret/);
+
+  await page.getByTestId('edit-settings').click();
+  assert.equal(await serverPassword.inputValue(), '');
+  assert.equal(await adminPassword.inputValue(), '');
+  assert.equal(await page.locator(`input[name="adminPlayerId"][value="${savedID}"]`).isChecked(), true);
+  const reopenedManualIDs = await page.getByTestId('admin-manual-id').evaluateAll((inputs) => inputs.map((input) => input.value).filter(Boolean));
+  assert.deepEqual(reopenedManualIDs, [manualID, secondManualID]);
+  await page.locator('input[name="clearServerPassword"]').check();
+  const clearResponse = page.waitForResponse((item) => item.url() === `${base}/api/servers/${encodeURIComponent(target.id)}/actions/edit-settings` && item.request().method() === 'POST');
+  await page.getByTestId('confirm-modal').click();
+  const cleared = await clearResponse;
+  assert.deepEqual(cleared.request().postDataJSON(), {serverPassword:'', confirm:true});
+  assert.equal(cleared.status(), 200, await cleared.text());
+  await page.locator('#modal').waitFor({state:'hidden'});
+  assert.equal(saved().servers[target.id].ownerId, ownerID);
+  assert.equal(saved().servers[target.id].release, target.release);
+
+  const anonymous = await browser.newContext();
+  const denied = await anonymous.request.post(`${base}/api/servers/${encodeURIComponent(target.id)}/actions/edit-settings`, {
+    data:{serverPassword:'unauthorized', adminIds:'', confirm:true},
+  });
+  assert.equal(denied.status(), 401);
+  await anonymous.close();
+  await page.route('**/api/auth', (route) => route.fulfill({status:200, contentType:'application/json', body:JSON.stringify({
+    mode:'oidc', authenticated:true, subject:'settings-viewer', role:'viewer', csrfToken:'viewer-session', required:true,
+    capabilities:{dashboard:true, telemetry:true},
+  })}));
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#session-role')?.textContent === 'Viewer');
+  assert.equal(await page.getByTestId('edit-settings').count(), 0);
+  assert.equal(await page.locator('input[name="serverPassword"], input[name="adminPassword"], [data-testid="admin-ids"]').count(), 0);
+
   assert.deepEqual(Object.keys(saved().servers).sort(), ['scuffedtards', target.id, neighbor.id].sort());
   assert.deepEqual(errors, []);
-  console.log('PASS settings prepopulation, five-field edit, immutable owner/release preservation, in-place labels, no-op/cancel, validation, failed apply retry, warnings, stable-ID targeting, and dialog focus.');
+  console.log('PASS settings prepopulation, scalar and access edits, repeated administrator IDs, blank password reopen, explicit clear, private state, viewer controls, unauthorized writes, identity preservation, validation, retry, warnings, and dialog focus.');
   console.log(`Browser evidence: ${output}`);
 }
 
