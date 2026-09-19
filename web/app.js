@@ -424,13 +424,26 @@ function clearProtectedState() {
   $('#session-role').textContent = '';
   $('#admin-token').value = '';
   $('#environment').textContent = '';
-  $('#content').innerHTML = '';
+  if (!$('#content').querySelector?.('.login-scene')) $('#content').innerHTML = '';
+}
+/** @typedef {{mode: 'oidc'|'token', signInFailed: boolean, logoutUnconfirmed: boolean}} LoginSceneView */
+
+/** @param {LoginSceneView} view */
+function renderLoginScene(view) {
+  if (!$('#content .login-scene')) {
+    $('#content').replaceChildren($('#login-scene-template').content.cloneNode(true));
+  }
+  const status = view.mode === 'oidc' ? 'Sign in with your identity provider to access this cluster.' : 'Sign in with your admin token to access this cluster.';
+  const error = view.logoutUnconfirmed ? 'Could not confirm server sign out. Retry sign out before leaving this browser.' : view.signInFailed ? 'Sign in failed or this identity has no assigned role. Contact your administrator or try another identity.' : '';
+  if ($('#login-scene-status').textContent !== status) $('#login-scene-status').textContent = status;
+  if ($('#login-scene-error').textContent !== error) $('#login-scene-error').textContent = error;
+  $('[data-testid="retry-logout"]').hidden = !view.logoutUnconfirmed;
 }
 function lockedState() {
+  document.body?.classList.add('auth-locked');
   $('.page-controls').hidden = true;
   $('#content').setAttribute('aria-busy','false');
-  const message = state.authMode === 'oidc' ? 'Sign in with your identity provider to access this cluster.' : 'Sign in with your admin token to access this cluster.';
-  $('#content').innerHTML = `<section class="panel empty"><div class="empty-icon">${icon('server')}</div><h2>Sign in required</h2><p>${message}</p>${state.signInFailed ? '<p class="notice error" role="alert">Sign in failed or this identity has no assigned role. Contact your administrator or try another identity.</p>' : ''}<button class="primary" data-action="login" data-testid="open-login">Sign in</button></section>`;
+  renderLoginScene({mode:state.authMode === 'oidc' ? 'oidc' : 'token', signInFailed:state.signInFailed, logoutUnconfirmed:!!state.logoutCSRF});
   $('#connection-status').textContent = 'Waiting for sign in';
   $('#connection-status').classList.remove('connected');
 }
@@ -457,6 +470,7 @@ function applyAuth(auth) {
     $('#login-dialog').close();
   }
   if (!auth.authenticated) { requireLogin(false); return false; }
+  document.body?.classList.remove('auth-locked');
   Object.assign(state, {identity, authSubject:auth.subject || (auth.mode === 'token' ? 'token-admin' : ''), csrfToken:auth.csrfToken || '', role:auth.role, capabilities:auth.capabilities || {}, authRequired:false});
   if (changed || !validDisplayTimezone()) loadDisplayTimezone();
   $('.page-controls').hidden = false;
@@ -489,6 +503,7 @@ async function logout() {
         notice('Could not confirm server sign out. Retry sign out before leaving this browser.');
       }
     }
+    lockedState();
   }
 }
 function closeLogin() {
@@ -1672,4 +1687,5 @@ if (new URLSearchParams(location.search).get('signin') === 'failed') {
   state.signInFailed = true;
   history.replaceState(null, '', location.pathname + location.hash);
 }
+lockedState();
 navigate();

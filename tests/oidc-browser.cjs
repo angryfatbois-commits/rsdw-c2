@@ -62,7 +62,7 @@ async function run() {
   const auth = (page) => page.evaluate(async () => (await fetch('/api/auth')).json());
   const deniedOverview = async (page, id) => {
     await page.goto(`${base}/#servers/${encodeURIComponent(id)}`);
-    await page.getByRole('heading',{name:'Sign in required',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Dragonwilds Control Center',exact:true}).waitFor();
     assert.equal(await page.getByTestId('server-overview').count(),0);
     for (const endpoint of ['/api/bootstrap', `/api/servers/${encodeURIComponent(id)}/telemetry`, '/api/reboots']) {
       assert.equal(await page.evaluate(async (url) => (await fetch(url)).status,endpoint),401);

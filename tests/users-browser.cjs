@@ -63,7 +63,7 @@ async function run() {
   await page.goto(base + '/#users');
   await page.getByTestId('open-login').click();
   await page.getByTestId('admin-token').waitFor();
-  assert.match(await page.locator('#content').innerText(), /Sign in required/);
+  assert.match(await page.locator('#content').innerText(), /Dragonwilds Control Center/);
   assert.equal((await fetch(base + '/api/users')).status, 401);
   await signIn();
   assert.match(await page.locator('#content').innerText(), /No player IDs saved yet/);
@@ -296,7 +296,7 @@ async function run() {
   await submit('POST', '/api/users', 401);
   await page.getByTestId('admin-token').waitFor();
   assert.equal(await page.locator('#modal').isVisible(), false);
-  assert.match(await page.locator('#content').innerText(), /Sign in required/);
+  assert.match(await page.locator('#content').innerText(), /Dragonwilds Control Center/);
   await signIn();
   assert.deepEqual((await api('GET', '/api/users')).data, {users:[]});
   assert.deepEqual(errors, []);

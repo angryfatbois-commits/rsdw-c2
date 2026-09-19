@@ -16,7 +16,13 @@ async function run() {
     const server = {id:'world',name:'Test world',status:'online',maxPlayers:4};
     await page.route('http://roster.test/**', async (route) => {
       const url = new URL(route.request().url());
-      const files = {'/':'index.html','/app.js':'app.js','/styles.css':'styles.css'};
+      const files = {
+        '/':'index.html',
+        '/app.js':'app.js',
+        '/styles.css':'styles.css',
+        '/assets/dragonwilds-login-desktop-v1.png':'assets/dragonwilds-login-desktop-v1.png',
+        '/assets/dragonwilds-login-mobile-v1.png':'assets/dragonwilds-login-mobile-v1.png',
+      };
       if (files[url.pathname]) {
         return route.fulfill({path:path.join(__dirname,'../web',files[url.pathname])});
       }
