@@ -12,6 +12,10 @@ func warningOccurrence(schedule rebootSchedule) string {
 	return fmt.Sprintf("%s/%d/%s", schedule.ID, schedule.Revision, schedule.NextRun.UTC().Format(time.RFC3339Nano))
 }
 
+func isScheduledRestartWarning(event Event) bool {
+	return event.Kind == RestartWarning && event.Evidence.RestartWarning != nil && event.Evidence.RestartWarning.Trigger == "scheduled"
+}
+
 func memoryPressureWarningOccurrence(serverID string, pressure MemoryPressureState) string {
 	return fmt.Sprintf("memory-pressure/%s/%s/%s", serverID, pressure.Runtime, pressure.Since.UTC().Format(time.RFC3339Nano))
 }
@@ -68,11 +72,11 @@ func (a *App) scanRestartWarnings(now time.Time) error {
 			if schedule.LastWarningOccurrence == occurrence {
 				continue
 			}
-			schedule.LastWarningOccurrence = occurrence
-			state.RebootSchedules[id] = schedule
 			if !warningEligible(state, schedule, now) {
 				continue
 			}
+			schedule.LastWarningOccurrence = occurrence
+			state.RebootSchedules[id] = schedule
 			warning := &RestartWarningEvidence{Trigger: "scheduled", RestartAt: *schedule.NextRun, Minutes: int(schedule.NextRun.Sub(now).Minutes() + 0.999999)}
 			emitAlertEvidence(state, state.Servers[schedule.Definition.ServerID], RestartWarning, "", "Scheduled restart approaching", now, AlertEvidence{RestartWarning: warning}, schedule.ID, occurrence)
 		}

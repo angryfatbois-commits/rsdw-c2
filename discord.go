@@ -160,6 +160,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 		}
 		var integration DiscordIntegration
 		claimed := false
+		scheduledWarning := isScheduledRestartWarning(d.Event)
 		err := a.store.Update(func(state *State) error {
 			d = state.Deliveries[id]
 			if (d.Status != DeliveryPending && d.Status != DeliveryRetry) || d.NextAttempt.After(claimNow) {
@@ -167,13 +168,13 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 			}
 			var ok bool
 			integration, ok = state.Integrations[d.IntegrationID]
-			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) || !warningDeliveryValid(state, d, claimNow) || (d.Event.Kind == RestartWarning && !a.rebootSchedulingEnabled()) {
+			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) || !warningDeliveryValid(state, d, claimNow) || (scheduledWarning && !a.rebootSchedulingEnabled()) {
 				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", claimNow
 				state.Deliveries[id] = d
 				state.pruneDeliveryHistory()
 				return nil
 			}
-			if normalizedProvider(d.Provider) == providerDiscord && state.DiscordRetryAt.After(now) {
+			if normalizedProvider(d.Provider) == providerDiscord && state.DiscordRetryAt.After(claimNow) {
 				return nil
 			}
 			d.Status, d.UpdatedAt = DeliverySending, claimNow

@@ -137,6 +137,34 @@ func TestMemoryPressureWarningCancelsWhenPressureClears(t *testing.T) {
 	}
 }
 
+func TestMemoryPressureWarningCancelsWhenRestartClaims(t *testing.T) {
+	state, server, start := alertFixture(t)
+	integration := state.Integrations["bot"]
+	integration.Rules[RestartWarning] = true
+	integration.Rules[MemoryPressureRestartRequested] = true
+	state.Integrations["bot"] = integration
+	policy := MemoryPressurePolicy{Enabled: true, ThresholdPercent: 85, Duration: time.Minute}
+
+	observePressure(t, policy, state, server, pressureSample(start), start)
+	observePressure(t, policy, state, server, pressureSample(start.Add(30*time.Second)), start.Add(30*time.Second))
+	dispatch := observePressure(t, policy, state, server, pressureSample(start.Add(time.Minute)), start.Add(time.Minute))
+	if dispatch.op.ID == "" || !slices.Equal(eventKinds(state), []EventKind{RestartWarning, MemoryPressureRestartRequested}) {
+		t.Fatalf("pressure restart = %+v, events = %v", dispatch, eventKinds(state))
+	}
+	for _, delivery := range state.Deliveries {
+		switch delivery.Event.Kind {
+		case RestartWarning:
+			if delivery.Status != DeliveryFailed || !strings.Contains(delivery.Result, "cancelled") {
+				t.Fatalf("pressure warning remained active: %+v", delivery)
+			}
+		case MemoryPressureRestartRequested:
+			if delivery.Status != DeliveryPending {
+				t.Fatalf("pressure restart delivery = %+v", delivery)
+			}
+		}
+	}
+}
+
 func TestMemoryPressureResetsContinuity(t *testing.T) {
 	for _, tc := range []string{"low", "negative used", "zero limit", "negative limit", "NaN", "infinity", "missing used", "missing limit", "unavailable", "stale metric", "missing timestamp", "future metric", "stale observation", "future observation", "zero observation", "gap", "duplicate", "out of order", "runtime change", "missing runtime", "stopped", "observed stopped", "deleting", "deletion receipt", "pending", "disabled"} {
 		t.Run(tc, func(t *testing.T) {

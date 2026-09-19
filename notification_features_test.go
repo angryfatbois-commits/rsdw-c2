@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -101,6 +102,11 @@ func TestAlertEvidenceCopiesHistoryDeliveriesAndSnapshots(t *testing.T) {
 	evidence := AlertEvidence{JoinedPlayers: []ConnectedPlayer{{CharacterName: "new"}}, PlayerCount: &PlayerCountEvidence{Available: true, Players: 2, MaxPlayers: 4}, RestartWarning: &RestartWarningEvidence{Trigger: "scheduled", Minutes: 5}}
 	event := emitAlertEvidence(s, server, PlayerJoined, "", "", now, evidence, "", "")
 	delivery := queueDeliveryForNewEvent(s, i, event)
+	requeued := queueDeliveryForNewEvent(s, i, event)
+	requeued.Event.Evidence.PlayerCount.Players = 77
+	if s.Deliveries[delivery.ID].Event.Evidence.PlayerCount.Players != 2 {
+		t.Fatal("existing delivery returned aliased evidence")
+	}
 	evidence.JoinedPlayers[0].CharacterName = "mutated input"
 	evidence.PlayerCount.Players = 99
 	evidence.RestartWarning.Minutes = 99
@@ -220,6 +226,45 @@ func TestScheduledWarningIsIdempotentAndCancelsWhenServerStops(t *testing.T) {
 	}
 }
 
+func TestScheduledWarningDoesNotConsumeIneligibleOccurrence(t *testing.T) {
+	app := newTestApp(t, true)
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	next := now.Add(5 * time.Minute)
+	server := app.store.Snapshot().Servers["scuffedtards"]
+	if err := app.store.Update(func(state *State) error {
+		state.Events = nil
+		integration := integrationFixture()
+		integration.Rules[RestartWarning] = true
+		state.Integrations[integration.ID] = integration
+		state.RebootSchedules["schedule"] = rebootSchedule{ID: "schedule", Definition: rebootDefinition{ServerID: server.ID, WarningMinutes: 10}, Enabled: true, Revision: 1, NextRun: cloneTimePtr(&next)}
+		state.Producers[server.ID] = AlertProducer{Restart: &RestartOperation{ID: "pending", RequestedAt: now.Add(-time.Minute)}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.scanRestartWarnings(now); err != nil {
+		t.Fatal(err)
+	}
+	blocked := app.store.Snapshot()
+	if len(blocked.Events) != 0 || blocked.RebootSchedules["schedule"].LastWarningOccurrence != "" {
+		t.Fatalf("ineligible occurrence was consumed: events=%v schedule=%+v", blocked.Events, blocked.RebootSchedules["schedule"])
+	}
+	if err := app.store.Update(func(state *State) error {
+		producer := state.Producers[server.ID]
+		producer.Restart = nil
+		state.Producers[server.ID] = producer
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.scanRestartWarnings(now); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.store.Snapshot(); len(got.Events) != 1 || got.Events[0].Kind != RestartWarning {
+		t.Fatalf("eligible occurrence did not warn: %+v", got.Events)
+	}
+}
+
 func TestWarningOnlyScheduleEditPreservesNextRun(t *testing.T) {
 	app := newTestApp(t, true)
 	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
@@ -261,6 +306,54 @@ func TestObservedStoppedStatusBlocksWarnings(t *testing.T) {
 	schedule := rebootSchedule{ID: "schedule", Definition: rebootDefinition{ServerID: server.ID, WarningMinutes: 5}, Enabled: true, Revision: 1, NextRun: cloneTimePtr(&next)}
 	if warningEligible(s, schedule, now) {
 		t.Fatal("stopped observation remained warning-eligible")
+	}
+	online := alertSample(now.Add(time.Minute), "healthy", "runtime", -1)
+	online.status = StatusOnline
+	observeAlerts(s, server, online, online.at)
+	if got := s.Servers[server.ID]; got.Status != StatusOnline || got.StopSource != "" {
+		t.Fatalf("observed stop did not recover after scale-up: %+v", got)
+	}
+	parked := server
+	parked.Status, parked.StopSource = StatusStopped, stopSourceOperator
+	s.Servers[server.ID] = parked
+	observeAlerts(s, server, online, online.at.Add(time.Minute))
+	if got := s.Servers[server.ID]; got.Status != StatusStopped || got.StopSource != stopSourceOperator {
+		t.Fatalf("operator stop was not preserved: %+v", got)
+	}
+}
+
+func TestMemoryPressureWarningIgnoresScheduledRebootFlag(t *testing.T) {
+	t.Setenv("RSDW_REBOOTS_ENABLED", "false")
+	app := newTestApp(t, true)
+	app.demo = false
+	app.orchestrator = &kubeOrchestrator{runner: commandFunc(func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`{"data":{"token":"` + base64.StdEncoding.EncodeToString([]byte("fixture-token")) + `"}}`), nil
+	})}
+	app.webhookTransport = transportFunc(func(*http.Request) (*http.Response, error) {
+		return discordResponse(http.StatusNoContent, "", nil), nil
+	})
+	now := time.Now().UTC()
+	server := app.store.Snapshot().Servers["scuffedtards"]
+	occurrence := "memory-pressure/scuffedtards/runtime/2026-09-18T12:00:00Z"
+	if err := app.store.Update(func(state *State) error {
+		integration := integrationFixture()
+		integration.Provider, integration.GuildID, integration.ChannelID, integration.WebhookURL = providerWebhook, "", "", "https://alerts.example.com/events"
+		integration.Rules = map[EventKind]bool{RestartWarning: true}
+		state.Integrations[integration.ID] = integration
+		state.Producers[server.ID] = AlertProducer{MemoryPressure: &MemoryPressureState{WarningOccurrence: occurrence}}
+		event := Event{ID: "pressure-warning", Kind: RestartWarning, ServerID: server.ID, ServerName: server.Name, Timestamp: now, OccurrenceID: occurrence, Evidence: AlertEvidence{RestartWarning: &RestartWarningEvidence{Trigger: "memory-pressure", RestartAt: now.Add(time.Minute), Minutes: 1}}}
+		queueDeliveryForNewEvent(state, integration, event)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.processDeliveries(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range app.store.Snapshot().Deliveries {
+		if delivery.Status != DeliverySent {
+			t.Fatalf("memory-pressure warning was gated by scheduled reboot flag: %+v", delivery)
+		}
 	}
 }
 

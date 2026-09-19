@@ -713,7 +713,7 @@ func reserveRestart(state *State, serverID string, now time.Time, kind EventKind
 	p.resetStreak()
 	p.PlayerAt = time.Time{}
 	state.Producers[serverID] = p
-	server.Status, server.LastRestart, server.RestartOperation = StatusStarting, op.RequestedAt.Format(time.RFC3339Nano), op.ID
+	server.Status, server.StopSource, server.LastRestart, server.RestartOperation = StatusStarting, "", op.RequestedAt.Format(time.RFC3339Nano), op.ID
 	state.Servers[serverID] = server
 	cancelObsoleteWarnings(state, now)
 	emitAlert(state, server, kind, op.ID, "Restart recorded; completion requires a ready marked replacement runtime", op.RequestedAt)
@@ -740,7 +740,7 @@ func (a *App) dispatchRestartOperation(ctx context.Context, dispatch rebootDispa
 			p.Restart = nil
 			state.Producers[dispatch.server.ID] = p
 			server := state.Servers[dispatch.server.ID]
-			server.Status, server.RestartOperation = StatusOnline, ""
+			server.Status, server.StopSource, server.RestartOperation = StatusOnline, "", ""
 			state.Servers[dispatch.server.ID] = server
 			emitAlert(state, server, RestartCompleted, dispatch.op.ID, "Demo simulated restart; no Kubernetes operation", a.rebootNow())
 			finishRebootOccurrences(state, dispatch.op.ID, rebootCompleted, "Demo simulated restart; no Kubernetes operation", a.rebootNow())

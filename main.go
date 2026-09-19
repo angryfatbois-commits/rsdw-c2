@@ -88,6 +88,7 @@ type Server struct {
 	CurrentImage          string                   `json:"currentImage"`
 	DesiredImage          string                   `json:"desiredImage"`
 	Status                Status                   `json:"status"`
+	StopSource            string                   `json:"stopSource,omitempty"`
 	Players               int                      `json:"players"`
 	MaxPlayers            int                      `json:"maxPlayers"`
 	MemoryLimitMiB        int                      `json:"memoryLimitMiB"`

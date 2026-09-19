@@ -9,9 +9,19 @@ import (
 
 var errServerStopped = errors.New("server is stopped; start it before this action")
 
+const (
+	stopSourceOperator = "operator"
+	stopSourceObserved = "observed"
+)
+
 func (s State) stopped(id string) bool {
 	server, ok := s.Servers[id]
 	return ok && server.Status == StatusStopped
+}
+
+func (s State) operatorStopped(id string) bool {
+	server, ok := s.Servers[id]
+	return ok && server.Status == StatusStopped && server.StopSource != stopSourceObserved
 }
 
 func (s State) skipsAutomatedRestarts(id string) (bool, string) {
@@ -61,8 +71,10 @@ func (a *App) persistStop(id string) (Server, error) {
 		if state.Producers[id].Restart != nil {
 			return errRebootConflict
 		}
-		if current.Status != StatusStopped {
-			current.Status = StatusStopped
+		wasStopped := current.Status == StatusStopped
+		current.Status = StatusStopped
+		current.StopSource = stopSourceOperator
+		if !wasStopped {
 			p := state.Producers[id]
 			p.Outage = false
 			p.MemoryPressure = nil
@@ -72,8 +84,8 @@ func (a *App) persistStop(id string) (Server, error) {
 			state.Producers[id] = p
 			cancelStoppedHealthDeliveries(state, current.ID)
 			emitAlert(state, current, ServerStopped, "", "The operator parked this world; volume and inventory remain", time.Now().UTC())
-			state.Servers[id] = current
 		}
+		state.Servers[id] = current
 		server = current
 		return nil
 	})
@@ -87,6 +99,7 @@ func (a *App) persistStart(id string) (Server, bool, error) {
 		current := state.Servers[id]
 		if current.Status == StatusStopped {
 			current.Status = StatusStarting
+			current.StopSource = ""
 			emitAlert(state, current, ServerStarted, "", "The operator started this world", time.Now().UTC())
 			state.Servers[id] = current
 			started = true

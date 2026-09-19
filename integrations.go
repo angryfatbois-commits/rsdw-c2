@@ -44,7 +44,7 @@ type AlertRule struct {
 }
 
 var alertRules = []AlertRule{
-	{RestartWarning, "Restart warning", true, "Scheduled restart warning", "observed"},
+	{RestartWarning, "Restart warning", true, "Scheduled or memory-pressure restart warning", "observed"},
 	{RestartRequested, "Restart requested", true, "C2 restart operation", "observed"},
 	{MemoryPressureRestartRequested, "Memory pressure restart requested", true, "Sustained fresh container memory usage at or above the fleet threshold", "observed"},
 	{RestartCompleted, "Restart completed", true, "Owned replacement runtime and fresh engine readiness", "observed"},
@@ -174,6 +174,7 @@ func queueDeliveryForNewEvent(state *State, integration DiscordIntegration, even
 	sum := sha256.Sum256([]byte(event.ID + "/" + integration.ID))
 	id := hex.EncodeToString(sum[:12])
 	if existing, ok := state.Deliveries[id]; ok {
+		existing.Event = existing.Event.clone()
 		return existing
 	}
 	d := Delivery{ID: id, IntegrationID: integration.ID, Event: event.clone(), Provider: normalizedProvider(integration.Provider), WebhookURL: integration.WebhookURL, GuildID: integration.GuildID, ChannelID: integration.ChannelID, Status: DeliveryPending, UpdatedAt: event.Timestamp}

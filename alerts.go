@@ -39,10 +39,23 @@ func (p *AlertProducer) resetStreak() {
 
 func persistObservedStatus(state *State, server Server, o observation, now time.Time) Server {
 	current, ok := state.Servers[server.ID]
-	if !ok || o.status == "" || o.status == StatusUnknown || current.Status == StatusDeleting || current.Status == StatusStale || (current.Status != StatusStopped && o.status != StatusStopped) {
+	if !ok || o.status == "" || o.status == StatusUnknown || current.Status == StatusDeleting || current.Status == StatusStale {
 		return current
 	}
-	current.Status = o.status
+	switch {
+	case o.status == StatusStopped:
+		if current.Status == StatusStopped && current.StopSource != stopSourceObserved {
+			return current
+		}
+		current.Status, current.StopSource = StatusStopped, stopSourceObserved
+	case current.Status == StatusStopped:
+		if current.StopSource != stopSourceObserved {
+			return current
+		}
+		current.Status, current.StopSource = o.status, ""
+	default:
+		return current
+	}
 	if !o.at.IsZero() && now.Sub(o.at) <= telemetryMaxAge {
 		current.LastSeen = o.at.Format(time.RFC3339Nano)
 	}
@@ -51,7 +64,7 @@ func persistObservedStatus(state *State, server Server, o observation, now time.
 }
 
 func observeAlerts(state *State, server Server, o observation, now time.Time) {
-	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) || state.stopped(server.ID) {
+	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) || state.operatorStopped(server.ID) {
 		return
 	}
 	p := state.Producers[server.ID]
@@ -62,6 +75,11 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 		return
 	}
 	server = persistObservedStatus(state, server, o, now)
+	if state.stopped(server.ID) {
+		p.LastAt = o.at
+		state.Producers[server.ID] = p
+		return
+	}
 	if o.at.Sub(p.LastAt) > telemetryMaxAge {
 		p.resetStreak()
 		p.PlayerAt = time.Time{}
@@ -82,7 +100,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 			finishRebootOccurrences(state, op.ID, rebootCompleted, "Replacement runtime is ready", o.at)
 			p.Restart, p.Runtime, p.HealthyBaseline = nil, o.runtime, true
 			current := state.Servers[server.ID]
-			current.Status = StatusOnline
+			current.Status, current.StopSource = StatusOnline, ""
 			state.Servers[server.ID] = current
 		} else if o.at.Sub(op.RequestedAt) >= restartTimeout && o.health != "" {
 			emitAlert(state, server, RestartFailed, op.ID, "No ready marked replacement confirmed within the restart deadline", o.at)

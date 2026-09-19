@@ -296,8 +296,11 @@ func joinObservation(server Server, result observation, now time.Time) Server {
 		server.Status = result.status
 		server.LastSeen = result.at.Format(time.RFC3339Nano)
 	}
-	if lifecycleStatus == StatusDeleting || lifecycleStatus == StatusStale || lifecycleStatus == StatusStopped {
+	keepObservedStopped := lifecycleStatus == StatusStopped && (server.StopSource != stopSourceObserved || result.status == StatusUnknown || result.at.IsZero() || now.Sub(result.at) > telemetryMaxAge || result.at.After(now))
+	if lifecycleStatus == StatusDeleting || lifecycleStatus == StatusStale || keepObservedStopped {
 		server.Status = lifecycleStatus
+	} else if lifecycleStatus == StatusStopped && server.StopSource == stopSourceObserved {
+		server.StopSource = ""
 	}
 	if result.image != "" {
 		server.CurrentImage = result.image
