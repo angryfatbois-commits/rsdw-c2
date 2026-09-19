@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
-const context = vm.createContext({});
+const context = vm.createContext({FormData});
 vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, dashboardModel, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, stop:true, start:true, update:true, logs:true, updateCheck:true};
@@ -291,7 +291,7 @@ state.integrationView = 'hub';
 state.servers = savedServers;
 
 state.capabilities = {dashboard:true, telemetry:true};
-for (const action of ['add-user', 'edit-user', 'delete-user']) {
+for (const action of ['add-user', 'edit-user', 'delete-user', 'edit-settings']) {
   state.modalAction = '';
   context.ui.openModal(action, 'stable-one');
   assert.equal(state.modalAction, '');
@@ -306,7 +306,7 @@ state.logs = 'SECRET LOG';
 for (const render of [context.ui.dashboard, telemetry, eventsPage, maintenance, context.ui.usersPage]) {
   html = render();
   assert.doesNotMatch(html, /Alice|0123456789abcdef|data-action="(?:add-user|edit-user|delete-user)"/);
-  assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:restart-server|update-image|check-update|log-output|event-search|event-range|export-events|load-older-events)"/);
+  assert.doesNotMatch(html, /SECRET|Add server|Create your first server|Server lifecycle|Server logs|Fleet activity|View all events|Check update|Updates available|data-testid="(?:edit-settings|admin-ids|restart-server|update-image|check-update|log-output|event-search|event-range|export-events|load-older-events)"|name="(?:serverPassword|adminPassword)"/);
   assert.doesNotMatch(html, /data-testid="(?:stop-server|start-server)"/);
 }
 html = telemetry();
@@ -321,11 +321,11 @@ const test = require('node:test');
 test('edit settings uses effective values and sends only changed fields', () => {
   const server = {id:'target', name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250};
   const initial = context.ui.editSettingsValues(server);
-  assert.deepEqual({...initial}, {name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250});
+  assert.deepEqual({...initial}, {name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250, adminIds:''});
   assert.equal(context.ui.editSettingsPatch(initial, {...initial}), null);
   assert.deepEqual({...context.ui.editSettingsPatch(initial, {...initial, name:'New creator', maxPlayers:'12'})}, {name:'New creator', maxPlayers:12, confirm:true});
   assert.deepEqual({...context.ui.editSettingsPatch(initial, {...initial, worldName:'New world', confirmWorldName:'true'})}, {worldName:'New world', confirmWorldName:true, confirm:true});
-  assert.deepEqual({...context.ui.editSettingsValues({name:'Legacy creator', maxPlayers:4})}, {name:'Legacy creator', worldName:'Legacy creator', maxPlayers:4, memoryLimitMiB:2048, cpuLimitMillis:1000});
+  assert.deepEqual({...context.ui.editSettingsValues({name:'Legacy creator', maxPlayers:4})}, {name:'Legacy creator', worldName:'Legacy creator', maxPlayers:4, memoryLimitMiB:2048, cpuLimitMillis:1000, adminIds:''});
 });
 test('create uploads one save with settings and preserves authentication headers', async () => {
   const requests = [];
@@ -989,6 +989,49 @@ test('adminIdsFromForm joins saved and manual player IDs and rejects invalid hex
   assert.throws(() => adminIdsFromForm(createForm([['adminPlayerIdManual', 'not-an-id']])), /32 hexadecimal/);
   assert.match(context.ui.adminIdsFields([{id:'stable-one', name:'Alice', playerId:savedPlayer}]), new RegExp(`value="${savedPlayer}"`));
   assert.doesNotMatch(context.ui.adminIdsFields([{id:'stable-one', name:'Alice', playerId:savedPlayer}]), /value="stable-one"/);
+});
+
+test('edit settings omits untouched passwords and distinguishes setting from explicit clearing', () => {
+  const initial = context.ui.editSettingsValues({name:'World', worldName:'World', maxPlayers:4, adminIds:''});
+  const form = (entries = []) => createForm([
+    ['name','World'], ['worldName','World'], ['maxPlayers','4'],
+    ['memoryLimitMiB','2048'], ['cpuLimitMillis','1000'], ...entries,
+  ]);
+  assert.equal(context.ui.editSettingsPatch(initial, form()), null);
+  assert.equal(context.ui.editSettingsPatch(initial, form([['serverPassword',''], ['adminPassword','']])), null);
+  for (const [field, clear] of [['serverPassword','clearServerPassword'], ['adminPassword','clearAdminPassword']]) {
+    assert.deepEqual({...context.ui.editSettingsPatch(initial, form([[field,'new secret']]))}, {[field]:'new secret', confirm:true});
+    assert.deepEqual({...context.ui.editSettingsPatch(initial, form([[field,''], [clear,'on']]))}, {[field]:'', confirm:true});
+  }
+  assert.deepEqual({...context.ui.editSettingsPatch(initial, form([
+    ['serverPassword','join secret'], ['adminPassword',''], ['clearAdminPassword','on'],
+  ]))}, {serverPassword:'join secret', adminPassword:'', confirm:true});
+});
+
+test('one edit combines repeated saved and manual administrator IDs without losing entries', () => {
+  const initial = context.ui.editSettingsValues({name:'World', worldName:'World', maxPlayers:4, adminIds:''});
+  const form = createForm([
+    ['name','World'], ['worldName','World'], ['maxPlayers','4'],
+    ['memoryLimitMiB','2048'], ['cpuLimitMillis','1000'],
+    ['adminPlayerId',savedPlayer], ['adminPlayerId',otherPlayer],
+    ['adminPlayerIdManual',manualPlayer.toUpperCase()],
+    ['adminPlayerIdManual','AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],
+    ['adminPlayerIdManual',savedPlayer], ['adminPlayerIdManual',''],
+    ['serverPassword',''], ['adminPassword',''],
+  ]);
+  assert.deepEqual({...context.ui.editSettingsPatch(initial, form)}, {
+    adminIds:'0123456789abcdef0123456789abcdef,11111111111111111111111111111111,abcdef0123456789abcdef0123456789,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', confirm:true,
+  });
+  initial.adminIds = '0123456789abcdef0123456789abcdef,11111111111111111111111111111111,abcdef0123456789abcdef0123456789,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  assert.equal(context.ui.editSettingsPatch(initial, form), null);
+  form.delete('adminPlayerId');
+  form.delete('adminPlayerIdManual');
+  assert.deepEqual({...context.ui.editSettingsPatch(initial, form)}, {adminIds:'', confirm:true});
+  form.append('adminPlayerIdManual','invalid');
+  assert.throws(() => context.ui.editSettingsPatch(initial, form), /32 hexadecimal/);
+  const fields = context.ui.adminIdsFields([{name:'Saved',playerId:savedPlayer}], [savedPlayer,manualPlayer,otherPlayer]);
+  assert.match(fields, new RegExp(`value="${manualPlayer}"`));
+  assert.match(fields, new RegExp(`value="${otherPlayer}"`));
 });
 
 test('serviceTypeField defaults to LoadBalancer and keeps NodePort and ClusterIP', () => {
