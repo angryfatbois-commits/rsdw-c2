@@ -1201,13 +1201,16 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   assert.match(html,/data-action="stop" data-id="c"/);
   state.fleetFilter = 'online';
   assert.equal(context.ui.dashboardModel().rows.length,3);
+  state.servers[1].updateAvailable = true;
   state.fleetFilter = 'attention';
-  assert.equal(context.ui.dashboardModel().rows[0].id,'c');
+  assert.deepEqual(context.ui.dashboardModel().rows.map((row) => row.id),['c']);
+  state.servers[1].updateAvailable = false;
   state.fleetFilter = 'all';
   state.rebootsAvailable = false;
   assert.equal(context.ui.dashboardModel().rows[0].schedule.text,'Unavailable');
   state.servers[0].metrics.players = {status:'unavailable',value:20};
   assert.equal(context.ui.dashboardModel().summary.incomplete,true);
+  assert.match(context.ui.dashboard(),/4 known \/ 40/);
   state.capabilities = {dashboard:true,telemetry:true};
   state.dashboardView = 'rows';
   html = context.ui.dashboard();

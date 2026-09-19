@@ -696,7 +696,7 @@ function dashboardModel() {
   const known = rows.reduce((sum,row) => sum + (row.players ?? 0),0);
   return {
     summary:{total:rows.length, online:rows.filter((row) => row.running).length, players:known, capacity:rows.reduce((sum,row) => sum + (row.capacity || 0),0), incomplete:rows.some((row) => row.players == null)},
-    rows:rows.filter((row) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? row.running : row.attention || row.update)),
+    rows:rows.filter((row) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? row.running : row.attention)),
     filter:state.fleetFilter, view:state.dashboardView || 'rows',
   };
 }
@@ -729,7 +729,8 @@ function dashboardTable(rows) {
 }
 function dashboard() {
   const model = dashboardModel(), summary = model.summary;
-  const stats = `<div class="stats dashboard-stats">${stat('Registered servers', summary.total, 'server')}${stat('Online', `${summary.online} / ${summary.total}`, 'pulse')}${stat('Players online', `${summary.players} / ${summary.capacity}`, 'users')}${summary.incomplete ? '<p class="summary-note">Known players only; some counts are unavailable.</p>' : ''}</div>`;
+  const playerSummary = summary.incomplete ? `${summary.players} known / ${summary.capacity}` : `${summary.players} / ${summary.capacity}`;
+  const stats = `<div class="stats dashboard-stats">${stat('Registered servers', summary.total, 'server')}${stat('Online', `${summary.online} / ${summary.total}`, 'pulse')}${stat('Players online', playerSummary, 'users')}${summary.incomplete ? '<p class="summary-note">Known players only; some counts are unavailable.</p>' : ''}</div>`;
   if (!state.servers.length) return stats + emptyState();
   return `${stats}<section class="panel dashboard-fleet"><div class="panel-heading"><div><h2>Servers</h2><p>${summary.total} worlds · ${model.view === 'table' ? 'table' : 'row'} view</p></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips console-toolbar" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${model.filter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}<button class="link-button console-view" data-action="dashboard-view" data-value="${model.view === 'table' ? 'rows' : 'table'}">${model.view === 'table' ? 'Row view' : 'Table view'}</button></div>${model.rows.length ? model.view === 'table' ? dashboardTable(model.rows) : `<div class="console-rows">${model.rows.map(dashboardRow).join('')}</div>` : '<p class="no-results">No servers match this filter.</p>'}</section>`;
 }
