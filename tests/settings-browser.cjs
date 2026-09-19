@@ -204,7 +204,7 @@ async function run() {
   assert.equal(denied.status(), 401);
   await anonymous.close();
   await page.route('**/api/auth', (route) => route.fulfill({status:200, contentType:'application/json', body:JSON.stringify({
-    mode:'oidc', authenticated:true, subject:'settings-viewer', role:'viewer', csrfToken:'viewer-session', required:true,
+    mode:'token', authenticated:true, subject:'settings-viewer', role:'viewer', csrfToken:'viewer-session', required:true,
     capabilities:{dashboard:true, telemetry:true},
   })}));
   await page.reload();
