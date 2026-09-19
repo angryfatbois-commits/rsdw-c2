@@ -34,18 +34,19 @@ const (
 )
 
 type rebootSchedule struct {
-	ID               string           `json:"id"`
-	Definition       rebootDefinition `json:"definition"`
-	Enabled          bool             `json:"enabled"`
-	Revision         uint64           `json:"revision"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
-	IntervalAnchor   *time.Time       `json:"intervalAnchor,omitempty"`
-	NextRun          *time.Time       `json:"nextRun,omitempty"`
-	LastOccurrenceAt *time.Time       `json:"lastOccurrenceAt,omitempty"`
-	LastResult       rebootResult     `json:"lastResult,omitempty"`
-	LastReason       string           `json:"lastReason,omitempty"`
-	LastOperationID  string           `json:"lastOperationId,omitempty"`
+	LastWarningOccurrence string           `json:"lastWarningOccurrence,omitempty"`
+	ID                    string           `json:"id"`
+	Definition            rebootDefinition `json:"definition"`
+	Enabled               bool             `json:"enabled"`
+	Revision              uint64           `json:"revision"`
+	CreatedAt             time.Time        `json:"createdAt"`
+	UpdatedAt             time.Time        `json:"updatedAt"`
+	IntervalAnchor        *time.Time       `json:"intervalAnchor,omitempty"`
+	NextRun               *time.Time       `json:"nextRun,omitempty"`
+	LastOccurrenceAt      *time.Time       `json:"lastOccurrenceAt,omitempty"`
+	LastResult            rebootResult     `json:"lastResult,omitempty"`
+	LastReason            string           `json:"lastReason,omitempty"`
+	LastOperationID       string           `json:"lastOperationId,omitempty"`
 }
 
 type rebootExecution struct {
@@ -63,6 +64,7 @@ type rebootExecution struct {
 }
 
 type rebootScheduleView struct {
+	WarningMinutes    int          `json:"warningMinutes"`
 	ID                string       `json:"id"`
 	ServerID          string       `json:"serverId"`
 	ServerName        string       `json:"serverName"`
@@ -89,6 +91,7 @@ type rebootExecutionView struct {
 }
 
 type rebootRequest struct {
+	WarningMinutes        int        `json:"warningMinutes"`
 	ServerID              string     `json:"serverId"`
 	Enabled               *bool      `json:"enabled"`
 	Mode                  rebootMode `json:"mode"`
@@ -188,7 +191,8 @@ func nextScheduleRun(schedule rebootSchedule, after time.Time) (time.Time, error
 
 func scheduleView(schedule rebootSchedule, servers map[string]Server) rebootScheduleView {
 	view := rebootScheduleView{
-		ID: schedule.ID, ServerID: schedule.Definition.ServerID, Mode: schedule.Definition.Mode,
+		WarningMinutes: schedule.Definition.WarningMinutes,
+		ID:             schedule.ID, ServerID: schedule.Definition.ServerID, Mode: schedule.Definition.Mode,
 		Cron: schedule.Definition.Cron, IntervalValue: schedule.Definition.IntervalValue,
 		IntervalUnit: schedule.Definition.IntervalUnit, DailyTimes: append([]string(nil), schedule.Definition.DailyTimes...),
 		ExecutionTimezone: schedule.Definition.ExecutionTimezone, Enabled: schedule.Enabled, Revision: schedule.Revision,
@@ -300,6 +304,10 @@ func decodeRebootJSON(w http.ResponseWriter, r *http.Request, request *rebootReq
 
 func normalizeRebootRequest(request rebootRequest, requireServer bool) (rebootDefinition, bool, error) {
 	definition := rebootDefinition{ServerID: strings.TrimSpace(request.ServerID), Mode: request.Mode, ExecutionTimezone: strings.TrimSpace(request.ExecutionTimezone)}
+	if request.WarningMinutes < 0 || request.WarningMinutes > 60 {
+		return rebootDefinition{}, false, errors.New("warningMinutes must be between 0 and 60")
+	}
+	definition.WarningMinutes = request.WarningMinutes
 	if requireServer && definition.ServerID == "" {
 		return rebootDefinition{}, false, errors.New("serverId is required")
 	}
@@ -459,6 +467,7 @@ func (a *App) deleteReboot(w http.ResponseWriter, r *http.Request, id string) {
 			return errRebootNotFound
 		}
 		delete(state.RebootSchedules, id)
+		cancelObsoleteWarnings(state, a.rebootNow())
 		server := state.Servers[schedule.Definition.ServerID]
 		appendRebootAudit(state, server, requestPrincipal(r).Subject, id, "Reboot schedule deleted", "A claimed operation, if any, continues; deletion does not cancel external work")
 		return nil
@@ -495,7 +504,9 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 				id = randomID()
 			}
 		}
-		changed := !exists || !sameRebootDefinition(old.Definition, definition)
+		changed := !exists || !sameRebootTiming(old.Definition, definition)
+		warningChanged := exists && old.Definition.WarningMinutes != definition.WarningMinutes
+		revisionChanged := !exists || changed || warningChanged || old.Enabled != enabled
 		resetAnchor := !exists || changed || !old.Enabled && enabled
 		candidate := old
 		candidate.ID = id
@@ -504,7 +515,7 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 		candidate.UpdatedAt = now
 		if !exists {
 			candidate.CreatedAt, candidate.Revision = now, 1
-		} else {
+		} else if revisionChanged {
 			candidate.Revision++
 		}
 		if definition.Mode == rebootModeInterval {
@@ -524,6 +535,7 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 			candidate.NextRun = nil
 		}
 		state.RebootSchedules[id] = candidate
+		cancelObsoleteWarnings(state, now)
 		message := "Reboot schedule created"
 		if exists {
 			message = "Reboot schedule updated"
@@ -535,7 +547,7 @@ func (a *App) saveReboot(id string, definition rebootDefinition, enabled bool, a
 	return result, err
 }
 
-func sameRebootDefinition(a, b rebootDefinition) bool {
+func sameRebootTiming(a, b rebootDefinition) bool {
 	if a.ServerID != b.ServerID || a.Mode != b.Mode || a.Cron != b.Cron || a.IntervalValue != b.IntervalValue || a.IntervalUnit != b.IntervalUnit || a.ExecutionTimezone != b.ExecutionTimezone || len(a.DailyTimes) != len(b.DailyTimes) {
 		return false
 	}
@@ -566,6 +578,8 @@ func writeRebootValidationError(w http.ResponseWriter, err error) {
 	field := "mode"
 	message := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(message, "warningminutes"):
+		field = "warningMinutes"
 	case strings.Contains(message, "timezone"):
 		field = "executionTimezone"
 	case strings.Contains(message, "cron"):
@@ -699,8 +713,9 @@ func reserveRestart(state *State, serverID string, now time.Time, kind EventKind
 	p.resetStreak()
 	p.PlayerAt = time.Time{}
 	state.Producers[serverID] = p
-	server.Status, server.LastRestart, server.RestartOperation = StatusStarting, op.RequestedAt.Format(time.RFC3339Nano), op.ID
+	server.Status, server.StopSource, server.LastRestart, server.RestartOperation = StatusStarting, "", op.RequestedAt.Format(time.RFC3339Nano), op.ID
 	state.Servers[serverID] = server
+	cancelObsoleteWarnings(state, now)
 	emitAlert(state, server, kind, op.ID, "Restart recorded; completion requires a ready marked replacement runtime", op.RequestedAt)
 	return rebootDispatch{server: server, op: op}, nil
 }
@@ -725,7 +740,7 @@ func (a *App) dispatchRestartOperation(ctx context.Context, dispatch rebootDispa
 			p.Restart = nil
 			state.Producers[dispatch.server.ID] = p
 			server := state.Servers[dispatch.server.ID]
-			server.Status, server.RestartOperation = StatusOnline, ""
+			server.Status, server.StopSource, server.RestartOperation = StatusOnline, "", ""
 			state.Servers[dispatch.server.ID] = server
 			emitAlert(state, server, RestartCompleted, dispatch.op.ID, "Demo simulated restart; no Kubernetes operation", a.rebootNow())
 			finishRebootOccurrences(state, dispatch.op.ID, rebootCompleted, "Demo simulated restart; no Kubernetes operation", a.rebootNow())
@@ -752,6 +767,10 @@ func (a *App) dispatchRestartOperation(ctx context.Context, dispatch rebootDispa
 
 func (a *App) scanReboots(ctx context.Context, now time.Time) {
 	if !a.rebootSchedulingEnabled() {
+		return
+	}
+	if err := a.scanRestartWarnings(now); err != nil {
+		log.Printf("restart warnings: %v", err)
 		return
 	}
 	snapshot := a.store.Snapshot()
@@ -838,6 +857,12 @@ func (a *App) claimScheduledReboots(serverID string, ids []string) (rebootDispat
 			due = append(due, schedule)
 		}
 		if len(due) == 0 {
+			return nil
+		}
+		if state.Servers[serverID].Status == StatusStopped {
+			for _, schedule := range due {
+				recordAndAdvanceReboot(state, schedule, rebootSkipped, "Target server is stopped", claimNow)
+			}
 			return nil
 		}
 		if pending := state.Producers[serverID].Restart; pending != nil {

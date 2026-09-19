@@ -18,6 +18,7 @@ type RestartOperation struct {
 }
 
 type AlertProducer struct {
+	Roster          []ConnectedPlayer    `json:"roster,omitempty"`
 	Runtime         string               `json:"runtime"`
 	LastAt          time.Time            `json:"lastAt"`
 	PlayerAt        time.Time            `json:"playerAt"`
@@ -36,8 +37,34 @@ func (p *AlertProducer) resetStreak() {
 	p.Streak, p.StreakCount, p.StreakSince = "", 0, time.Time{}
 }
 
+func persistObservedStatus(state *State, server Server, o observation, now time.Time) Server {
+	current, ok := state.Servers[server.ID]
+	if !ok || o.status == "" || o.status == StatusUnknown || current.Status == StatusDeleting || current.Status == StatusStale {
+		return current
+	}
+	switch {
+	case o.status == StatusStopped:
+		if current.Status == StatusStopped && current.StopSource != stopSourceObserved {
+			return current
+		}
+		current.Status, current.StopSource = StatusStopped, stopSourceObserved
+	case current.Status == StatusStopped:
+		if current.StopSource != stopSourceObserved {
+			return current
+		}
+		current.Status, current.StopSource = o.status, ""
+	default:
+		return current
+	}
+	if !o.at.IsZero() && now.Sub(o.at) <= telemetryMaxAge {
+		current.LastSeen = o.at.Format(time.RFC3339Nano)
+	}
+	state.Servers[server.ID] = current
+	return current
+}
+
 func observeAlerts(state *State, server Server, o observation, now time.Time) {
-	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) || state.stopped(server.ID) {
+	if _, ok := state.Servers[server.ID]; !ok || state.deleting(server.ID) || state.operatorStopped(server.ID) {
 		return
 	}
 	p := state.Producers[server.ID]
@@ -45,6 +72,12 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 		return
 	}
 	if now.Sub(o.at) > telemetryMaxAge || o.at.After(now) {
+		return
+	}
+	server = persistObservedStatus(state, server, o, now)
+	if state.stopped(server.ID) {
+		p.LastAt = o.at
+		state.Producers[server.ID] = p
 		return
 	}
 	if o.at.Sub(p.LastAt) > telemetryMaxAge {
@@ -67,7 +100,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 			finishRebootOccurrences(state, op.ID, rebootCompleted, "Replacement runtime is ready", o.at)
 			p.Restart, p.Runtime, p.HealthyBaseline = nil, o.runtime, true
 			current := state.Servers[server.ID]
-			current.Status = StatusOnline
+			current.Status, current.StopSource = StatusOnline, ""
 			state.Servers[server.ID] = current
 		} else if o.at.Sub(op.RequestedAt) >= restartTimeout && o.health != "" {
 			emitAlert(state, server, RestartFailed, op.ID, "No ready marked replacement confirmed within the restart deadline", o.at)
@@ -88,9 +121,15 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	reading := freshMetrics(o.metrics, now)["players"]
 	if o.health == "healthy" && o.runtime != "" && reading.Value != nil && reading.Status == "available" && reading.ObservedAt != nil {
 		at, count := *reading.ObservedAt, int(*reading.Value)
+		roster := rosterEvidence(o.playerRoster, count)
 		if !p.PlayerAt.IsZero() && at.After(p.PlayerAt) && at.Sub(p.PlayerAt) <= telemetryMaxAge {
 			if count > p.Players {
-				emitAlert(state, server, PlayerJoined, "", fmt.Sprintf("Approximate increase of %d players (%d to %d); identities and joins between polls are unknown", count-p.Players, p.Players, count), o.at)
+				joined := joinedRoster(p.Roster, roster, count-p.Players)
+				details := fmt.Sprintf("Approximate increase of %d players (%d to %d); identities and joins between polls are unknown", count-p.Players, p.Players, count)
+				if len(joined) > 0 {
+					details = fmt.Sprintf("Observed %d new characters on the same healthy runtime", len(joined))
+				}
+				emitAlertEvidence(state, server, PlayerJoined, "", details, o.at, AlertEvidence{JoinedPlayers: joined, PlayerCount: countEvidence(server, o, now)}, "", "")
 			}
 			if p.PlayerLimit == server.MaxPlayers && server.MaxPlayers > 0 && p.Players < server.MaxPlayers && count >= server.MaxPlayers {
 				emitAlert(state, server, PlayerLimitReached, "", fmt.Sprintf("Player count reached %d / %d", count, server.MaxPlayers), o.at)
@@ -98,6 +137,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 		}
 		if at.After(p.PlayerAt) {
 			p.Players, p.PlayerLimit, p.PlayerAt = count, server.MaxPlayers, at
+			p.Roster = roster
 		}
 	} else {
 		p.PlayerAt = time.Time{}
@@ -125,7 +165,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	} else if p.Outage && o.health == "healthy" && p.StreakCount >= 2 && o.at.Sub(p.StreakSince) >= 15*time.Second {
 		p.Outage = false
 		p.resetStreak()
-		emitAlert(state, server, ServerRecovered, "", "Confirmed healthy after an established outage", o.at)
+		emitAlertEvidence(state, server, ServerRecovered, "", "Confirmed healthy after an established outage", o.at, AlertEvidence{PlayerCount: countEvidence(server, o, now)}, "", "")
 	}
 }
 

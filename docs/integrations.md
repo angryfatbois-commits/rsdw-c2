@@ -1,4 +1,4 @@
-# Discord alerts
+# Notification integrations
 
 The Integrations page is available to admins. OIDC viewers cannot read or change integrations, deliveries, or Secret references. OIDC mutations require the session CSRF token and the configured Origin. Token-mode requests require the admin bearer token. Session changes clear integration lists, delivery history, and open configuration forms.
 
@@ -14,26 +14,30 @@ In Integrations, open **Discord**. The card shows Not connected, Connected, or D
 
 Use **Configure** to change server associations, rules, enabled state, or the Secret reference. Updating the referenced Secret also rotates the token because each attempt reads it again. The bot verifies that the channel belongs to the configured guild before sending. **Send test** queues a test even when automatic alerts are disabled. Recent messages lists each delivery with the Dragonwilds server it belongs to.
 
-Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. The memory pressure policy uses synthetic observations from seeded memory fields in demo mode.
+The **HTTPS webhooks** page accepts a public HTTPS endpoint on port 443. The URL cannot contain credentials, a query, or a fragment. C2 sends the referenced Secret as a bearer token, refuses redirects, and rejects DNS results that point at private or special-use address ranges. Webhook payloads are versioned JSON records with the delivery ID and immutable event evidence. Webhooks use the same queue and delivery states as Discord, but their retry responses do not pause Discord deliveries.
+
+Each integration can set quiet hours with an IANA timezone. C2 evaluates the event time in that stored timezone when it creates a delivery. Suppressed events remain in event history but do not enter the queue, and changing quiet hours does not replay them. Test deliveries bypass quiet hours.
+
+Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. Production telemetry is not simulated in demo mode. The memory pressure policy uses synthetic observations from seeded memory fields in demo mode.
 
 ## Discord messages
 
 Discord notifications contain one colored embed with a fixed title and a playful description that roasts the server or automation. Server alerts include a Server field, using "Unknown server" when the name is empty. Integration tests omit that field. Every embed has a "Dragonwilds C2" footer and includes the event timestamp in UTC when present. Messages disable all mentions.
 
-The Discord page does not show a separate message preview gallery. Recent messages is a single-column list, newest first. Each row leads with the current Dragonwilds server name when that server still exists, otherwise the name stored on the event. Integration tests show as Bot-level test because they are not associated with a server. Title, description, bot, status, and result follow.
+The notification page does not show a separate message preview gallery. Recent messages is a single-column list, newest first. Each row leads with the current Dragonwilds server name when that server still exists, otherwise the name stored on the event. Integration tests show as Integration test because they are not associated with a server. Title, description, destination, status, and result follow.
 
-Visible Discord text excludes raw event messages and details, source and accuracy metadata, operational IDs, endpoints, Secrets, and player identities. Operational IDs remain in C2 delivery records. The delivery ID also remains in the transport nonce. Payload bytes are not persisted.
+Visible Discord text excludes raw event messages and details, source and accuracy metadata, operational IDs, endpoints, Secrets, and unverified player identities. When a fresh roster delta supports it, a player-joined embed names the character and player. Recovery embeds include the current `players/maxPlayers` value, including `0` and `unavailable`. Operational IDs remain in C2 delivery records. The delivery ID also remains in the transport nonce. Payload bytes are not persisted.
 
 ## API reference
 
 | Request | Result |
 | --- | --- |
-| `GET /api/integrations` | Configurations, rule definitions, pending restart operations, and the 100 most recently updated deliveries. Each supported delivery includes a rendered `embed` for the Recent messages list. |
-| `POST /api/integrations` | Create a Discord bot configuration |
+| `GET /api/integrations` | Configurations, rule definitions, pending restart operations, and the 100 most recently updated deliveries. Discord deliveries include a rendered `embed` for the Recent messages list; webhook deliveries omit that field. |
+| `POST /api/integrations` | Create a Discord or HTTPS webhook configuration |
 | `PUT /api/integrations/{id}` | Replace a configuration, including its Secret reference |
 | `POST /api/integrations/{id}/test` | Queue a test and return its stable delivery ID with HTTP 202 |
 
-Create and update bodies contain `name`, `enabled`, `guildId`, `channelId`, `secretRef: {name, key}`, `serverIds`, and `rules`, a map from event kind to boolean. IDs are assigned by C2 and are not accepted in request bodies. Missing rules are disabled. Unknown fields, unknown rules, duplicate or nonexistent server IDs, and enabled backup rules are rejected. There is no scheduling, quiet-hours, raw token, or webhook URL field.
+Create and update bodies contain `name`, `enabled`, `provider`, `secretRef: {name, key}`, `serverIds`, and `rules`, a map from event kind to boolean. Discord integrations use `guildId` and `channelId`; HTTPS webhook integrations use `webhookUrl`. An optional `quietHours` object contains `start`, `end`, and an IANA `timezone`. IDs are assigned by C2 and are not accepted in request bodies. Missing rules are disabled. Unknown fields, unknown providers, contradictory destination fields, duplicate or nonexistent server IDs, and enabled backup rules are rejected.
 
 Configuration changes apply to new events. Disabling an integration or rule, disconnecting a server, or changing the target cancels affected pending and retry deliveries. Re-enabling does not replay them or historical events. A send already in progress may finish against its original target. Secret rotation applies to the next attempt. An in-flight attempt may finish with the old Secret.
 
@@ -47,10 +51,11 @@ Each event has an immutable `id`, `kind`, `source`, `accuracy`, timestamp, serve
 | `memory_pressure_restart_requested` | Sustained memory pressure triggered a durable restart claim. This warning uses the shared completion and failure events. See [memory pressure configuration](reboots.md#memory-pressure-restarts). |
 | `restart_completed` | A fresh, owned runtime has the operation's Pod-template annotation, a different runtime identity, a start time at or after the request at Kubernetes' second precision, and both Pod and engine readiness. |
 | `restart_failed` | After five minutes, a fresh definitive observation still cannot confirm a ready marked replacement. |
-| `player_joined` | An approximate increase between fresh player counts on the same healthy runtime. C2 event details include the count delta. The Discord embed describes the observation without raw details. No identities or exact joins are inferred. |
+| `restart_warning` | An optional scheduled-restart notice. The event contains the scheduled UTC instant, warning minutes, and durable occurrence identity. It is canceled when the occurrence is no longer eligible. |
+| `player_joined` | A fresh count increase on the same healthy runtime. C2 names the roster delta only when the roster is available, fresh, count-consistent, unique, and safe to display. Otherwise it reports the approximate count increase. |
 | `player_limit_reached` | A fresh count crosses from below the configured limit to at least the limit. Falling below rearms the rule. Changing the configured limit establishes a new threshold baseline. |
 | `server_down` | After a healthy baseline, three consecutive definitive unhealthy observations span at least 30 seconds. |
-| `server_recovered` | After an established outage, two consecutive healthy observations span at least 15 seconds. |
+| `server_recovered` | After an established outage, two consecutive healthy observations span at least 15 seconds. The event captures the current player count and limit when available. |
 | `server_stopped` | An operator parked the world from Maintenance. Inventory, secrets, and volumes remain. Enabling this rule is allowed. |
 | `server_started` | An operator started a parked world. The same server ID and disk come back. Enabling this rule is allowed. |
 | `backup_started`, `backup_completed`, `backup_failed` | Reserved, visibly unavailable rules. No backup producer exists. Enabling them is rejected. Save import does not count as a backup. |
@@ -65,7 +70,7 @@ During a tracked restart, C2 suppresses player and down/recovered alerts. Comple
 
 ## Delivery reference
 
-Display history keeps the newest 2000 lifecycle events and newest 500 routine (player) events; the Discord queue is independent of that dual-class retention. Each event and integration pair has one stable 24-character delivery ID derived from their IDs. The queue stores an immutable event copy and guild/channel target, never a token. C2 retains the newest 100 sent or failed deliveries, plus every pending, retrying, sending, or uncertain delivery. The API displays the most recent 100 records. C2 queues new events only; pruning completed history does not replay old events when it restarts or an integration is enabled again. This JSON-backed implementation is intended for one C2 replica.
+Display history keeps the newest 2000 lifecycle events and newest 500 routine (player) events; the notification queue is independent of that dual-class retention. Each event and integration pair has one stable 24-character delivery ID derived from their IDs. The queue stores an immutable event copy and provider target, never a token. C2 retains the newest 100 sent or failed deliveries, plus every pending, retrying, sending, or uncertain delivery. The API displays the most recent 100 records. C2 queues new events only; quiet hours, pruning, or re-enabling an integration does not replay old events. This JSON-backed implementation is intended for one C2 replica.
 
 | State | Meaning |
 | --- | --- |
@@ -76,7 +81,7 @@ Display history keeps the newest 2000 lifecycle events and newest 500 routine (p
 | `failed` | Configuration cancelled the delivery, Discord rejected it, channel verification failed, or the retry limit was reached |
 | `uncertain` | A message may have been accepted, but C2 cannot confirm the result. No automatic retry. |
 
-There are at most five attempts. Safe retries use exponential delays of 2, 4, 8, and 16 seconds, extended by Discord's retry delay. A rate limit conservatively pauses all Discord deliveries, including after C2 restarts. The sender honors numeric `Retry-After`, `retry_after`, and reset-after headers. It uses a fixed HTTPS Discord API endpoint, refuses redirects, and disables all mentions. Secret lookup and HTTP failure details are discarded and replaced with fixed messages.
+There are at most five attempts. Safe retries use exponential delays of 2, 4, 8, and 16 seconds, extended by the provider's retry delay. A rate limit conservatively pauses all Discord deliveries, including after C2 restarts. Webhook rate limits affect only that webhook's retry schedule. The senders honor numeric `Retry-After`, `retry_after`, and reset-after headers. The Discord sender uses a fixed HTTPS API endpoint, refuses redirects, and disables all mentions. Secret lookup and HTTP failure details are discarded and replaced with fixed messages.
 
 A timeout, connection error, HTTP 408, or HTTP 5xx during message submission is uncertain. HTTP 5xx during the read-only channel check can retry. A persisted `sending` record becomes uncertain after a C2 restart, including a crash after send but before result persistence. If result persistence fails in a running process, the next worker pass marks it uncertain without sending again. File and directory synchronization precede successful Store commits. Secret and HTTP I/O occur outside the Store lock.
 

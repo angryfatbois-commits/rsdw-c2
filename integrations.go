@@ -18,6 +18,7 @@ type EventKind string
 
 const (
 	RestartRequested               EventKind = "restart_requested"
+	RestartWarning                 EventKind = "restart_warning"
 	MemoryPressureRestartRequested EventKind = "memory_pressure_restart_requested"
 	RestartCompleted               EventKind = "restart_completed"
 	RestartFailed                  EventKind = "restart_failed"
@@ -43,6 +44,7 @@ type AlertRule struct {
 }
 
 var alertRules = []AlertRule{
+	{RestartWarning, "Restart warning", true, "Scheduled or memory-pressure restart warning", "observed"},
 	{RestartRequested, "Restart requested", true, "C2 restart operation", "observed"},
 	{MemoryPressureRestartRequested, "Memory pressure restart requested", true, "Sustained fresh container memory usage at or above the fleet threshold", "observed"},
 	{RestartCompleted, "Restart completed", true, "Owned replacement runtime and fresh engine readiness", "observed"},
@@ -64,14 +66,17 @@ type SecretReference struct {
 }
 
 type DiscordIntegration struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	Enabled   bool               `json:"enabled"`
-	GuildID   string             `json:"guildId"`
-	ChannelID string             `json:"channelId"`
-	SecretRef SecretReference    `json:"secretRef"`
-	ServerIDs []string           `json:"serverIds"`
-	Rules     map[EventKind]bool `json:"rules"`
+	Provider   integrationProvider `json:"provider,omitempty"`
+	WebhookURL string              `json:"webhookUrl,omitempty"`
+	QuietHours *QuietHours         `json:"quietHours,omitempty"`
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Enabled    bool                `json:"enabled"`
+	GuildID    string              `json:"guildId"`
+	ChannelID  string              `json:"channelId"`
+	SecretRef  SecretReference     `json:"secretRef"`
+	ServerIDs  []string            `json:"serverIds"`
+	Rules      map[EventKind]bool  `json:"rules"`
 }
 
 type DeliveryStatus string
@@ -88,16 +93,18 @@ const (
 const terminalDeliveryHistoryLimit = 100
 
 type Delivery struct {
-	ID            string         `json:"id"`
-	IntegrationID string         `json:"integrationId"`
-	Event         Event          `json:"event"`
-	GuildID       string         `json:"guildId"`
-	ChannelID     string         `json:"channelId"`
-	Status        DeliveryStatus `json:"status"`
-	Attempts      int            `json:"attempts"`
-	NextAttempt   time.Time      `json:"nextAttempt"`
-	UpdatedAt     time.Time      `json:"updatedAt"`
-	Result        string         `json:"result"`
+	Provider      integrationProvider `json:"provider,omitempty"`
+	WebhookURL    string              `json:"webhookUrl,omitempty"`
+	ID            string              `json:"id"`
+	IntegrationID string              `json:"integrationId"`
+	Event         Event               `json:"event"`
+	GuildID       string              `json:"guildId"`
+	ChannelID     string              `json:"channelId"`
+	Status        DeliveryStatus      `json:"status"`
+	Attempts      int                 `json:"attempts"`
+	NextAttempt   time.Time           `json:"nextAttempt"`
+	UpdatedAt     time.Time           `json:"updatedAt"`
+	Result        string              `json:"result"`
 }
 
 func (s *State) initIntegrations() {
@@ -111,6 +118,7 @@ func (s *State) initIntegrations() {
 		s.Deliveries = map[string]Delivery{}
 	}
 	for id, i := range s.Integrations {
+		i.Provider = normalizedProvider(i.Provider)
 		if i.ServerIDs == nil {
 			i.ServerIDs = []string{}
 		}
@@ -130,6 +138,7 @@ func (s *State) recoverAlerts() {
 	}
 	for id, p := range s.Producers {
 		p.MemoryPressure = nil
+		p.Roster = nil
 		p.Runtime, p.PlayerAt, p.LastAt = "", time.Time{}, time.Time{}
 		p.resetStreak()
 		s.Producers[id] = p
@@ -165,14 +174,20 @@ func queueDeliveryForNewEvent(state *State, integration DiscordIntegration, even
 	sum := sha256.Sum256([]byte(event.ID + "/" + integration.ID))
 	id := hex.EncodeToString(sum[:12])
 	if existing, ok := state.Deliveries[id]; ok {
+		existing.Event = existing.Event.clone()
 		return existing
 	}
-	d := Delivery{ID: id, IntegrationID: integration.ID, Event: event, GuildID: integration.GuildID, ChannelID: integration.ChannelID, Status: DeliveryPending, UpdatedAt: event.Timestamp}
+	d := Delivery{ID: id, IntegrationID: integration.ID, Event: event.clone(), Provider: normalizedProvider(integration.Provider), WebhookURL: integration.WebhookURL, GuildID: integration.GuildID, ChannelID: integration.ChannelID, Status: DeliveryPending, UpdatedAt: event.Timestamp}
 	state.Deliveries[id] = d
+	d.Event = d.Event.clone()
 	return d
 }
 
 func emitAlert(state *State, server Server, kind EventKind, operation, details string, at time.Time) Event {
+	return emitAlertEvidence(state, server, kind, operation, details, at, AlertEvidence{}, "", "")
+}
+
+func emitAlertEvidence(state *State, server Server, kind EventKind, operation, details string, at time.Time, evidence AlertEvidence, scheduleID, occurrenceID string) Event {
 	var rule AlertRule
 	for _, candidate := range alertRules {
 		if candidate.Kind == kind {
@@ -190,16 +205,20 @@ func emitAlert(state *State, server Server, kind EventKind, operation, details s
 	case ServerDown, ServerRecovered:
 		category = "health"
 	}
-	if kind == RestartRequested || kind == MemoryPressureRestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
+	if kind == RestartRequested || kind == RestartWarning || kind == MemoryPressureRestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
 		severity = "warning"
 	}
 	if kind == RestartFailed || kind == ServerDown {
 		severity = "error"
 	}
 	event := Event{ID: randomID(), Timestamp: at, ServerID: server.ID, ServerName: worldLabel(server), Category: category, Severity: severity, Message: rule.Label, Details: details, Kind: kind, Source: rule.Source, Accuracy: rule.Accuracy, OperationID: operation}
+	event.Evidence, event.ScheduleID, event.OccurrenceID = evidence, scheduleID, occurrenceID
+	if len(evidence.JoinedPlayers) > 0 {
+		event.Accuracy, event.Message = "observed", "Player joined"
+	}
 	addEvent(state, event)
 	for _, integration := range state.Integrations {
-		if integration.Enabled && integration.Rules[kind] && slices.Contains(integration.ServerIDs, server.ID) {
+		if integration.Enabled && integration.Rules[kind] && slices.Contains(integration.ServerIDs, server.ID) && !integration.QuietHours.contains(at) && integration.target().validate() == nil {
 			queueDeliveryForNewEvent(state, integration, event)
 		}
 	}
@@ -214,8 +233,13 @@ func validateIntegration(i DiscordIntegration, state State) error {
 	if strings.TrimSpace(i.Name) == "" || len(i.Name) > 80 || strings.ContainsAny(i.Name, "\x00\r\n") {
 		return errors.New("name must be a single line of 1 to 80 characters")
 	}
-	if !discordIDPattern.MatchString(i.GuildID) || !discordIDPattern.MatchString(i.ChannelID) {
-		return errors.New("guildId and channelId must be Discord numeric IDs")
+	if err := i.target().validate(); err != nil {
+		return err
+	}
+	if i.QuietHours != nil {
+		if err := i.QuietHours.validate(); err != nil {
+			return err
+		}
 	}
 	if len(i.SecretRef.Name) > 253 || !secretNamePattern.MatchString(i.SecretRef.Name) || !secretKeyPattern.MatchString(i.SecretRef.Key) {
 		return errors.New("secretRef must contain a Kubernetes Secret name and key, never a token")
@@ -286,7 +310,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 				status = http.StatusNotFound
 				return errors.New("integration not found")
 			}
-			event := Event{ID: randomID(), Timestamp: time.Now().UTC(), Kind: IntegrationTest, Message: "Discord integration test", Source: "C2 operator", Accuracy: "observed"}
+			event := Event{ID: randomID(), Timestamp: time.Now().UTC(), Kind: IntegrationTest, Message: "Integration test", Source: "C2 operator", Accuracy: "observed"}
 			delivery = queueDeliveryForNewEvent(state, i, event)
 			return nil
 		})
@@ -309,7 +333,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid integration JSON; use only a Secret reference")
+		writeError(w, http.StatusBadRequest, "invalid integration JSON; use a Secret reference for authentication")
 		return
 	}
 	if decoder.Decode(new(any)) != io.EOF || input.ID != "" {
@@ -317,6 +341,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.ID = randomID()
+	input.Provider = normalizedProvider(input.Provider)
 	if !collection {
 		input.ID = parts[1]
 	}
@@ -351,6 +376,8 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if status == http.StatusInternalServerError {
 			writeError(w, status, "could not persist integration")
+		} else if status == http.StatusBadRequest {
+			writeJSON(w, status, map[string]any{"error": err.Error(), "fields": integrationErrorFields(err)})
 		} else {
 			writeError(w, status, err.Error())
 		}
@@ -364,5 +391,5 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 }
 
 func deliveryEnabled(i DiscordIntegration, d Delivery) bool {
-	return d.GuildID == i.GuildID && d.ChannelID == i.ChannelID && (d.Event.Kind == IntegrationTest || (i.Enabled && i.Rules[d.Event.Kind] && slices.Contains(i.ServerIDs, d.Event.ServerID)))
+	return d.target() == i.target() && i.target().validate() == nil && (d.Event.Kind == IntegrationTest || (i.Enabled && i.Rules[d.Event.Kind] && slices.Contains(i.ServerIDs, d.Event.ServerID)))
 }

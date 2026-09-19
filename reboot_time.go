@@ -20,6 +20,7 @@ const (
 )
 
 type rebootDefinition struct {
+	WarningMinutes    int        `json:"warningMinutes,omitempty"`
 	ServerID          string     `json:"serverId"`
 	Mode              rebootMode `json:"mode"`
 	Cron              string     `json:"cron,omitempty"`

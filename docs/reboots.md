@@ -8,6 +8,8 @@ Run this feature with one C2 replica and persistent state. The chart already con
 
 Every schedule stores an IANA execution timezone. The browser sends intent only; C2 owns the schedule ID, UTC anchor, next run, occurrence record, and restart operation ID.
 
+Set an optional restart warning in minutes. C2 emits one warning for the scheduled occurrence when the window opens. A warning does not change the restart time. Editing the warning policy cancels any queued warning for the old policy without moving the existing occurrence. Disabling, deleting, stopping the target, claiming the restart, or reaching the scheduled time also cancels an unsent warning. A sustained memory-pressure streak emits one warning when the `restart_warning` rule is enabled. Its lead time is the configured pressure duration, and C2 cancels it if pressure clears before the restart claim.
+
 - **Cron** uses exactly five standard fields: minute, hour, day of month, month, and day of week. Lists, ranges, steps, month names, and weekday names are accepted by the pinned `robfig/cron` parser. Seconds, `@` descriptors, `TZ=` or `CRON_TZ=` prefixes, and Quartz `?`, `L`, `W`, and `#` syntax are rejected. Sunday is `0` or `SUN`. When both day-of-month and day-of-week are restricted, standard cron OR semantics apply.
 - **Interval** accepts 1–8,760 hours or 1–365 days. A day means exactly 24 elapsed hours, including across daylight-saving transitions. C2 persists a UTC anchor and calculates `anchor + N * duration`, so execution and failure do not cause drift.
 - **Daily** accepts one or more unique `HH:mm` values. Values are sorted and deduplicated and interpreted as local wall-clock minutes in the stored execution timezone.
@@ -46,7 +48,7 @@ The enabled value must be a boolean, the threshold must be between 0 and 100 inc
 
 The existing collector checks fresh container memory usage against its observed memory limit. Usage at or above the threshold must persist for the configured duration on the same runtime. The streak starts when C2 first collects a high reading and advances with memory-source timestamps. Polling the same cached sample does not advance the timer. Missing or invalid readings, stale observations, collection or source gaps longer than 45 seconds, backward source timestamps, runtime changes, stopped or deleting servers, and pending restarts reset the streak. C2 restart also clears the streak, so downtime never counts toward a restart.
 
-A pressure claim persists before dispatch and uses the existing restart reconciliation. It emits `memory_pressure_restart_requested` with warning severity, followed by the shared `restart_completed` or `restart_failed` event. Manual and scheduled requests retain `restart_requested`. Enable the pressure rule separately in a Discord integration to receive those requests. Restarts can disconnect active players.
+A pressure claim persists before dispatch and uses the existing restart reconciliation. It emits `memory_pressure_restart_requested` with warning severity, followed by the shared `restart_completed` or `restart_failed` event. Manual and scheduled requests retain `restart_requested`. Enable the pressure rule separately in a notification integration to receive those requests. Enable `restart_warning` to receive the earlier pressure warning. Restarts can disconnect active players.
 
 Demo mode checks synthetic observations from the seeded server's memory fields and simulates completion. It never calls Kubernetes or Discord for this flow.
 
@@ -71,6 +73,7 @@ Create and update use this flat body. Only fields for the selected mode are acce
   "mode": "daily",
   "dailyTimes": ["05:00", "17:00"],
   "executionTimezone": "America/New_York",
+  "warningMinutes": 10,
   "acknowledgeDisconnect": true
 }
 ```

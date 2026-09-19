@@ -64,6 +64,16 @@ func TestJoinObservationKeepsCurrentImageWhenObservationOmitsIt(t *testing.T) {
 	}
 }
 
+func TestJoinObservationClearsObservedStopAfterFreshScaleUp(t *testing.T) {
+	now := time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+	server := Server{ID: "world", Status: StatusStopped, StopSource: stopSourceObserved}
+	observed := observation{at: now, status: StatusOnline, metrics: emptyMetrics()}
+	joined := joinObservation(server, observed, now)
+	if joined.Status != StatusOnline || joined.StopSource != "" {
+		t.Fatalf("observed stop was not cleared by fresh scale-up telemetry: %+v", joined)
+	}
+}
+
 func TestViewerServerExposesDeletionLifecycleStatus(t *testing.T) {
 	for _, test := range []struct {
 		persisted Status

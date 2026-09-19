@@ -154,22 +154,30 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 		if d.Status != DeliveryPending && d.Status != DeliveryRetry || d.NextAttempt.After(now) {
 			continue
 		}
+		claimNow := time.Now().UTC()
+		if claimNow.Before(now) {
+			claimNow = now
+		}
 		var integration DiscordIntegration
 		claimed := false
+		scheduledWarning := isScheduledRestartWarning(d.Event)
 		err := a.store.Update(func(state *State) error {
 			d = state.Deliveries[id]
-			if state.DiscordRetryAt.After(now) || (d.Status != DeliveryPending && d.Status != DeliveryRetry) || d.NextAttempt.After(now) {
+			if (d.Status != DeliveryPending && d.Status != DeliveryRetry) || d.NextAttempt.After(claimNow) {
 				return nil
 			}
 			var ok bool
 			integration, ok = state.Integrations[d.IntegrationID]
-			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) {
-				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", now
+			if !ok || state.deleting(d.Event.ServerID) || !deliveryEnabled(integration, d) || !warningDeliveryValid(state, d, claimNow) || (scheduledWarning && !a.rebootSchedulingEnabled()) {
+				d.Status, d.Result, d.UpdatedAt = DeliveryFailed, "Integration no longer enables this delivery", claimNow
 				state.Deliveries[id] = d
 				state.pruneDeliveryHistory()
 				return nil
 			}
-			d.Status, d.UpdatedAt = DeliverySending, now
+			if normalizedProvider(d.Provider) == providerDiscord && state.DiscordRetryAt.After(claimNow) {
+				return nil
+			}
+			d.Status, d.UpdatedAt = DeliverySending, claimNow
 			d.Attempts++
 			state.Deliveries[id] = d
 			claimed = true
@@ -181,10 +189,10 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 		if !claimed {
 			continue
 		}
-		result := a.sendDiscord(ctx, integration, d)
+		result := a.sendNotification(ctx, integration, d)
 		finished := time.Now().UTC()
-		if finished.Before(now) {
-			finished = now
+		if finished.Before(claimNow) {
+			finished = claimNow
 		}
 		if err := a.store.Update(func(state *State) error {
 			current, ok := state.Deliveries[id]
@@ -192,7 +200,7 @@ func (a *App) processDeliveries(ctx context.Context, now time.Time) error {
 				return nil
 			}
 			d.Status, d.Result, d.UpdatedAt = result.status, result.reason, finished
-			if result.wait > 0 {
+			if result.wait > 0 && normalizedProvider(d.Provider) == providerDiscord {
 				state.DiscordRetryAt = finished.Add(result.wait)
 			}
 			if d.Status == DeliveryRetry {
