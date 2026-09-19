@@ -138,6 +138,72 @@ tbody tr.deploying:hover { background: var(--color-nav-current); }
 .delivery-card-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 14px 16px 16px; color: var(--color-muted-foreground); font-size: 13px; }
 .delivery-card-meta span { overflow-wrap: anywhere; }
 .stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 16px; margin-bottom: 16px; }
+.dashboard-stats { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.summary-note { grid-column: 1 / -1; font-size: 13px; }
+.console-toolbar { margin-bottom: 16px; gap: 10px; }
+.console-toolbar .console-view { margin-left: auto; }
+.console-rows { display: grid; gap: 10px; }
+.console-row { position: relative; display: grid; grid-template-columns: minmax(140px,1.3fr) minmax(130px,.8fr) minmax(175px,1.15fr) minmax(180px,1.25fr) minmax(130px,1fr) 130px; align-items: center; gap: 20px; height: 140px; padding: 16px 20px; border: 1px solid var(--color-border); border-left: 3px solid var(--color-primary); border-radius: 4px; background: var(--color-muted); }
+.console-row.attention { border-left-color: var(--warning); }
+.console-row.stopped { border-left-color: var(--color-destructive); }
+.console-row:hover,.console-row:focus-within { background: var(--color-secondary); border-color: var(--link); }
+.console-row > * { min-width: 0; }
+.console-world h3 { font-size: 18px; line-height: 1.3; }
+.console-open { color: var(--color-foreground); }
+.console-open::after { content: ''; position: absolute; inset: 0; border-radius: 4px; }
+.console-open:focus-visible { outline: none; }
+.console-open:focus-visible::after { outline: 2px solid var(--color-ring); outline-offset: 3px; }
+.console-world small { display: block; margin-top: 4px; font-size: 13px; color: var(--color-muted-foreground); overflow-wrap: anywhere; }
+.console-world h3 { overflow-wrap: anywhere; }
+.console-status .status { font-size: 14px; white-space: normal; }
+.console-label { display: block; font-size: 12px; text-transform: uppercase; color: var(--color-muted-foreground); font-weight: 400; }
+.console-metrics { display: grid; grid-template-columns: .8fr 1fr; gap: 18px; }
+.console-metrics strong { display: block; font-size: 18px; margin-top: 4px; white-space: nowrap; }
+.console-resources { display: grid; gap: 24px; }
+.console-resource { font-size: 12px; }
+.console-resource > div:first-child { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.console-resource .muted { font-size: 14px; }
+.console-resource.unavailable > div:first-child { display: grid; gap: 8px; }
+.console-bar { height: 6px; margin-top: 6px; background: var(--color-divider); border-radius: 2px; overflow: hidden; }
+.console-bar span { display: block; height: 100%; background: var(--color-primary); border-radius: inherit; }
+.console-row.attention .console-bar span { background: var(--warning); }
+.console-schedule { font-size: 13px; }
+.console-schedule > span + span { display: block; margin-top: 4px; }
+.console-actions { display: flex; justify-content: flex-end; gap: 8px; position: relative; z-index: 1; }
+.console-actions button { padding: 8px 12px; min-height: 36px; font-size: 13px; }
+.console-badges { position: absolute; top: 10px; left: 20px; display: flex; gap: 6px; }
+.console-badge { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 8px; border: 1px solid currentColor; border-radius: 12px; }
+.console-badge.attention { color: var(--warning); }
+.console-badge.update { color: var(--link); }
+.console-row .muted { color: var(--color-muted-foreground); font-weight: 400; }
+@media (min-width: 1101px) and (max-width: 1450px) {
+  .console-row { grid-template-columns: minmax(130px,1.2fr) minmax(110px,.8fr) minmax(160px,1fr) minmax(160px,1fr); gap: 12px; height: 190px; }
+  .console-schedule { grid-column: 2 / 4; }
+  .console-actions { justify-content: flex-end; }
+}
+@media (max-width: 1100px) {
+  .dashboard-stats { grid-template-columns: 1fr !important; gap: 10px; }
+  .dashboard-stats .stat { flex-direction: row; align-items: center; gap: 20px; min-height: 84px; }
+  .dashboard-fleet { padding: 16px 12px; }
+  .dashboard-fleet .panel-heading { flex-wrap: nowrap; gap: 8px; }
+  .dashboard-fleet .panel-heading button { padding: 8px 10px; font-size: 14px; }
+  .console-toolbar { gap: 8px; }
+  .console-toolbar > button { flex-grow: 0; padding: 8px 12px; font-size: 13px; }
+  .console-toolbar .console-view { flex-basis: 100%; justify-content: flex-end; }
+  .console-row { height: auto; min-height: 410px; display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 16px; }
+  .console-world { min-height: 44px; }
+  .console-badges { top: 8px; left: auto; right: 8px; gap: 4px; }
+  .console-badge { font-size: 10px; padding: 0 5px; }
+  .console-row:has(.console-badge) .console-world h3 { padding-right: 106px; }
+  .console-metrics,.console-resources,.console-schedule { border-top: 1px solid var(--color-divider); padding-top: 14px; }
+  .console-metrics { grid-template-columns: 1fr 1fr; }
+  .console-resources { gap: 14px; }
+  .console-resource > div:first-child { flex-wrap: wrap; }
+  .console-schedule { min-height: 64px; }
+  .console-actions { margin-top: auto; }
+  .console-actions button { flex: 1; min-height: 44px; }
+  body:has(.dashboard-fleet) #pause { flex-basis: 100%; }
+}
 .stat { display: flex; gap: 24px; align-items: center; min-height: 106px; padding: 20px 28px; }
 .stat svg { width: 32px; height: 32px; color: var(--color-muted-foreground); }
 .stat-value { font-size: 32px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -166,8 +232,7 @@ td:last-child.actions { text-align: right; }
 .status.deleting:before { background: var(--link); }
 .status.stale { color: var(--warning); }
 .status.stale:before { background: var(--warning); }
-.status.stopped { color: var(--color-muted-foreground); }
-.status.critical,.status.error { color: var(--color-destructive); }
+.status.stopped,.status.critical,.status.error { color: var(--color-destructive); }
 .status.unknown { color: var(--color-muted-foreground); }
 .status.enabled { color: var(--color-foreground); }
 .status.enabled:before { background: var(--success); }

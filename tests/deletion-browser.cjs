@@ -58,8 +58,8 @@ async function run() {
     ['duplicate-a','Duplicate world (duplicate-a)'], ['duplicate-b','Duplicate world (duplicate-b)'],
   ]) {
     assert.equal(await select.locator(`option[value="${id}"]`).textContent(), label);
-    const row = page.getByTestId('view-server').and(page.locator(`[data-id="${id}"]`)).locator('..').locator('..');
-    assert.equal(await row.locator('td strong').textContent(), label);
+    const row = page.locator(`.console-row[data-server-id="${id}"]`);
+    assert.equal(await row.getByTestId('view-server').textContent(), label);
   }
   await page.getByTestId('nav-maintenance').click();
   await select.selectOption('petzko-02');

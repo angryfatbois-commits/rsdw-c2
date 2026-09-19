@@ -51,6 +51,7 @@ const state = {
   routeError: '',
   routeScope: false,
   deployWatches: {},
+  dashboardView: 'rows',
   page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
@@ -598,18 +599,80 @@ function eventTable(events, detailed = false) {
   if (!events.length) return '<p class="no-results" data-testid="no-events">No events match this view.</p>';
   return `<div class="table-wrap"><table><thead><tr><th>Time</th><th>Server</th><th>${detailed ? 'Category' : 'Status'}</th><th>Event</th></tr></thead><tbody>${events.map((event) => `<tr class="${state.selectedEventId === event.id ? 'event-selected' : ''}"><td class="mono" title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td><td>${escapeHTML(eventServerLabel(event))}</td><td>${detailed ? escapeHTML(categoryLabels[event.category] || (event.category || 'system').replace(/^./, (c) => c.toUpperCase())) : status(event.severity || 'info')}</td><td>${detailed ? `<button class="link-button event-message" data-action="select-event" data-id="${escapeHTML(event.id)}" data-testid="event-row" aria-pressed="${state.selectedEventId === event.id}">${escapeHTML(event.message)}</button>` : escapeHTML(event.message)}</td></tr>`).join('')}</tbody></table></div>`;
 }
-function dashboard() {
+function dashboardModel() {
   const servers = scopedServers();
-  const online = servers.filter((server) => server.status === 'online').length;
-  const attention = servers.filter((server) => server.status === 'attention' || server.status === 'stale' || server.updateAvailable).length;
-  const filtered = servers.filter((server) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? server.status === 'online' : server.status === 'attention' || server.status === 'stale' || server.updateAvailable));
-  const stats = `<div class="stats">${stat('Registered servers', servers.length, 'server')}${stat('Online', online, 'pulse', 'green')}${stat('Needs attention', attention, 'warning', 'amber')}${can('updateCheck') ? stat('Updates available', servers.filter((server) => server.updateAvailable).length, 'refresh') : stat('Reporting metrics', servers.filter((server) => server.metricsAvailable).length, 'pulse')}</div>`;
-  if (!state.servers.length) return stats + emptyState();
-  return `${stats}<section class="panel"><div class="panel-heading"><div><h2>Servers</h2></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${state.fleetFilter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}</div>${filtered.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>CPU</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${filtered.map((server) => {
+  const rows = servers.map((server) => {
+    const stopped = server.status === 'stopped';
+    const running = ['online','attention'].includes(server.status);
+    const attention = ['attention','stale'].includes(server.status);
+    const value = (key) => {
+      const reading = stopped ? null : metricValue(server, key);
+      return typeof reading === 'number' && Number.isFinite(reading) ? reading : null;
+    };
+    const players = stopped ? 0 : value('players');
+    const memory = value('memoryUsedBytes'), limit = value('memoryLimitBytes'), cpu = value('cpuPercent');
+    const schedules = state.reboots.filter((item) => item.serverId === server.id && item.enabled);
+    const nextRuns = schedules.map((item) => Date.parse(item.nextRun)).filter(Number.isFinite).sort((a,b) => a-b);
+    const schedule = !can('reboots') ? {state:'restricted',text:''}
+      : !state.rebootsAvailable ? {state:'unavailable',text:'Unavailable'}
+      : nextRuns.length ? {state:'scheduled',text:date(new Date(nextRuns[0]).toISOString())}
+      : schedules.length ? {state:'unavailable',text:'Unavailable'}
+      : {state:'none',text:'Not scheduled'};
     const progress = deployProgress(server);
-    const deploying = progress && progress.phase !== 'ready' && progress.phase !== 'failed';
-    return `<tr${deploying ? ' class="deploying"' : ''}><td><strong>${escapeHTML(serverLabel(server))}</strong><small>${escapeHTML(server.region || server.namespace || 'Managed server')}</small></td><td>${status(server.status)}</td><td>${metricText(server, 'players')} / ${number(server.maxPlayers)}</td><td>${metricText(server, 'tickRate', ' TPS')}</td><td>${metricText(server, 'cpuPercent', '%')}</td><td class="mono">${duration(metricValue(server, 'uptimeSeconds'))}</td><td class="actions"><button class="link-button" data-action="view-server" data-id="${escapeHTML(server.id)}" data-testid="view-server">View server ${icon('arrow')}</button></td></tr>`;
-  }).join('')}</tbody></table></div>` : '<p class="no-results">No servers match this filter.</p>'}</section>${can('events') ? `<section class="panel"><div class="panel-heading"><h2>Fleet activity</h2><button class="link-button" data-action="view-events" data-testid="view-all-events">View all events ${icon('arrow')}</button></div>${eventTable(state.events.slice(0, 6))}</section>` : ''}`;
+    return {
+      id:server.id, worldName:serverLabel(server), endpoint:can('maintenance') ? server.endpoint || 'Endpoint unavailable' : '',
+      status:server.status, statusLabel:server.status === 'attention' ? 'Needs attention' : server.status === 'stopped' ? 'Stopped' : server.status === 'online' ? 'Online' : server.status === 'starting' ? 'Starting' : server.status === 'deleting' ? 'Deleting' : server.status === 'stale' ? 'Stale' : 'Unknown',
+      running, attention, update:can('updateCheck') && server.updateAvailable === true,
+      players, capacity:server.maxPlayers, playersText:`${players == null ? 'Unavailable' : number(players)} / ${number(server.maxPlayers)}`,
+      tickText:stopped ? 'Stopped' : value('tickRate') == null ? 'Unavailable' : number(value('tickRate'), ' TPS'),
+      resources:[
+        {label:'Memory',text:memory != null && limit > 0 ? `${number(memory / 1073741824)} / ${number(limit / 1073741824)} GiB` : 'Unavailable',percent:memory != null && limit > 0 ? memory / limit * 100 : null},
+        {label:'CPU',text:cpu == null ? 'Unavailable' : number(cpu, '%'),percent:cpu},
+      ],
+      uptime:duration(value('uptimeSeconds')), schedule,
+      actions:stopped ? (can('start') ? ['start'] : []) : running ? ['restart','stop'].filter(can) : [],
+      deploying:!!progress && progress.phase !== 'ready' && progress.phase !== 'failed',
+    };
+  });
+  const known = rows.reduce((sum,row) => sum + (row.players ?? 0),0);
+  return {
+    summary:{total:rows.length, online:rows.filter((row) => row.running).length, players:known, capacity:rows.reduce((sum,row) => sum + (row.capacity || 0),0), incomplete:rows.some((row) => row.players == null)},
+    rows:rows.filter((row) => state.fleetFilter === 'all' || (state.fleetFilter === 'online' ? row.running : row.attention || row.update)),
+    filter:state.fleetFilter, view:state.dashboardView || 'rows',
+  };
+}
+function dashboardActions(row) {
+  return row.actions.map((action) => {
+    if (action === 'restart') return `<button class="subtle" data-action="restart" data-id="${escapeHTML(row.id)}" data-testid="dashboard-restart">Reboot</button>`;
+    if (action === 'stop') return `<button class="danger" data-action="stop" data-id="${escapeHTML(row.id)}" data-testid="dashboard-stop">Stop</button>`;
+    return `<button class="primary" data-action="start" data-id="${escapeHTML(row.id)}" data-testid="dashboard-start">Start</button>`;
+  }).join('');
+}
+function dashboardBadges(row) {
+  return `${row.attention ? '<span class="console-badge attention">Attention</span>' : ''}${row.update ? '<span class="console-badge update">Update</span>' : ''}`;
+}
+function dashboardResources(row) {
+  return row.resources.map((resource) => `<div class="console-resource ${resource.percent == null ? 'unavailable' : ''}"><div><span class="console-label">${resource.label}</span><span class="${resource.percent == null ? 'muted' : ''}">${escapeHTML(resource.text)}</span></div>${resource.percent != null ? `<div class="console-bar" aria-hidden="true"><span style="width:${Math.max(0,Math.min(100,resource.percent))}%"></span></div>` : ''}</div>`).join('');
+}
+function dashboardRow(row) {
+  return `<article class="console-row equal-height ${row.attention ? 'attention' : row.status === 'stopped' ? 'stopped' : ''} ${row.deploying ? 'deploying' : ''}" data-server-id="${escapeHTML(row.id)}">
+    <div class="console-badges">${dashboardBadges(row)}</div>
+    <div class="console-world"><h3><a class="console-open" href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server" data-id="${escapeHTML(row.id)}">${escapeHTML(row.worldName)}</a></h3>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}</div>
+    <div class="console-status"><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></div>
+    <div class="console-metrics"><div><span class="console-label">Players</span><strong>${escapeHTML(row.playersText)}</strong></div><div><span class="console-label">Tick rate</span><strong class="${row.tickText === 'Unavailable' ? 'muted' : ''}">${escapeHTML(row.tickText)}</strong></div></div>
+    <div class="console-resources" aria-label="Resources">${dashboardResources(row)}</div>
+    ${row.schedule.state !== 'restricted' ? `<div class="console-schedule"><span class="console-label">Next reboot</span><span class="${row.schedule.state !== 'scheduled' ? 'muted' : ''}">${escapeHTML(row.schedule.text)}</span></div>` : '<div></div>'}
+    <div class="console-actions">${dashboardActions(row)}</div>
+  </article>`;
+}
+function dashboardTable(rows) {
+  return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>Resources</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${rows.map((row) => `<tr${row.deploying ? ' class="deploying"' : ''}><td><a href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server"><strong>${escapeHTML(row.worldName)}</strong></a>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}${dashboardBadges(row)}</td><td><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></td><td>${escapeHTML(row.playersText)}</td><td>${escapeHTML(row.tickText)}</td><td>${dashboardResources(row)}</td><td class="mono">${escapeHTML(row.uptime)}</td><td class="actions">${dashboardActions(row)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function dashboard() {
+  const model = dashboardModel(), summary = model.summary;
+  const stats = `<div class="stats dashboard-stats">${stat('Registered servers', summary.total, 'server')}${stat('Online', `${summary.online} / ${summary.total}`, 'pulse')}${stat('Players online', `${summary.players} / ${summary.capacity}`, 'users')}${summary.incomplete ? '<p class="summary-note">Known players only; some counts are unavailable.</p>' : ''}</div>`;
+  if (!state.servers.length) return stats + emptyState();
+  return `${stats}<section class="panel dashboard-fleet"><div class="panel-heading"><div><h2>Servers</h2><p>${summary.total} worlds · ${model.view === 'table' ? 'table' : 'row'} view</p></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips console-toolbar" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${model.filter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}<button class="link-button console-view" data-action="dashboard-view" data-value="${model.view === 'table' ? 'rows' : 'table'}">${model.view === 'table' ? 'Row view' : 'Table view'}</button></div>${model.rows.length ? model.view === 'table' ? dashboardTable(model.rows) : `<div class="console-rows">${model.rows.map(dashboardRow).join('')}</div>` : '<p class="no-results">No servers match this filter.</p>'}</section>`;
 }
 function chart(key, label, secondaryKey = '', secondaryLabel = '') {
   const points = samples();
@@ -1156,13 +1219,13 @@ function editSettingsPatch(initial, values) {
   if (patch.worldName !== undefined) patch.confirmWorldName = values.confirmWorldName === 'true';
   return Object.keys(patch).length ? {...patch, confirm:true} : null;
 }
-function openModal(action, userId = '') {
+function openModal(action, userId = '', serverId = '') {
   if (!can(action === 'add-server' ? 'create' : action)) return;
   $('#modal').classList.toggle('create-server-dialog', action === 'add-server');
   modalOpener = document.activeElement;
   state.modalAction = action;
   $('#modal-form').noValidate = ['add-integration','edit-integration'].includes(action);
-  state.modalServerId = selectedServer()?.id || '';
+  state.modalServerId = serverId || selectedServer()?.id || '';
   if (action === 'delete' && userId) state.modalServerId = userId;
   state.modalUserId = userId;
   state.modalRebootId = userId;
@@ -1203,7 +1266,7 @@ function openModal(action, userId = '') {
       ? `<p>Delete <strong>${escapeHTML(user.name)}</strong> from saved IDs? Existing servers keep their owner ID.</p>`
       : `<label class="field">Display name<input name="name" data-testid="user-name" required maxlength="48" value="${escapeHTML(user?.name || '')}" autocomplete="off" autofocus></label><label class="field">RSDW / EOS player ID<input name="playerId" data-testid="user-player-id" required maxlength="128" pattern="${PATTERN.eosId}" value="${escapeHTML(user?.playerId || '')}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Copy the Player ID from the game's Settings menu. Each ID can be saved once.</small></label>`;
   } else if (action === 'edit-settings') {
-    const server = selectedServer();
+    const server = state.servers.find((item) => item.id === state.modalServerId) || selectedServer();
     state.modalInitialSettings = editSettingsValues(server);
     const image = server.currentImage ? `Running image ${escapeHTML(server.currentImage)}${server.desiredImage && server.desiredImage !== server.currentImage ? ` · Pending image ${escapeHTML(server.desiredImage)}` : ''}` : `Image ${escapeHTML(server.desiredImage || 'Not recorded')}`;
     $('#modal-title').textContent = 'Edit server settings';
@@ -1221,14 +1284,16 @@ function openModal(action, userId = '') {
     $('#modal-submit').textContent = 'Deploy server';
     $('#modal-body').innerHTML = `<p>A new Dragonwilds world, deployed to your Kubernetes cluster.</p><div class="form-grid"><label class="field full">Server name<input name="worldName" data-testid="server-world-name" required maxlength="128" placeholder="My Dragonwilds server" autofocus></label><label class="field full">Owner name<input name="name" data-testid="server-name" required maxlength="48" placeholder="Owner display name" autocomplete="off"></label><label class="field full">Owner EOS player ID<input name="ownerId" data-testid="server-owner" required maxlength="128" autocomplete="off" placeholder="Your game account ID"></label><div class="field full"><label for="create-image-tag">Image tag</label><select id="create-image-tag" name="imageTag" data-testid="server-image" required disabled></select><small id="image-tags-status" role="status"></small><button type="button" data-action="retry-image-tags" hidden>Retry image tags</button></div><label class="field full">Max players<input name="maxPlayers" data-testid="server-max-players" type="number" min="1" max="64" value="4" required></label></div><details id="server-advanced"><summary>Advanced</summary><div class="form-grid"><label class="field">Namespace<input name="namespace" data-testid="server-namespace" required maxlength="63" pattern="[a-z0-9](([a-z0-9]|-)*[a-z0-9])?" value="dragonwilds" title="Lowercase letters, numbers, and hyphens; start and end with a letter or number"></label></div></details>`;
   } else if (action === 'stop' || action === 'start') {
-    const server = selectedServer();
+    const server = state.servers.find((item) => item.id === state.modalServerId);
+    if (!server) throw new Error('This server is no longer available. Refresh the dashboard.');
     $('#modal-title').textContent = action === 'stop' ? 'Stop this server?' : 'Start this server?';
     $('#modal-submit').textContent = action === 'stop' ? 'Confirm stop' : 'Confirm start';
     $('#modal-body').innerHTML = action === 'stop'
       ? `<p><strong>${escapeHTML(serverLabel(server))}</strong> will stop. Active players will be disconnected. World data and this inventory row stay. Start it later from Maintenance.</p>`
       : `<p><strong>${escapeHTML(serverLabel(server))}</strong> will start. Same world, same server ID, same disk.</p>`;
   } else {
-    const server = selectedServer();
+    const server = state.servers.find((item) => item.id === state.modalServerId);
+    if (!server) throw new Error('This server is no longer available. Refresh the dashboard.');
     $('#modal-title').textContent = action === 'restart' ? 'Restart this server?' : 'Update server image';
     $('#modal-submit').textContent = action === 'restart' ? 'Confirm restart' : 'Confirm update';
     $('#modal-body').innerHTML = `<p><strong>${escapeHTML(serverLabel(server))}</strong> will ${action === 'restart' ? 'restart' : 'restart with the selected image'}. Active players will be disconnected. Wait for a quiet moment before continuing.</p>${action === 'update' ? '<div class="field"><label for="update-image-tag">Container image tag</label><select id="update-image-tag" name="imageTag" data-testid="update-image-tag" required disabled></select><small id="image-tags-status" role="status"></small><button type="button" data-action="retry-image-tags" hidden>Retry image tags</button></div>' : ''}`;
@@ -1461,7 +1526,7 @@ async function handleAction(event) {
         updateResources();
         break;
       }
-      case 'add-server': case 'restart': case 'stop': case 'start': case 'update': case 'edit-settings': openModal(action); break;
+      case 'add-server': case 'restart': case 'stop': case 'start': case 'update': case 'edit-settings': openModal(action, '', button.dataset.id); break;
       case 'delete': openModal(action, button.dataset.id); break;
       case 'add-reboot': case 'edit-reboot': case 'delete-reboot': openModal(action, button.dataset.id || ''); break;
       case 'add-daily-time': addDailyTime(); break;
@@ -1479,6 +1544,7 @@ async function handleAction(event) {
       case 'close-modal': closeModal(); break;
       case 'retry': await refresh(); break;
       case 'fleet-filter': state.fleetFilter = button.dataset.value; render(); break;
+      case 'dashboard-view': state.dashboardView = button.dataset.value === 'table' ? 'table' : 'rows'; render(); break;
       case 'view-server': location.hash = `servers/${encodeURIComponent(button.dataset.id)}`; break;
       case 'view-events': location.hash = scopedHash('events'); break;
       case 'copy-endpoint':

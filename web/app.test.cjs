@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, dashboardModel, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, stop:true, start:true, update:true, logs:true, updateCheck:true};
 
@@ -1056,8 +1056,67 @@ test('maintenance shows deploy progress only for the selected watched server', (
   assert.doesNotMatch(maintenance(), /data-testid="deploy-progress"/);
   state.serverId = '';
   html = context.ui.dashboard();
-  assert.match(html, /<tr class="deploying">/);
+  assert.match(html, /class="console-row equal-height  deploying"/);
+  state.dashboardView = 'table';
+  assert.match(context.ui.dashboard(), /<tr class="deploying">/);
+  state.dashboardView = 'rows';
   assert.match(html, /Watched world/);
   state.capabilities = {dashboard:true, telemetry:true};
   assert.doesNotMatch(context.ui.dashboard(), /Add server|data-testid="add-server"/);
+});
+
+test('dashboard model shares availability, badges, schedules and row actions across views', () => {
+  state.capabilities = {dashboard:true, telemetry:true, maintenance:true, reboots:true, create:true, restart:true, stop:true, start:true, updateCheck:true};
+  state.serverId = '';
+  state.fleetFilter = 'all';
+  state.dashboardView = 'rows';
+  state.rebootsAvailable = true;
+  state.reboots = [{serverId:'a',enabled:true,nextRun:'2030-01-03T00:00:00Z'}, {serverId:'a',enabled:false,nextRun:'2030-01-01T00:00:00Z'}, {serverId:'a',enabled:true,nextRun:'2030-01-02T00:00:00Z'}];
+  const metric = (value) => ({value,status:'available'});
+  state.servers = [
+    {id:'a',worldName:'Aurora <&>',endpoint:'10.20.0.21:7777',status:'online',maxPlayers:12,metrics:{players:metric(5),tickRate:metric(60),memoryUsedBytes:metric(0),memoryLimitBytes:metric(1024),cpuPercent:metric(0)}},
+    {id:'b',worldName:'Brin',endpoint:'10.20.0.22:7777',status:'online',maxPlayers:8,metrics:{players:metric(2)}},
+    {id:'c',worldName:'Cinder',endpoint:'<host>:7777',status:'attention',updateAvailable:true,maxPlayers:4,metrics:{players:metric(2),memoryUsedBytes:{value:999,status:'stale'}}},
+    {id:'d',worldName:'Ember',status:'stopped',maxPlayers:16,metrics:{players:metric(99),cpuPercent:metric(90)}},
+  ];
+  const model = context.ui.dashboardModel();
+  assert.deepEqual(JSON.parse(JSON.stringify(model.summary)),{total:4,online:3,players:9,capacity:40,incomplete:false});
+  assert.equal(model.rows[0].resources[0].percent,0);
+  assert.equal(model.rows[0].resources[1].percent,0);
+  assert.equal(model.rows[2].resources[0].percent,null);
+  assert.equal(model.rows[3].resources[1].percent,null);
+  assert.equal(model.rows[3].playersText,'0 / 16');
+  assert.equal(model.rows[3].tickText,'Stopped');
+  assert.equal(model.rows[0].schedule.text,vm.runInContext("date('2030-01-02T00:00:00Z')",context));
+  assert.equal(model.rows[2].schedule.text,'Not scheduled');
+  html = context.ui.dashboard();
+  assert.equal((html.match(/class="panel stat"/g) || []).length,3);
+  for (const label of ['Registered servers','Online','Players online','3 / 4','9 / 40','Table view','10.20.0.21:7777','Aurora &lt;&amp;&gt;','&lt;host&gt;:7777']) assert.ok(html.includes(label),label);
+  assert.doesNotMatch(html,/Fleet activity|Updates available|WORLD-01|<table>/);
+  assert.equal((html.match(/console-row equal-height/g) || []).length,4);
+  assert.match(html,/console-badge attention">Attention<\/span><span class="console-badge update">Update/);
+  assert.match(html,/href="#servers\/c"/);
+  assert.match(html,/data-action="restart" data-id="c"/);
+  assert.match(html,/data-action="stop" data-id="c"/);
+  assert.match(html,/data-action="start" data-id="d"/);
+  assert.doesNotMatch(html,/data-action="(?:restart|stop)" data-id="d"/);
+  assert.match(html,/aria-label="Resources"/);
+  state.dashboardView = 'table';
+  html = context.ui.dashboard();
+  assert.match(html,/<table>/);
+  assert.match(html,/Row view/);
+  assert.match(html,/data-action="stop" data-id="c"/);
+  state.fleetFilter = 'online';
+  assert.equal(context.ui.dashboardModel().rows.length,3);
+  state.fleetFilter = 'attention';
+  assert.equal(context.ui.dashboardModel().rows[0].id,'c');
+  state.fleetFilter = 'all';
+  state.rebootsAvailable = false;
+  assert.equal(context.ui.dashboardModel().rows[0].schedule.text,'Unavailable');
+  state.servers[0].metrics.players = {status:'unavailable',value:20};
+  assert.equal(context.ui.dashboardModel().summary.incomplete,true);
+  state.capabilities = {dashboard:true,telemetry:true};
+  state.dashboardView = 'rows';
+  html = context.ui.dashboard();
+  assert.doesNotMatch(html,/10\.20|&lt;host|Next reboot|console-badge update|data-action="(?:start|stop|restart)"/);
 });
