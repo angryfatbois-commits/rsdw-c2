@@ -71,8 +71,9 @@ const (
 )
 
 type Server struct {
-	OwnershipToken   string `json:"ownershipToken,omitempty"`
-	RestartOperation string `json:"-"`
+	OwnershipToken   string          `json:"ownershipToken,omitempty"`
+	RestartOperation string          `json:"-"`
+	PasswordUpdate   *PasswordUpdate `json:"-"`
 	ServerSettings
 	SaveSeed              *SaveSeed                `json:"saveSeed,omitempty"`
 	Metrics               map[string]MetricReading `json:"metrics"`
@@ -187,6 +188,12 @@ type ServerSettings struct {
 	DebugLevel        int    `json:"debugLevel"`
 	AutoStopOnUpdate  bool   `json:"autoStopOnUpdate"`
 	ValidateGameFiles bool   `json:"validateGameFiles"`
+}
+
+type PasswordUpdate struct {
+	ServerPassword *string
+	AdminPassword  *string
+	Revision       string
 }
 
 type UpdateServerRequest struct {
@@ -306,6 +313,8 @@ func (s State) clone() State {
 		next.RebootSchedules[id] = schedule
 	}
 	for id, server := range next.Servers {
+		server.ServerPassword, server.AdminPassword = "", ""
+		server.PasswordUpdate = nil
 		server.Metrics = maps.Clone(server.Metrics)
 		for key, reading := range server.Metrics {
 			if reading.Value != nil {
@@ -639,6 +648,9 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 		}
 	}
 	secret := server.Release + "-api"
+	if server.PasswordUpdate != nil && server.OwnershipToken == "" {
+		return errors.New("cannot update password Secret without a server ownership token")
+	}
 	if server.OwnershipToken != "" {
 		token, err := randomToken()
 		if err != nil {
@@ -647,7 +659,11 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 		if err := k.ensureOwnedSecret(ctx, server, secret, map[string]string{"token": token}); err != nil {
 			return fmt.Errorf("create API token Secret: %w", err)
 		}
-		if server.PasswordSecret != "" && (server.ServerPassword != "" || server.AdminPassword != "") {
+		if server.PasswordUpdate != nil {
+			if err := k.updateOwnedPasswordSecret(ctx, server); err != nil {
+				return fmt.Errorf("update password Secret: %w", err)
+			}
+		} else if server.PasswordSecret != "" && (server.ServerPassword != "" || server.AdminPassword != "") {
 			if err := k.ensureOwnedSecret(ctx, server, server.PasswordSecret, map[string]string{"serverPassword": server.ServerPassword, "adminPassword": server.AdminPassword}); err != nil {
 				return err
 			}
@@ -703,13 +719,16 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 	if _, err := k.runner.Run(ctx, k.helm, args...); err != nil {
 		return fmt.Errorf("helm deploy: %w", err)
 	}
+	if server.PasswordUpdate != nil {
+		if err := k.patchDeploymentAnnotation(ctx, server, server.PasswordUpdate.Revision); err != nil {
+			return fmt.Errorf("roll out password update: %w", err)
+		}
+	}
 	return nil
 }
 
 func (k *kubeOrchestrator) Restart(ctx context.Context, server Server) error {
-	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"annotations": map[string]string{restartAnnotation: server.RestartOperation}}}}})
-	_, err := k.runner.Run(ctx, k.kubectl, "-n", server.Namespace, "patch", "deployment/"+deploymentName(server.Release), "--type=merge", "-p", string(patch))
-	return err
+	return k.patchDeploymentAnnotation(ctx, server, server.RestartOperation)
 }
 
 func (k *kubeOrchestrator) Scale(ctx context.Context, server Server, replicas int) error {
