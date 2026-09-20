@@ -66,7 +66,7 @@ let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
 let rosterExpiryTimer;
-const can = (capability) => state.capabilities[({servers:'telemetry', users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
+const can = (capability) => state.capabilities[({servers:'telemetry', users:'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
 function parseLocationHash(hash) {
   const raw = String(hash ?? '').replace(/^#/, '').split('?')[0];
   const slash = raw.indexOf('/');
@@ -261,19 +261,22 @@ function normalizePlayerIdClient(value) {
   return id;
 }
 function adminIdsFields(users, selectedPlayerIds = []) {
-  const selected = new Set(parseAdminIds((selectedPlayerIds || []).join(',')));
+  const selected = new Set(parseAdminIds(Array.isArray(selectedPlayerIds) ? selectedPlayerIds.join(',') : selectedPlayerIds));
   const leftover = [...selected].filter((id) => !(users || []).some((user) => String(user.playerId || '').toLowerCase() === id));
   const saved = (users || []).map((user) => {
     const playerId = String(user.playerId || '');
     const checked = selected.has(playerId.toLowerCase()) ? ' checked' : '';
     return `<label class="choice-row"><input type="checkbox" name="adminPlayerId" value="${escapeHTML(playerId)}" data-testid="admin-saved-id"${checked}><span class="choice-copy"><strong>${escapeHTML(user.name || 'Saved ID')}</strong><small class="mono">${escapeHTML(playerId)}</small></span></label>`;
   }).join('') || '<p>No saved IDs yet. Add them on the Saved IDs page, or enter a player ID below.</p>';
-  return `<fieldset class="form-section field full" data-testid="admin-ids"><legend>Administrator EOS IDs</legend><p>Optional. Tick saved IDs and/or type one extra 32-hex ID. Empty is allowed.</p>${saved}<label class="field">Additional administrator ID<input name="adminPlayerIdManual" data-testid="admin-manual-id" maxlength="32" pattern="${PATTERN.eosId}" value="${escapeHTML(leftover[0] || '')}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Optional extra ID that is not in Saved IDs.</small></label></fieldset>`;
+  const manualValues = leftover.length ? leftover : [''];
+  const manualFields = manualValues.map((value, index) => `<label class="field">Additional administrator ID ${index + 1}<input name="adminPlayerIdManual" data-testid="admin-manual-id" maxlength="32" pattern="${PATTERN.eosId}" value="${escapeHTML(value)}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Optional extra ID that is not in Saved IDs.</small></label>`).join('');
+  return `<fieldset class="form-section field full" data-testid="admin-ids"><legend>Administrator EOS IDs</legend><p>Optional. Tick saved IDs and/or type one or more additional 32-hex IDs. Empty is allowed.</p>${saved}<div id="admin-manual-ids">${manualFields}</div><button type="button" class="subtle" data-action="add-admin-id" data-testid="add-admin-id">Add administrator ID</button></fieldset>`;
 }
 function adminIdsFromForm(form) {
   const ids = [];
   const seen = new Set();
-  for (const value of [...form.getAll('adminPlayerId'), ...form.getAll('adminPlayerIdManual')]) {
+  const getAll = (name) => typeof form.getAll === 'function' ? form.getAll(name) : form[name] === undefined ? [] : [form[name]];
+  for (const value of [...getAll('adminPlayerId'), ...getAll('adminPlayerIdManual')]) {
     const trimmed = String(value || '').trim();
     if (!trimmed) continue;
     const id = normalizePlayerIdClient(trimmed);
@@ -1223,16 +1226,34 @@ async function refresh() {
   }
 }
 function editSettingsValues(server) {
-  return {name:server.name || '', worldName:server.worldName || server.name || '', maxPlayers:server.maxPlayers, memoryLimitMiB:server.memoryLimitMiB || 2048, cpuLimitMillis:server.cpuLimitMillis || 1000};
+  return {name:server.name || '', worldName:server.worldName || server.name || '', maxPlayers:server.maxPlayers, memoryLimitMiB:server.memoryLimitMiB || 2048, cpuLimitMillis:server.cpuLimitMillis || 1000, adminIds:parseAdminIds(server.adminIds).join(',')};
 }
 function editSettingsPatch(initial, values) {
   const patch = {};
-  for (const key of Object.keys(initial)) {
-    const value = ['name','worldName'].includes(key) ? values[key].trim() : Number(values[key]);
+  const get = (key) => typeof values.get === 'function' ? values.get(key) : values[key];
+  for (const key of ['name','worldName','maxPlayers','memoryLimitMiB','cpuLimitMillis']) {
+    const value = ['name','worldName'].includes(key) ? String(get(key) ?? '').trim() : Number(get(key));
     if (value !== initial[key]) patch[key] = value;
   }
-  if (patch.worldName !== undefined) patch.confirmWorldName = values.confirmWorldName === 'true';
+  const hasAdminIDs = typeof values.getAll === 'function' || Object.prototype.hasOwnProperty.call(values, 'adminIds');
+  if (hasAdminIDs) {
+    const adminIds = typeof values.getAll === 'function' ? adminIdsFromForm(values) : parseAdminIds(values.adminIds).join(',');
+    const sameAdminIDs = parseAdminIds(adminIds).slice().sort().join(',') === parseAdminIds(initial.adminIds).slice().sort().join(',');
+    if (!sameAdminIDs) patch.adminIds = adminIds;
+  }
+  for (const [field, clearField] of [['serverPassword','clearServerPassword'],['adminPassword','clearAdminPassword']]) {
+    if (get(clearField)) patch[field] = '';
+    else if (get(field)) patch[field] = get(field);
+  }
+  if (patch.worldName !== undefined) patch.confirmWorldName = get('confirmWorldName') === 'true';
   return Object.keys(patch).length ? {...patch, confirm:true} : null;
+}
+function addAdminIDField() {
+  const container = $('#admin-manual-ids');
+  if (!container) return;
+  const index = container.querySelectorAll('input[name="adminPlayerIdManual"]').length + 1;
+  container.insertAdjacentHTML('beforeend', `<label class="field">Additional administrator ID ${index}<input name="adminPlayerIdManual" data-testid="admin-manual-id" maxlength="32" pattern="${PATTERN.eosId}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Optional extra ID that is not in Saved IDs.</small></label>`);
+  container.querySelectorAll('[data-testid="admin-manual-id"]')[index - 1].focus();
 }
 function openModal(action, userId = '', serverId = '') {
   if (!can(action === 'add-server' ? 'create' : action)) return;
@@ -1286,7 +1307,7 @@ function openModal(action, userId = '', serverId = '') {
     const image = server.currentImage ? `Running image ${escapeHTML(server.currentImage)}${server.desiredImage && server.desiredImage !== server.currentImage ? ` · Pending image ${escapeHTML(server.desiredImage)}` : ''}` : `Image ${escapeHTML(server.desiredImage || 'Not recorded')}`;
     $('#modal-title').textContent = 'Edit server settings';
     $('#modal-submit').textContent = 'Confirm and apply settings';
-    $('#modal-body').innerHTML = `<p>Stable ID <code>${escapeHTML(server.id)}</code> · Release <code>${escapeHTML(server.namespace)}/${escapeHTML(server.release)}</code></p><p>Stable identity and deployment settings are not editable here: Owner ID ${escapeHTML(server.ownerId || 'Not recorded')} · ${image} · Storage ${escapeHTML(server.storageGiB || 40)} GiB · Port ${escapeHTML(server.gamePort || 7777)} · Service ${escapeHTML(server.serviceType || 'LoadBalancer')}</p><p>Applying changes replaces the game pod and can disconnect active players. This is not hot reload. The existing PVC is retained. C2 performs no save-file rename or migration. Whether this game build renames or selects an existing save from the world name is unverified.</p><div class="form-grid">${[['name','Creator name','text',1,48],['worldName','World name','text',1,2048],['maxPlayers','Max players','number',1,64],['memoryLimitMiB','Memory limit (MiB)','number',256,67584],['cpuLimitMillis','CPU limit (millicores)','number',100,64000]].map(([key,label,type,min,max]) => `<label class="field">${label}<input name="${key}" data-testid="edit-${key}" type="${type}" ${type === 'number' ? `min="${min}" max="${max}" step="1"` : `maxlength="${max}"`} required value="${escapeHTML(state.modalInitialSettings[key])}"></label>`).join('')}</div><label class="field full"><span><input type="checkbox" name="confirmWorldName" value="true" data-testid="confirm-world-name"> I understand that C2 does not rename or migrate save files, and that this game build's world-name save behavior is unverified.</span></label><p id="edit-status" role="status" aria-live="polite">Confirm to request a rollout. Rollout readiness is not verified by this operation.</p>`;
+    $('#modal-body').innerHTML = `<p>Stable ID <code>${escapeHTML(server.id)}</code> · Release <code>${escapeHTML(server.namespace)}/${escapeHTML(server.release)}</code></p><p>Stable identity and deployment settings are not editable here: Owner ID ${escapeHTML(server.ownerId || 'Not recorded')} · ${image} · Storage ${escapeHTML(server.storageGiB || 40)} GiB · Port ${escapeHTML(server.gamePort || 7777)} · Service ${escapeHTML(server.serviceType || 'LoadBalancer')}</p><p>Applying changes replaces the game pod and can disconnect active players. This is not hot reload. The existing PVC is retained. C2 performs no save-file rename or migration. Whether this game build renames or selects an existing save from the world name is unverified.</p><div class="form-grid">${[['name','Creator name','text',1,48],['worldName','World name','text',1,2048],['maxPlayers','Max players','number',1,64],['memoryLimitMiB','Memory limit (MiB)','number',256,67584],['cpuLimitMillis','CPU limit (millicores)','number',100,64000]].map(([key,label,type,min,max]) => `<label class="field">${label}<input name="${key}" data-testid="edit-${key}" type="${type}" ${type === 'number' ? `min="${min}" max="${max}" step="1"` : `maxlength="${max}"`} required value="${escapeHTML(state.modalInitialSettings[key])}"></label>`).join('')}</div><fieldset class="form-section field full" data-testid="edit-access"><legend>Passwords</legend><p>Leave a password blank to keep the current value. Passwords are write-only and never displayed. Clear server password to allow passwordless joins, or clear admin password to remove the admin password.</p><div class="form-grid"><label class="field">Server password<input name="serverPassword" data-testid="edit-server-password" type="password" maxlength="2048" autocomplete="new-password"><small>Optional replacement for the join password.</small></label><label class="field">Admin password<input name="adminPassword" data-testid="edit-admin-password" type="password" maxlength="2048" autocomplete="new-password"><small>Optional replacement for the administrator password.</small></label><label class="field checkbox-field"><span><input type="checkbox" name="clearServerPassword" value="true" data-testid="clear-server-password"> Clear server password</span></label><label class="field checkbox-field"><span><input type="checkbox" name="clearAdminPassword" value="true" data-testid="clear-admin-password"> Clear admin password</span></label></div></fieldset>${adminIdsFields(state.users || [], parseAdminIds(server.adminIds))}<label class="field full"><span><input type="checkbox" name="confirmWorldName" value="true" data-testid="confirm-world-name"> I understand that C2 does not rename or migrate save files, and that this game build's world-name save behavior is unverified.</span></label><p id="edit-status" role="status" aria-live="polite">Confirm to request a rollout. Rollout readiness is not verified by this operation.</p>`;
   } else if (action === 'delete') {
     const server = state.servers.find((item) => item.id === state.modalServerId);
     const receipt = state.deletions[state.modalServerId];
@@ -1391,7 +1412,8 @@ async function submitModal(event) {
   }
   if (!can(state.modalAction === 'add-server' ? 'create' : state.modalAction) || state.modalBusy || !$('#modal-form').reportValidity()) return;
   const epoch = state.epoch;
-  const values = Object.fromEntries(new FormData($('#modal-form')));
+  const formData = new FormData($('#modal-form'));
+  const values = Object.fromEntries(formData);
   const action = state.modalAction;
   if (action === 'add-reboot' || action === 'edit-reboot') clearRebootErrors();
   let body, path, method = 'POST', message;
@@ -1409,7 +1431,7 @@ async function submitModal(event) {
       message = 'Reboot schedule deleted.';
       break;
     case 'edit-settings':
-      body = editSettingsPatch(state.modalInitialSettings, values);
+      body = editSettingsPatch(state.modalInitialSettings, formData);
       if (!body) { closeModal(); notice('No settings changed. No rollout requested.'); return; }
       if (body.worldName !== undefined && !body.confirmWorldName) {
         $('#modal-error').textContent = 'Acknowledge the world-name save warning before applying this change.';
@@ -1447,7 +1469,7 @@ async function submitModal(event) {
       message = 'Saved ID deleted. Existing servers are unchanged.';
       break;
     case 'add-server':
-      body = createSettingsFromForm(new FormData($('#modal-form')));
+      body = createSettingsFromForm(formData);
       path = '/api/servers';
       message = 'Server deployment requested. C2 is waiting for the game to become ready.';
       break;
@@ -1525,7 +1547,7 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
-  const permission = {'add-server':'create', 'edit-settings':'maintenance', restart:'restart', stop:'stop', start:'start', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'load-older-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots'}[action];
+  const permission = {'add-server':'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', restart:'restart', stop:'stop', start:'start', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'load-older-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots'}[action];
   if (permission && !can(permission)) return;
   try {
     switch (action) {
@@ -1544,6 +1566,7 @@ async function handleAction(event) {
       case 'add-server': case 'restart': case 'stop': case 'start': case 'update': case 'edit-settings': openModal(action, '', button.dataset.id); break;
       case 'delete': openModal(action, button.dataset.id); break;
       case 'add-reboot': case 'edit-reboot': case 'delete-reboot': openModal(action, button.dataset.id || ''); break;
+      case 'add-admin-id': addAdminIDField(); break;
       case 'add-daily-time': addDailyTime(); break;
       case 'remove-daily-time': removeDailyTime(button); break;
       case 'preview-reboot': await previewReboot(); break;

@@ -28,6 +28,7 @@ type kubeMetadata struct {
 	Name              string            `json:"name"`
 	Namespace         string            `json:"namespace"`
 	UID               string            `json:"uid"`
+	ResourceVersion   string            `json:"resourceVersion"`
 	DeletionTimestamp *time.Time        `json:"deletionTimestamp"`
 	OwnerReferences   []struct {
 		Kind       string `json:"kind"`

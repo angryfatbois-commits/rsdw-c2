@@ -17,6 +17,9 @@ type EditServerRequest struct {
 	MaxPlayers       *int    `json:"maxPlayers"`
 	MemoryLimitMiB   *int    `json:"memoryLimitMiB"`
 	CPULimitMillis   *int    `json:"cpuLimitMillis"`
+	ServerPassword   *string `json:"serverPassword"`
+	AdminPassword    *string `json:"adminPassword"`
+	AdminIDs         *string `json:"adminIds"`
 	Confirm          bool    `json:"confirm"`
 	ConfirmWorldName bool    `json:"confirmWorldName"`
 }
@@ -33,7 +36,7 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 		writeError(w, http.StatusBadRequest, "expected one JSON object")
 		return
 	}
-	if !request.Confirm || (request.Name == nil && request.WorldName == nil && request.MaxPlayers == nil && request.MemoryLimitMiB == nil && request.CPULimitMillis == nil) {
+	if !request.Confirm || (request.Name == nil && request.WorldName == nil && request.MaxPlayers == nil && request.MemoryLimitMiB == nil && request.CPULimitMillis == nil && request.ServerPassword == nil && request.AdminPassword == nil && request.AdminIDs == nil) {
 		writeError(w, http.StatusBadRequest, "at least one setting and confirm: true are required")
 		return
 	}
@@ -46,6 +49,23 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("%s must be a nonempty single line of at most %d bytes", field.name, field.max))
 			return
 		}
+	}
+	for _, field := range []struct {
+		name  string
+		value *string
+	}{{"serverPassword", request.ServerPassword}, {"adminPassword", request.AdminPassword}} {
+		if field.value != nil && (len(*field.value) > 2048 || strings.ContainsAny(*field.value, "\x00\r\n")) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("%s must be a single line of at most 2048 bytes", field.name))
+			return
+		}
+	}
+	if request.AdminIDs != nil {
+		normalized, err := normalizeAdminIDs(*request.AdminIDs)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "adminIds: "+err.Error())
+			return
+		}
+		request.AdminIDs = &normalized
 	}
 	for _, field := range []struct {
 		name     string
@@ -87,6 +107,12 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 	if request.CPULimitMillis != nil {
 		server.CPULimitMillis = *request.CPULimitMillis
 	}
+	if request.AdminIDs != nil {
+		server.AdminIDs = *request.AdminIDs
+	}
+	if request.ServerPassword != nil || request.AdminPassword != nil {
+		server.PasswordSecret = defaultValue(server.PasswordSecret, server.Release+"-settings")
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	observed, err := a.orchestrator.Refresh(ctx, server)
@@ -102,12 +128,14 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 	server.UpdateAvailable = server.DesiredImage != "" && server.CurrentImage != server.DesiredImage
 	deployment := server
 	deployment.DesiredImage = server.CurrentImage
+	deployment.PasswordUpdate = newPasswordUpdate(request.ServerPassword, request.AdminPassword)
 	if err := a.orchestrator.Deploy(ctx, deployment); err != nil {
 		log.Printf("settings apply failed for server %s, release %s/%s: %v", server.ID, server.Namespace, server.Release, err)
 		writeError(w, http.StatusBadGateway, fmt.Sprintf("Settings apply failed for server %s, release %s/%s. Cluster outcome may be uncertain; inspect the existing release before retrying. C2 settings were not saved.", server.ID, server.Namespace, server.Release))
 		return
 	}
 	server.Status = StatusStarting
+	server.PasswordUpdate = nil
 	if err := a.store.Update(func(state *State) error {
 		state.Servers[id] = server
 		appendEvent(state, server, "system", "info", "Settings apply requested", "Helm accepted the settings; rollout readiness is not verified")
