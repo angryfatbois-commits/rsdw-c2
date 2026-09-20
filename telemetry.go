@@ -128,6 +128,7 @@ type observation struct {
 	playerRoster     PlayerRoster
 	status           Status
 	image            string
+	endpoint         string
 	network          *networkCounters
 }
 
@@ -304,6 +305,9 @@ func joinObservation(server Server, result observation, now time.Time) Server {
 	}
 	if result.image != "" {
 		server.CurrentImage = result.image
+	}
+	if result.endpoint != "" {
+		server.Endpoint = result.endpoint
 	}
 	server.UpdateAvailable = server.CurrentImage != "" && server.DesiredImage != "" && server.CurrentImage != server.DesiredImage
 	return server

@@ -846,6 +846,8 @@ func (r *metricsRunner) Run(_ context.Context, name string, args ...string) ([]b
 			namespace = "dragonwilds"
 		}
 		return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":"world-pod","namespace":%q,"uid":"pod","ownerReferences":[{"kind":"ReplicaSet","uid":"rs","controller":true}]},"spec":{"containers":[{"name":"server","image":"example/server:1.2.3"}]},"status":{"phase":"Running","containerStatuses":[{"name":"server","containerID":"container","ready":true,"state":{"running":{"startedAt":"2026-01-01T00:00:00Z"}}}]}}]}`, namespace)), nil
+	case strings.Contains(call, "get service"):
+		return nil, errors.New("service lookup unavailable in this fixture")
 	case strings.Contains(call, "api/health"):
 		return []byte(`{"engineReady":true,"uptimeSeconds":123.5}`), nil
 	case strings.Contains(call, "api/players"):
