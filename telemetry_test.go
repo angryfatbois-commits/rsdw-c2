@@ -391,6 +391,33 @@ func TestCollectorDropsObservationSupersededByPendingRollout(t *testing.T) {
 	}
 }
 
+func TestCollectorPersistsResolvedEndpointAcrossCycles(t *testing.T) {
+	app, runner, server := fixtureApp(t)
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "get service") {
+			return []byte(`{"spec":{"type":"LoadBalancer","ports":[{"name":"game","port":7777,"protocol":"UDP"}]},"status":{"loadBalancer":{"ingress":[{"ip":"203.0.113.9"}]}}}`), nil, true
+		}
+		return nil, nil, false
+	}
+	app.collectTelemetry(context.Background())
+	stored := app.store.Snapshot().Servers[server.ID]
+	if stored.Endpoint != "203.0.113.9:7777" {
+		t.Fatalf("collector did not persist the resolved endpoint: %+v", stored)
+	}
+	// A later cycle that cannot resolve the Service must not erase what was already stored.
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "get service") {
+			return nil, fmt.Errorf("service lookup unavailable"), true
+		}
+		return nil, nil, false
+	}
+	app.collectTelemetry(context.Background())
+	stored = app.store.Snapshot().Servers[server.ID]
+	if stored.Endpoint != "203.0.113.9:7777" {
+		t.Fatalf("a failed resolution erased a previously known endpoint: %+v", stored)
+	}
+}
+
 func TestConcurrentReadsCollectionAndUpdates(t *testing.T) {
 	app, _, server := fixtureApp(t)
 	var wg sync.WaitGroup

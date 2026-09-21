@@ -231,6 +231,15 @@ func (a *App) collectTelemetry(ctx context.Context) {
 						if err == nil {
 							cancelObsoleteWarnings(state, now)
 						}
+						// The join endpoint is a stable Kubernetes fact, not lifecycle state; persist
+						// it independently of the ephemeral status/metrics telemetryFor computes
+						// per-request. Re-read the record: observeAlerts may have just written it.
+						if result.endpoint != "" {
+							if latest, ok := state.Servers[server.ID]; ok && latest.Endpoint != result.endpoint {
+								latest.Endpoint = result.endpoint
+								state.Servers[server.ID] = latest
+							}
+						}
 						return err
 					}
 					return nil
