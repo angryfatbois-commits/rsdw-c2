@@ -21,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -414,7 +415,9 @@ func (s *Store) Update(fn func(*State) error) error {
 	}
 	err = directory.Sync()
 	directory.Close()
-	if err != nil {
+	// Windows cannot fsync a directory handle and reports ERROR_ACCESS_DENIED. The rename
+	// is already ordered there, so only that platform's refusal is tolerated.
+	if err != nil && !(runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission)) {
 		s.writeErr = fmt.Errorf("state replacement durability is uncertain; restart C2 to reload state: %w", err)
 		return s.writeErr
 	}
