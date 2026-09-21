@@ -789,7 +789,7 @@ func (k *kubeOrchestrator) Refresh(ctx context.Context, server Server) (Server, 
 	if target.container.Image == "" {
 		return server, errors.New("observed server image is unavailable")
 	}
-	observed := observation{at: time.Now().UTC(), metrics: emptyMetrics(), status: status, image: target.container.Image}
+	observed := observation{at: time.Now().UTC(), metrics: emptyMetrics(), status: status, image: target.container.Image, endpoint: k.resolveEndpoint(ctx, server)}
 	return joinObservation(server, observed, time.Now().UTC()), nil
 }
 
