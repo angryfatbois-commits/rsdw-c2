@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({FormData});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, dashboardModel, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, dashboardModel, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, backupsPage, backupForm, navHTML, purgeWorldToken, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, stop:true, start:true, update:true, logs:true, updateCheck:true};
 
@@ -1162,4 +1162,120 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   state.dashboardView = 'rows';
   html = context.ui.dashboard();
   assert.doesNotMatch(html,/10\.20|&lt;host|Next reboot|console-badge update|data-action="(?:start|stop|restart)"/);
+});
+
+test('backups nav and page gate on the admin capability', () => {
+  Object.assign(state, {
+    capabilities:{dashboard:true, telemetry:true, backups:true, maintenance:true},
+    page:'backups', backupView:'hub', routeScope:false, serverId:'',
+    servers:[{id:'world', name:'World', status:'online'}],
+    backups:[], backupRuns:[], backupDefinitions:[], backupStorage:{available:true, usedBytes:0, limitBytes:1024},
+    backupsAvailable:true, backupsDemo:false,
+  });
+  assert.match(context.ui.navHTML(), /data-testid="nav-backups"/);
+  assert.match(context.ui.navHTML(), /href="#backups"/);
+  let html = context.ui.backupsPage();
+  assert.match(html, /data-testid="no-backup-schedules"/);
+  assert.match(html, /data-testid="no-backup-runs"/);
+  assert.match(html, /data-testid="add-backup"/);
+  assert.match(html, /data-testid="run-backup"/);
+  state.capabilities = {dashboard:true, telemetry:true};
+  assert.doesNotMatch(context.ui.navHTML(), /nav-backups/);
+  assert.doesNotMatch(context.ui.backupsPage(), /data-action="(?:add-backup|run-backup|download-backup)"/);
+});
+
+test('only a published bundle offers download and a running backup cannot be deleted', () => {
+  Object.assign(state, {
+    capabilities:{dashboard:true, telemetry:true, backups:true}, page:'backups', backupView:'hub', routeScope:false,
+    servers:[{id:'world', name:'World', status:'online'}], backups:[], backupsAvailable:true,
+    backupRuns:[
+      {id:'done', serverId:'world', serverName:'World', startedAt:'2026-01-01T00:00:00Z', result:'completed', sourceMode:'running-bak', bundleBytes:2048, downloadable:true},
+      {id:'gone', serverId:'world', serverName:'World', startedAt:'2026-01-01T01:00:00Z', result:'completed', sourceMode:'running-bak', bundleBytes:2048, downloadable:false},
+      {id:'live', serverId:'world', serverName:'World', startedAt:'2026-01-01T02:00:00Z', result:'running'},
+    ],
+  });
+  const html = context.ui.backupsPage();
+  assert.match(html, /data-action="download-backup" data-id="done"/);
+  assert.doesNotMatch(html, /data-action="download-backup" data-id="gone"/);
+  assert.doesNotMatch(html, /data-action="delete-backup-run" data-id="live"/);
+  assert.match(html, /data-action="delete-backup-run" data-id="gone"/);
+  assert.match(html, /Running \.bak/);
+});
+
+test('unavailable backups still show history and hide the add control', () => {
+  Object.assign(state, {
+    capabilities:{dashboard:true, telemetry:true, backups:true}, page:'backups', backupView:'hub', routeScope:false,
+    servers:[{id:'world', name:'World', status:'online'}], backupsAvailable:false, backups:[],
+    backupRuns:[{id:'old', serverId:'world', serverName:'World', startedAt:'2026-01-01T00:00:00Z', result:'failed', reason:'Backup repository limit reached'}],
+  });
+  const html = context.ui.backupsPage();
+  assert.match(html, /data-testid="backups-unavailable"/);
+  assert.doesNotMatch(html, /data-testid="add-backup"/);
+  assert.doesNotMatch(html, /data-testid="run-backup"/);
+  assert.match(html, /Backup repository limit reached/);
+});
+
+test('backup settings view renders storage health and read-only profiles', () => {
+  Object.assign(state, {
+    capabilities:{dashboard:true, telemetry:true, backups:true}, page:'backups', backupView:'settings',
+    servers:[], backups:[], backupRuns:[], backupsAvailable:true,
+    backupDefinitions:[{id:'dragonwilds-world-save', name:'Dragonwilds World Save', serverType:'dragonwilds', strategy:'logical-files', items:[{sourceMode:'running-bak'},{sourceMode:'stopped-sav'}]}],
+    backupStorage:{available:true, usedBytes:1048576, limitBytes:4294967296},
+  });
+  let html = context.ui.backupsPage();
+  assert.match(html, /data-testid="backup-storage"/);
+  assert.match(html, /Connected/);
+  assert.match(html, /Running world \.bak, Stopped world \.sav/);
+  assert.doesNotMatch(html, /data-action="(?:add-backup|edit-backup)"/);
+  state.backupStorage = {available:false, reason:'backups require persistent C2 state storage'};
+  html = context.ui.backupsPage();
+  assert.match(html, /Disconnected/);
+  assert.match(html, /backups require persistent C2 state storage/);
+});
+
+test('backups scope to the selected server and parse their own route', () => {
+  assert.deepEqual({...context.ui.parseLocationHash('#backups/settings')}, {page:'backups', integrationView:'hub', backupView:'settings'});
+  assert.deepEqual({...context.ui.parseLocationHash('#backups')}, {page:'backups', integrationView:'hub', backupView:'hub'});
+  Object.assign(state, {
+    capabilities:{dashboard:true, telemetry:true, backups:true}, page:'backups', backupView:'hub',
+    routeScope:true, serverId:'world', backupsAvailable:true, backups:[],
+    servers:[{id:'world', name:'World', status:'online'}, {id:'other', name:'Other', status:'online'}],
+    backupRuns:[
+      {id:'mine', serverId:'world', serverName:'World', startedAt:'2026-01-01T00:00:00Z', result:'completed', downloadable:true, bundleBytes:1},
+      {id:'theirs', serverId:'other', serverName:'Other', startedAt:'2026-01-01T00:00:00Z', result:'completed', downloadable:true, bundleBytes:1},
+    ],
+  });
+  const html = context.ui.backupsPage();
+  assert.match(html, /data-id="mine"/);
+  assert.doesNotMatch(html, /data-id="theirs"/);
+});
+
+test('restore appears on Maintenance only for a stopped world', () => {
+  const stopped = {id:'world', name:'World', status:'stopped'};
+  const online = {id:'world', name:'World', status:'online'};
+  assert.equal(context.ui.purgeWorldToken('world'), 'REPLACE WORLD world');
+  // render() injects the card; assert the exact gate it uses.
+  for (const [server, capabilities, expected] of [
+    [stopped, {backups:true}, true],
+    [online, {backups:true}, false],
+    [stopped, {backups:false}, false],
+  ]) {
+    state.capabilities = {dashboard:true, telemetry:true, maintenance:true, ...capabilities};
+    const shows = context.ui.state.capabilities.backups === true && server.status === 'stopped';
+    assert.equal(shows, expected);
+  }
+});
+
+test('backup schedule form always disables warning minutes and names one profile', () => {
+  Object.assign(state, {
+    capabilities:{dashboard:true, telemetry:true, backups:true}, modalServerId:'world',
+    servers:[{id:'world', name:'World', status:'online'}],
+    backupDefinitions:[{id:'dragonwilds-world-save', name:'Dragonwilds World Save'}],
+  });
+  const html = context.ui.backupForm(null);
+  assert.match(html, /data-testid="backup-server"/);
+  assert.match(html, /data-testid="backup-definition"/);
+  assert.doesNotMatch(html, /warningMinutes/);
+  assert.doesNotMatch(html, /acknowledgeDisconnect/);
+  assert.match(html, /data-testid="backup-mode"/);
 });

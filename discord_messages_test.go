@@ -28,6 +28,9 @@ func TestDiscordMessagePayloads(t *testing.T) {
 		{ServerRecovered, "Server recovered", "It is back. Nobody knows why, and nobody should trust it.", 0x22C55E, []discordEmbedField{{"Server", "Example server"}}},
 		{ServerStopped, "Server stopped", "The operator parked this world. The volume is still here. The players are not.", 0xF59E0B, []discordEmbedField{{"Server", "Example server"}}},
 		{ServerStarted, "Server started", "Same world, same id, same disk. Try not to immediately fill it with tragedy.", 0x22C55E, []discordEmbedField{{"Server", "Example server"}}},
+		{BackupStarted, "Backup started", "C2 started hauling this world's save out of the volume. Nobody asked it to be graceful about it.", 0x3B82F6, []discordEmbedField{{"Server", "Example server"}}},
+		{BackupCompleted, "Backup completed", "The world save is bundled and parked in the repository. Download it before something else goes wrong.", 0x22C55E, []discordEmbedField{{"Server", "Example server"}}},
+		{BackupFailed, "Backup failed", "The backup did not finish. No bundle was published and nothing old was deleted. Check the reason and try again.", 0xEF4444, []discordEmbedField{{"Server", "Example server"}}},
 		{IntegrationTest, "Discord integration test", "The bot successfully vomited into Discord and called it a test. The webhook works; civilization remains a mistake.", 0x8B5CF6, nil},
 	}
 	covered := map[EventKind]bool{}
@@ -77,7 +80,7 @@ func TestDiscordMessageRejectsUnsupportedKinds(t *testing.T) {
 		t.Fatal("unsupported message contacted Discord")
 		return nil, nil
 	})
-	for _, kind := range []EventKind{BackupStarted, BackupCompleted, BackupFailed, "unknown-private-kind", ""} {
+	for _, kind := range []EventKind{"unknown-private-kind", ""} {
 		delivery := Delivery{Event: Event{Kind: kind, Message: "private message", Details: "private details"}}
 		if _, err := renderDiscordEmbed(delivery.Event); err != errUnsupportedDiscordMessage {
 			t.Fatalf("render error = %v", err)
@@ -118,7 +121,11 @@ func TestDiscordDeliveryViewsUseRenderedEmbed(t *testing.T) {
 	if views[0].Embed == nil || views[0].Embed.Title != "Restart completed" || views[0].Embed.Description != "The corpse has staggered back online. It did the bare minimum and expects a fucking parade." {
 		t.Fatalf("embed = %+v", views[0].Embed)
 	}
-	unsupported := discordDeliveryViews([]Delivery{{Event: Event{Kind: BackupStarted}}})
+	rendered := discordDeliveryViews([]Delivery{{Event: Event{Kind: BackupStarted, ServerName: "Example server"}}})
+	if len(rendered) != 1 || rendered[0].Embed == nil || rendered[0].Embed.Title != "Backup started" {
+		t.Fatalf("backup view = %+v", rendered)
+	}
+	unsupported := discordDeliveryViews([]Delivery{{Event: Event{Kind: "unknown-private-kind"}}})
 	if len(unsupported) != 1 || unsupported[0].Embed != nil {
 		t.Fatalf("unsupported view = %+v", unsupported)
 	}

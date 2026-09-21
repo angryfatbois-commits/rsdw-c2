@@ -55,9 +55,9 @@ var alertRules = []AlertRule{
 	{ServerRecovered, "Server recovered", true, "Two healthy observations over at least 15 seconds after an outage", "observed"},
 	{ServerStopped, "Server stopped", true, "C2 operator parked the world without deleting inventory or volumes", "observed"},
 	{ServerStarted, "Server started", true, "C2 operator started a parked world", "observed"},
-	{BackupStarted, "Backup started (unavailable until a backup producer exists)", false, "No backup producer", "unavailable"},
-	{BackupCompleted, "Backup completed (unavailable until a backup producer exists)", false, "No backup producer", "unavailable"},
-	{BackupFailed, "Backup failed (unavailable until a backup producer exists)", false, "No backup producer", "unavailable"},
+	{BackupStarted, "Backup started", true, "C2 backup collector", "observed"},
+	{BackupCompleted, "Backup completed", true, "C2 backup collector", "observed"},
+	{BackupFailed, "Backup failed", true, "C2 backup collector", "observed"},
 }
 
 type SecretReference struct {
@@ -208,7 +208,7 @@ func emitAlertEvidence(state *State, server Server, kind EventKind, operation, d
 	if kind == RestartRequested || kind == RestartWarning || kind == MemoryPressureRestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
 		severity = "warning"
 	}
-	if kind == RestartFailed || kind == ServerDown {
+	if kind == RestartFailed || kind == ServerDown || kind == BackupFailed {
 		severity = "error"
 	}
 	event := Event{ID: randomID(), Timestamp: at, ServerID: server.ID, ServerName: worldLabel(server), Category: category, Severity: severity, Message: rule.Label, Details: details, Kind: kind, Source: rule.Source, Accuracy: rule.Accuracy, OperationID: operation}
@@ -260,7 +260,7 @@ func validateIntegration(i DiscordIntegration, state State) error {
 			if rule.Kind == kind {
 				found = true
 				if enabled && !rule.Available {
-					return errors.New("backup rules are unavailable until a backup producer exists")
+					return errors.New("this alert rule is unavailable in this deployment")
 				}
 			}
 		}

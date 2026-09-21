@@ -114,7 +114,7 @@ async function run() {
   assert.equal(await page.locator('#modal input[type=password]').count(),0);
   await page.locator('input[name=integrationServer][value=scuffedtards]').check();
   for (const kind of ['restart_requested','memory_pressure_restart_requested','restart_completed','player_joined','server_down']) await page.locator(`input[name=integrationRule][value=${kind}]`).check();
-  for (const kind of ['backup_started','backup_completed','backup_failed']) assert.equal(await page.locator(`input[value=${kind}]`).isDisabled(),true);
+  for (const kind of ['backup_started','backup_completed','backup_failed']) assert.equal(await page.locator(`input[value=${kind}]`).isDisabled(),false);
   assert.match(await page.locator('#modal-body').innerText(),/approximate count increase/);
   await page.screenshot({path:path.join(output,'configuration.png'),fullPage:true});
   const item = await submit('POST','/api/integrations',201);

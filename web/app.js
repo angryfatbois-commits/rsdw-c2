@@ -29,6 +29,7 @@ const icons = {
   search: '<circle cx="10" cy="10" r="7"/><path d="m15 15 6 6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/>',
+  backups: '<path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Z"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
 };
 const icon = (name) => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.server}</svg>`;
 const pages = {
@@ -40,6 +41,7 @@ const pages = {
   users: ['Saved IDs', 'Manage reusable Dragonwilds player IDs.'],
   integrations: ['Integrations', 'Connect Discord and other alert destinations.'],
   reboots: ['Reboots', 'Schedule per-server restarts with predictable timezone rules.'],
+  backups: ['Backups', 'Export, restore, and schedule world backups.'],
 };
 const discordStatusCopy = {
   not_connected: ['Not connected', 'unknown'],
@@ -55,6 +57,7 @@ const state = {
   page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
+  backups: [], backupRuns: [], backupDefinitions: [], backupStorage: {}, backupsAvailable: true, backupsDemo: false, backupView: 'hub', modalBackupId: '', modalBackupRunId: '',
   query: '', category: '', range: '60s', eventRange: '24h', eventTotal: 0, eventWarnings: 0, eventCritical: 0, telemetry: null, rosterObservation: '', rosterDeadline: 0, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
   modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, modalInitialSettings: {}, request: null,
@@ -66,7 +69,7 @@ let toastTimer;
 let modalOpener;
 let refreshSequence = 0;
 let rosterExpiryTimer;
-const can = (capability) => state.capabilities[({servers:'telemetry', users:'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
+const can = (capability) => state.capabilities[({servers:'telemetry', users:'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots', 'add-backup':'backups', 'edit-backup':'backups', 'delete-backup':'backups', 'run-backup':'backups', 'run-backup-now':'backups', 'download-backup':'backups', 'delete-backup-run':'backups', restore:'backups'})[capability] || capability] === true;
 function parseLocationHash(hash) {
   const raw = String(hash ?? '').replace(/^#/, '').split('?')[0];
   const slash = raw.indexOf('/');
@@ -78,7 +81,7 @@ function parseLocationHash(hash) {
       return {page:'servers', integrationView:'hub', serverId, scoped:true, malformed: !serverId || view.includes('/')};
     } catch { return {page:'servers', integrationView:'hub', serverId:'', scoped:true, malformed:true}; }
   }
-  if (['telemetry','maintenance','events','reboots'].includes(pageKey)) {
+  if (['telemetry','maintenance','events','reboots','backups'].includes(pageKey)) {
     const query = String(hash).split('?').slice(1).join('?');
     if (query) {
       const params = new URLSearchParams(query);
@@ -87,6 +90,9 @@ function parseLocationHash(hash) {
   }
   if (pageKey === 'integrations') {
     return {page:'integrations', integrationView: ['discord','webhook'].includes(view) ? view : 'hub'};
+  }
+  if (pageKey === 'backups') {
+    return {page:'backups', integrationView:'hub', backupView: view === 'settings' ? 'settings' : 'hub'};
   }
   return {page: pages[pageKey] ? pageKey : 'dashboard', integrationView:'hub'};
 }
@@ -915,7 +921,7 @@ function discordAlertsPage() {
     : `<div class="empty"><div class="empty-icon">${icon('integrations')}</div><h3>No ${webhook ? 'HTTPS webhooks' : 'Discord bots'} configured yet</h3><p>Add a destination to route selected server alerts.</p></div>`;
   return `<a class="back-link" href="#integrations" data-testid="integrations-back">${icon('back')}Back</a>
     <section class="panel"><div class="panel-heading"><div><h2>${webhook ? 'HTTPS webhooks' : 'Discord bots'}</h2><p>Send selected server alerts to ${webhook ? 'an HTTPS endpoint' : 'a Discord channel'}.</p></div><button class="primary" data-action="add-integration" data-testid="add-integration">${icon('plus')}Add ${webhook ? 'HTTPS webhook' : 'Discord bot'}</button></div>
-    ${pending}<p class="inline-note">${demo}Player joined alerts name characters only when fresh roster evidence supports them; otherwise they report approximate count increases. Backup alerts are unavailable until a backup producer exists.</p>${bots}</section>
+    ${pending}<p class="inline-note">${demo}Player joined alerts name characters only when fresh roster evidence supports them; otherwise they report approximate count increases. Backup alerts report collection started, completed, and failed runs from the C2 backup collector.</p>${bots}</section>
     <section class="panel section-gap"><div class="panel-heading"><div><h2>Recent messages</h2><p>Newest first. Each message names the Dragonwilds server it belongs to.</p></div></div>
     <p class="inline-note">Uncertain means a message may have been sent. Check the destination before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>
     ${deliveries.length ? `<div class="recent-delivery-list">${[...deliveries].sort((a, b) => deliveryTime(b) - deliveryTime(a)).map(deliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
@@ -1007,6 +1013,79 @@ function rebootsPage() {
   const history = (state.rebootHistory || []).filter((item) => !state.routeScope || item.serverId === state.serverId);
   return `${availability}${demo}<section class="panel"><div class="panel-heading"><div><h2>Scheduled reboots</h2><p>Each schedule targets one server. A claimed restart can no longer be canceled.</p></div><div class="page-controls"><label class="field timezone-control">Display timezone${timezoneSelect('display-timezone', selected, 'display-timezone')}</label>${can('reboots') && state.rebootsAvailable ? `<button class="primary" data-action="add-reboot" data-testid="add-reboot">${icon('plus')}Add schedule</button>` : ''}</div></div><p class="inline-note">Connected players may be disconnected. An unknown player count is never treated as zero. Preview and execution use the schedule's execution timezone; this preference only formats the console.</p>${schedules.length ? `<div class="table-wrap"><table><thead><tr><th>Server</th><th>Timing</th><th>Execution zone</th><th>State</th><th>Next run</th><th>Last result</th><th>Actions</th></tr></thead><tbody>${schedules.map((schedule) => `<tr><td><strong>${escapeHTML(schedule.serverName || schedule.serverId)}</strong><small class="mono">${escapeHTML(schedule.serverId)}</small></td><td>${rebootTimingLabel(schedule)}</td><td class="mono">${escapeHTML(schedule.executionTimezone)}</td><td>${schedule.enabled ? '<span class="result result-success">Enabled</span>' : '<span class="result result-unknown">Disabled</span>'}</td><td class="mono">${schedule.nextRun ? escapeHTML(zonedDate(schedule.nextRun, selected)) : '—'}</td><td>${rebootResult(schedule.lastResult)}${schedule.lastReason ? `<small>${escapeHTML(schedule.lastReason)}</small>` : ''}</td><td class="actions"><button data-action="edit-reboot" data-id="${escapeHTML(schedule.id)}" data-testid="edit-reboot">Edit</button><button class="danger" data-action="delete-reboot" data-id="${escapeHTML(schedule.id)}" data-testid="delete-reboot">Delete</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty"><div class="empty-icon">'+icon('clock')+'</div><h3>No reboot schedules</h3><p>Create a per-server schedule. Saving never triggers an immediate restart.</p></div>'}</section><section class="panel section-gap"><div class="panel-heading"><div><h2>Execution history</h2><p>History is retained for audit and distinguishes requested work from observed completion.</p></div></div>${history.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Server</th><th>Occurrence</th><th>Result</th><th>Operation</th><th>Details</th></tr></thead><tbody>${history.map((execution) => `<tr><td class="mono">${escapeHTML(zonedDate(execution.recordedAt, selected))}</td><td>${escapeHTML(execution.serverName || execution.serverId)}</td><td class="mono">${escapeHTML(zonedDate(execution.occurrenceAt, selected))}<small>${escapeHTML(execution.occurrenceId || execution.id || '')}</small></td><td>${rebootResult(execution.result)}</td><td class="mono">${escapeHTML(execution.operationId || '—')}</td><td>${escapeHTML(execution.reason || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No scheduled reboot executions recorded yet.</p>'}</section>`;
 }
+function backupResultLabel(result) {
+  return ({running:'Running', completed:'Completed', failed:'Failed', skipped:'Skipped', missed:'Missed during downtime'})[result] || 'No run yet';
+}
+function backupResult(result) {
+  const tone = ({completed:'success', failed:'error', skipped:'warning', missed:'warning', running:'starting'})[result] || 'unknown';
+  return `<span class="result result-${tone}">${escapeHTML(backupResultLabel(result))}</span>`;
+}
+function backupStorageCard() {
+  const storage = state.backupStorage || {};
+  const connected = storage.available === true;
+  const [label] = discordStatusCopy[connected ? 'connected' : 'disconnected'];
+  const detail = connected
+    ? `${escapeHTML(bytes(storage.usedBytes))} used of ${escapeHTML(bytes(storage.limitBytes))}`
+    : escapeHTML(storage.reason || 'The backup repository is unavailable.');
+  return `<section class="panel" data-testid="backup-storage"><div class="panel-heading"><div><h2>Local storage</h2><p>Bundles are written to the C2 backup volume.</p></div>${status(connected ? 'enabled' : 'error')}</div><dl class="detail-list"><div><dt>State</dt><dd>${escapeHTML(label)}</dd></div><div><dt>Repository</dt><dd>${detail}</dd></div></dl><p class="inline-note">A full repository fails new backups. C2 never deletes an existing bundle to make room; delete one yourself first.</p></section>`;
+}
+function backupProfilesPanel() {
+  const definitions = state.backupDefinitions || [];
+  return `<section class="panel section-gap" data-testid="backup-profiles"><div class="panel-heading"><div><h2>Backup profiles</h2><p>Built in and read only in this version.</p></div></div>${definitions.length ? `<div class="table-wrap"><table><thead><tr><th>Profile</th><th>Server type</th><th>Strategy</th><th>Collects</th></tr></thead><tbody>${definitions.map((definition) => `<tr><td><strong>${escapeHTML(definition.name)}</strong><small class="mono">${escapeHTML(definition.id)}</small></td><td>${escapeHTML(definition.serverType)}</td><td class="mono">${escapeHTML(definition.strategy)}</td><td>${escapeHTML((definition.items || []).map((item) => item.sourceMode === 'stopped-sav' ? 'Stopped world .sav' : 'Running world .bak').join(', '))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No backup profiles are available.</p>'}</section>`;
+}
+function backupSchedulesPanel(selected, schedules) {
+  return `<section class="panel"><div class="panel-heading"><div><h2>Backup schedules</h2><p>Each schedule targets one server. Backups never catch up after downtime.</p></div><div class="page-controls"><label class="field timezone-control">Display timezone${timezoneSelect('display-timezone', selected, 'display-timezone')}</label><a class="subtle" href="#backups/settings" data-testid="backup-settings">${icon('maintenance')}Settings</a>${can('backups') && state.backupsAvailable ? `<button class="primary" data-action="add-backup" data-testid="add-backup">${icon('plus')}Add schedule</button>` : ''}</div></div><p class="inline-note">A running world contributes only its game-generated <code>.bak</code>; a stopped world contributes only its <code>.sav</code>. There is no fallback between them.</p>${schedules.length ? `<div class="table-wrap"><table><thead><tr><th>Server</th><th>Timing</th><th>Execution zone</th><th>State</th><th>Next run</th><th>Last result</th><th>Actions</th></tr></thead><tbody>${schedules.map((schedule) => `<tr><td><strong>${escapeHTML(schedule.serverName || schedule.serverId)}</strong><small class="mono">${escapeHTML(schedule.serverId)}</small></td><td>${rebootTimingLabel(schedule)}</td><td class="mono">${escapeHTML(schedule.executionTimezone)}</td><td>${schedule.enabled ? '<span class="result result-success">Enabled</span>' : '<span class="result result-unknown">Disabled</span>'}</td><td class="mono">${schedule.nextRun ? escapeHTML(zonedDate(schedule.nextRun, selected)) : '—'}</td><td>${backupResult(schedule.lastResult)}${schedule.lastReason ? `<small>${escapeHTML(schedule.lastReason)}</small>` : ''}</td><td class="actions"><button data-action="run-backup-now" data-id="${escapeHTML(schedule.id)}" data-testid="run-backup-now">Run now</button><button data-action="edit-backup" data-id="${escapeHTML(schedule.id)}" data-testid="edit-backup">Edit</button><button class="danger" data-action="delete-backup" data-id="${escapeHTML(schedule.id)}" data-testid="delete-backup">Delete</button></td></tr>`).join('')}</tbody></table></div>` : `<div class="empty" data-testid="no-backup-schedules"><div class="empty-icon">${icon('clock')}</div><h3>No backup schedules</h3><p>Create a per-server schedule, or run a backup on demand below.</p></div>`}</section>`;
+}
+function backupHistoryPanel(selected, runs) {
+  return `<section class="panel section-gap"><div class="panel-heading"><div><h2>Backup history</h2><p>Newest first. Only a published bundle can be downloaded.</p></div>${can('backups') && state.backupsAvailable && state.servers.length ? `<button class="primary" data-action="run-backup" data-testid="run-backup">${icon('download')}Run backup now</button>` : ''}</div>${runs.length ? `<div class="table-wrap"><table><thead><tr><th>Started</th><th>Server</th><th>Source</th><th>Result</th><th>Size</th><th>Details</th><th>Actions</th></tr></thead><tbody>${runs.map((run) => `<tr><td class="mono">${escapeHTML(zonedDate(run.startedAt, selected))}</td><td>${escapeHTML(run.serverName || run.serverId)}</td><td>${escapeHTML(run.sourceMode === 'stopped-sav' ? 'Stopped .sav' : run.sourceMode === 'running-bak' ? 'Running .bak' : '—')}</td><td>${backupResult(run.result)}</td><td class="mono">${run.bundleBytes ? escapeHTML(bytes(run.bundleBytes)) : '—'}</td><td>${escapeHTML(run.reason || '')}</td><td class="actions">${run.downloadable ? `<button data-action="download-backup" data-id="${escapeHTML(run.id)}" data-testid="download-backup">Download</button>` : ''}${run.result === 'running' ? '' : `<button class="danger" data-action="delete-backup-run" data-id="${escapeHTML(run.id)}" data-testid="delete-backup-run">Delete</button>`}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results" data-testid="no-backup-runs">No backups have run yet.</p>'}</section>`;
+}
+function backupsPage() {
+  if (!can('backups')) return dashboard();
+  const selected = state.displayTimezone || browserTimezone();
+  const availability = state.backupsAvailable ? '' : '<p class="notice info" role="status" data-testid="backups-unavailable">Backups require persistent C2 state storage. Existing history stays visible so you can inspect it.</p>';
+  const demo = state.backupsDemo ? '<p class="notice info">Demo mode simulates backups. No Kubernetes operation is sent and no world volume is read.</p>' : '';
+  if (state.backupView === 'settings') {
+    return `<a class="back-link" href="#backups" data-testid="backups-back">${icon('back')}Back</a>${availability}${backupStorageCard()}${backupProfilesPanel()}`;
+  }
+  const schedules = (state.backups || []).filter((item) => !state.routeScope || item.serverId === state.serverId);
+  const runs = (state.backupRuns || []).filter((item) => !state.routeScope || item.serverId === state.serverId);
+  return `${availability}${demo}${backupSchedulesPanel(selected, schedules)}${backupHistoryPanel(selected, runs)}`;
+}
+function backupForm(item) {
+  const zone = item?.executionTimezone || state.displayTimezone || browserTimezone();
+  const enabled = item?.enabled !== false;
+  const mode = item?.mode || 'daily';
+  const dailyTimes = item?.dailyTimes?.length ? item.dailyTimes : ['05:00'];
+  return `<p>Choose exactly one timing mode. The first run is strictly after this save. A stopped world is a valid source; a starting world is skipped.</p><div class="error-summary" id="reboot-error-summary" role="alert" tabindex="-1" hidden><h3>Check the schedule</h3><ul></ul></div><div class="form-grid reboot-form"><label class="field">Server<select name="serverId" id="serverId" data-testid="backup-server" required>${state.servers.map((server) => `<option value="${escapeHTML(server.id)}" ${server.id === (item?.serverId || state.modalServerId) ? 'selected' : ''}>${escapeHTML(serverLabel(server))}</option>`).join('')}</select><small id="serverId-error" data-reboot-error></small></label><label class="field">Backup profile<select name="definitionId" data-testid="backup-definition" required>${(state.backupDefinitions || []).map((definition) => `<option value="${escapeHTML(definition.id)}" ${definition.id === (item?.definitionId || 'dragonwilds-world-save') ? 'selected' : ''}>${escapeHTML(definition.name)}</option>`).join('')}</select></label><label class="field">Execution timezone${timezoneSelect('executionTimezone', zone, 'backup-timezone')}<small id="executionTimezone-error" data-reboot-error></small></label><label class="field">Timing mode<select name="mode" id="reboot-mode" data-testid="backup-mode"><option value="daily" ${mode === 'daily' ? 'selected' : ''}>Daily times</option><option value="interval" ${mode === 'interval' ? 'selected' : ''}>Elapsed interval</option><option value="cron" ${mode === 'cron' ? 'selected' : ''}>Cron expression</option></select><small id="mode-error" data-reboot-error></small></label></div>
+    <div data-reboot-field="daily" ${mode === 'daily' ? '' : 'hidden'}><div id="dailyTimes">${dailyTimes.map((value, index) => dailyTimeRow(value, index)).join('')}</div><button type="button" class="subtle" data-action="add-daily-time">Add time</button><small id="dailyTimes-error" data-reboot-error></small></div>
+    <div data-reboot-field="interval" ${mode === 'interval' ? '' : 'hidden'}><div class="form-grid"><label class="field">Every<input type="number" name="intervalValue" id="intervalValue" data-testid="backup-interval-value" min="1" max="8760" value="${escapeHTML(item?.intervalValue || 6)}"></label><label class="field">Unit<select name="intervalUnit" id="intervalUnit"><option value="minutes" ${item?.intervalUnit === 'minutes' ? 'selected' : ''}>Minutes</option><option value="hours" ${item?.intervalUnit !== 'minutes' ? 'selected' : ''}>Hours</option></select></label></div><small id="intervalValue-error" data-reboot-error></small></div>
+    <div data-reboot-field="cron" ${mode === 'cron' ? '' : 'hidden'}><label class="field">Cron expression<input name="cron" id="cron" data-testid="backup-cron" value="${escapeHTML(item?.cron || '0 5 * * *')}"><small id="cron-error" data-reboot-error>Five fields, evaluated in the execution timezone.</small></label></div>
+    <label class="choice-row"><input type="checkbox" name="enabled" ${enabled ? 'checked' : ''}><span>Run this schedule automatically</span></label>`;
+}
+function backupRequestFromForm() {
+  const fields = new FormData($('#modal-form'));
+  const values = Object.fromEntries(fields);
+  const body = {serverId:values.serverId, definitionId:values.definitionId, enabled:values.enabled === 'on', mode:values.mode, executionTimezone:values.executionTimezone, warningMinutes:0, acknowledgeDisconnect:true};
+  if (values.mode === 'cron') body.cron = values.cron;
+  if (values.mode === 'interval') { body.intervalValue = Number(values.intervalValue); body.intervalUnit = values.intervalUnit; }
+  if (values.mode === 'daily') body.dailyTimes = fields.getAll('dailyTime').map((value) => value.trim()).filter(Boolean);
+  return body;
+}
+// The api() wrapper parses JSON, so a tar bundle needs a direct fetch.
+async function downloadBackupBundle(runId) {
+  let token = '';
+  if (state.authMode !== 'oidc') {
+    try { token = sessionStorage.getItem(tokenKey) || ''; } catch {}
+  }
+  const response = await fetch(`/api/backups/runs/${encodeURIComponent(runId)}/bundle`, {credentials:'same-origin', headers:{...(token ? {'Authorization':`Bearer ${token}`} : {}), ...(state.csrfToken ? {'X-CSRF-Token':state.csrfToken} : {})}});
+  if (!response.ok) throw new Error(`The backup bundle could not be downloaded (${response.status}).`);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = `rsdw-backup-${runId}.tar`;
+  document.body.append(anchor); anchor.click(); anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 function rebootForm(item) {
   const zone = item?.executionTimezone || state.displayTimezone || browserTimezone();
   const enabled = item?.enabled !== false;
@@ -1078,7 +1157,7 @@ async function previewReboot() {
   }
 }
 function navHTML() {
-  return Object.entries(pages).filter(([page]) => page !== 'servers' && can(page)).map(([page,[label]])=>`<a href="${escapeHTML(['telemetry','maintenance','events','reboots'].includes(page) ? scopedHash(page) : `#${page}`)}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
+  return Object.entries(pages).filter(([page]) => page !== 'servers' && can(page)).map(([page,[label]])=>`<a href="${escapeHTML(['telemetry','maintenance','events','reboots','backups'].includes(page) ? scopedHash(page) : `#${page}`)}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
 }
 function render() {
   if (state.authRequired) { lockedState(); return; }
@@ -1096,8 +1175,8 @@ function render() {
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(serverLabel(server))}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
   $('#server-filter').disabled = !state.servers.length;
-  $('#server-filter').hidden = ['servers','users','integrations','reboots'].includes(state.page);
-  $('#content').innerHTML = `${state.routeError ? `<p class="notice error" role="alert" data-testid="route-error">${escapeHTML(state.routeError)}</p>` : ''}${({servers:serverOverview,dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage,reboots:rebootsPage})[state.page]()}`;
+  $('#server-filter').hidden = ['servers','users','integrations','reboots'].includes(state.page) || (state.page === 'backups' && state.backupView === 'settings');
+  $('#content').innerHTML = `${state.routeError ? `<p class="notice error" role="alert" data-testid="route-error">${escapeHTML(state.routeError)}</p>` : ''}${({servers:serverOverview,dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage,reboots:rebootsPage,backups:backupsPage})[state.page]()}`;
   for (const key of openCharts) {
     const disclosure = document.querySelector(`details[data-chart="${CSS.escape(key)}"]`);
     if (disclosure) disclosure.open = true;
@@ -1106,6 +1185,7 @@ function render() {
     const server = selectedServer();
     if (can('edit-settings') && server.status !== 'stopped') $('#content .action-grid').insertAdjacentHTML('beforeend', '<div class="action-card"><button data-action="edit-settings" data-testid="edit-settings">Edit settings</button><p>Change creator, world name, player limit, memory, and CPU. Requires a rollout.</p></div>');
     if (can('delete')) $('#content .action-grid').insertAdjacentHTML('beforeend', '<div class="action-card"><button class="danger" data-action="delete" data-testid="delete-server">Delete server</button><p>Disconnect players and remove this server. Keep world data by default.</p></div>');
+    if (can('backups') && server.status === 'stopped') $('#content .action-grid').insertAdjacentHTML('beforeend', '<div class="action-card"><button data-action="restore" data-testid="restore-world">Restore world</button><p>Replace this stopped world from a tracked backup or an uploaded .sav file.</p></div>');
     $('#content').insertAdjacentHTML('beforeend', deletionReceipts());
   }
   $('#content').setAttribute('aria-busy','false');
@@ -1192,6 +1272,7 @@ async function refresh() {
     if (can('users')) requests.push(api('/api/users',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) state.users = result.users; }));
     if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
     if (can('reboots')) requests.push(api('/api/reboots',{signal:controller.signal}).then((result) => { if (current()) Object.assign(state,{reboots:result.schedules || [], rebootHistory:result.history || [], rebootsAvailable:result.available !== false, rebootsDemo:result.demo === true}); }).catch((error) => { if (current()) state.rebootsAvailable = false; throw error; }));
+    if (can('backups')) requests.push(api('/api/backups',{signal:controller.signal}).then((result) => { if (current()) Object.assign(state,{backups:result.schedules || [], backupRuns:result.runs || [], backupDefinitions:result.definitions || [], backupStorage:result.storage || {}, backupsAvailable:result.available !== false, backupsDemo:result.demo === true}); }).catch((error) => { if (current()) state.backupsAvailable = false; throw error; }));
     if (['telemetry','servers'].includes(state.page) && server) {
       const telemetryStartedAt = monotonicNow();
       requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(range)}`,{signal:controller.signal}).then((result) => {
@@ -1255,6 +1336,7 @@ function addAdminIDField() {
   container.insertAdjacentHTML('beforeend', `<label class="field">Additional administrator ID ${index}<input name="adminPlayerIdManual" data-testid="admin-manual-id" maxlength="32" pattern="${PATTERN.eosId}" autocomplete="off" title="Exactly 32 hexadecimal characters, without spaces or separators"><small>Optional extra ID that is not in Saved IDs.</small></label>`);
   container.querySelectorAll('[data-testid="admin-manual-id"]')[index - 1].focus();
 }
+function purgeWorldToken(serverId) { return `REPLACE WORLD ${serverId}`; }
 function openModal(action, userId = '', serverId = '') {
   if (!can(action === 'add-server' ? 'create' : action)) return;
   $('#modal').classList.toggle('create-server-dialog', action === 'add-server');
@@ -1265,10 +1347,12 @@ function openModal(action, userId = '', serverId = '') {
   if (action === 'delete' && userId) state.modalServerId = userId;
   state.modalUserId = userId;
   state.modalRebootId = userId;
+  state.modalBackupId = userId;
   $('#modal-error').hidden = true;
   $('#modal-submit').disabled = false;
-  $('#modal-submit').classList.toggle('danger',['restart','delete-user','delete','stop'].includes(action));
-  $('#modal-submit').classList.toggle('primary',!['restart','delete-user','delete','stop'].includes(action));
+  const destructive = ['restart','delete-user','delete','stop','delete-backup','delete-backup-run','restore'].includes(action);
+  $('#modal-submit').classList.toggle('danger', destructive);
+  $('#modal-submit').classList.toggle('primary', !destructive);
   if (action === 'add-reboot' || action === 'edit-reboot' || action === 'delete-reboot') {
     const item = state.reboots.find((schedule) => schedule.id === userId);
     if (action !== 'add-reboot' && !item) throw new Error('This reboot schedule no longer exists. Refresh the list.');
@@ -1280,6 +1364,42 @@ function openModal(action, userId = '', serverId = '') {
     $('#modal-body').innerHTML = action === 'delete-reboot'
       ? `<p>Delete the schedule for <strong>${escapeHTML(item.serverName || item.serverId)}</strong>? This removes future claims, but a restart already claimed by C2 cannot be canceled and remains in history.</p>`
       : rebootForm(item);
+  } else if (action === 'add-backup' || action === 'edit-backup' || action === 'delete-backup') {
+    const item = state.backups.find((schedule) => schedule.id === userId);
+    if (action !== 'add-backup' && !item) throw new Error('This backup schedule no longer exists. Refresh the list.');
+    $('#modal').classList.remove('create-server-dialog');
+    $('#modal-title').textContent = action === 'delete-backup' ? 'Delete backup schedule?' : action === 'add-backup' ? 'Add backup schedule' : 'Edit backup schedule';
+    $('#modal-submit').textContent = action === 'delete-backup' ? 'Delete schedule' : 'Save schedule';
+    $('#modal-submit').classList.toggle('danger', action === 'delete-backup');
+    $('#modal-submit').classList.toggle('primary', action !== 'delete-backup');
+    $('#modal-body').innerHTML = action === 'delete-backup'
+      ? `<p>Delete the schedule for <strong>${escapeHTML(item.serverName || item.serverId)}</strong>? Existing bundles are kept; only future occurrences stop.</p>`
+      : backupForm(item);
+  } else if (action === 'run-backup') {
+    const server = state.servers.find((item) => item.id === state.modalServerId) || state.servers[0];
+    if (!server) throw new Error('No server is available to back up.');
+    state.modalServerId = server.id;
+    $('#modal-title').textContent = 'Run a backup now';
+    $('#modal-submit').textContent = 'Start backup';
+    $('#modal-body').innerHTML = `<p>Collect a world save from one server immediately. This does not change any schedule.</p><div class="form-grid"><label class="field">Server<select name="serverId" data-testid="backup-run-server" required>${state.servers.map((item) => `<option value="${escapeHTML(item.id)}" ${item.id === server.id ? 'selected' : ''}>${escapeHTML(serverLabel(item))}</option>`).join('')}</select></label><label class="field">Backup profile<select name="definitionId" data-testid="backup-run-definition" required>${(state.backupDefinitions || []).map((definition) => `<option value="${escapeHTML(definition.id)}">${escapeHTML(definition.name)}</option>`).join('')}</select></label></div><p class="inline-note">A running world contributes its <code>.bak</code>; a stopped world contributes its <code>.sav</code>. A starting world is skipped.</p>`;
+  } else if (action === 'delete-backup-run') {
+    const run = state.backupRuns.find((item) => item.id === userId);
+    if (!run) throw new Error('This backup no longer exists. Refresh the list.');
+    state.modalBackupRunId = userId;
+    $('#modal-title').textContent = 'Delete this backup?';
+    $('#modal-submit').textContent = 'Delete backup';
+    $('#modal-submit').classList.add('danger');
+    $('#modal-submit').classList.remove('primary');
+    $('#modal-body').innerHTML = `<p>Delete the backup taken ${escapeHTML(date(run.startedAt))} for <strong>${escapeHTML(run.serverName || run.serverId)}</strong>? Its bundle is removed from the repository and cannot be recovered.</p>`;
+  } else if (action === 'restore') {
+    const server = state.servers.find((item) => item.id === state.modalServerId);
+    if (!server) throw new Error('This server is no longer available. Refresh Maintenance.');
+    const tracked = (state.backupRuns || []).filter((run) => run.serverId === server.id && run.downloadable);
+    $('#modal-title').textContent = 'Restore this world?';
+    $('#modal-submit').textContent = 'Restore world';
+    $('#modal-submit').classList.add('danger');
+    $('#modal-submit').classList.remove('primary');
+    $('#modal-body').innerHTML = `<p><strong>${escapeHTML(serverLabel(server))}</strong> is stopped. Restoring writes a save into its world volume; the running game never sees a partial write.</p><div class="form-grid"><label class="field full">Source<select id="restore-source" name="source" data-testid="restore-source"><option value="tracked" ${tracked.length ? '' : 'disabled'}>A tracked backup</option><option value="upload" ${tracked.length ? '' : 'selected'}>An uploaded .sav file</option></select></label><div class="field full" id="restore-tracked" ${tracked.length ? '' : 'hidden'}><label for="restore-run">Backup</label><select id="restore-run" name="runId" data-testid="restore-run" ${tracked.length ? '' : 'disabled'}>${tracked.map((run) => `<option value="${escapeHTML(run.id)}">${escapeHTML(date(run.startedAt))} · ${escapeHTML(bytes(run.bundleBytes))}</option>`).join('')}</select></div><label class="field full" id="restore-upload" ${tracked.length ? 'hidden' : ''}>Save file<input type="file" name="save" accept=".sav" data-testid="restore-save" ${tracked.length ? 'disabled' : ''}><small>One .sav file, up to 32 MiB.</small></label></div><div class="field full" id="restore-confirmation"><label for="restore-purge">Type <code>${escapeHTML(purgeWorldToken(server.id))}</code> to replace an existing world</label><input id="restore-purge" name="purgeConfirm" data-testid="restore-purge" autocomplete="off"><small>Leave empty to refuse the restore when the world already holds save data.</small></div>`;
   } else if (action === 'add-integration' || action === 'edit-integration') {
     const item = state.integrations.find((i) => i.id === userId);
     if (action === 'edit-integration' && !item) throw new Error('This integration no longer exists. Refresh the list.');
@@ -1351,6 +1471,7 @@ function openModal(action, userId = '', serverId = '') {
   } else if (action === 'edit-settings') $('[data-testid="edit-name"]').focus();
   else if (action === 'add-user' || action === 'edit-user') $('[data-testid="user-name"]').focus();
   else if (action === 'add-reboot' || action === 'edit-reboot') { syncRebootModeFields(); updateDailyTimeControls(); $('[data-testid="reboot-server"]')?.focus(); }
+  else if (action === 'add-backup' || action === 'edit-backup') { syncRebootModeFields(); updateDailyTimeControls(); $('[data-testid="backup-server"]')?.focus(); }
   else if (action !== 'add-server') $('[data-testid="cancel-modal"]').focus();
 }
 async function loadImageTags() {
@@ -1415,7 +1536,7 @@ async function submitModal(event) {
   const formData = new FormData($('#modal-form'));
   const values = Object.fromEntries(formData);
   const action = state.modalAction;
-  if (action === 'add-reboot' || action === 'edit-reboot') clearRebootErrors();
+  if (['add-reboot','edit-reboot','add-backup','edit-backup'].includes(action)) clearRebootErrors();
   let body, path, method = 'POST', message;
   switch (action) {
     case 'add-reboot': case 'edit-reboot': {
@@ -1423,6 +1544,47 @@ async function submitModal(event) {
       path = action === 'add-reboot' ? '/api/reboots' : `/api/reboots/${encodeURIComponent(state.modalRebootId)}`;
       method = action === 'add-reboot' ? 'POST' : 'PUT';
       message = 'Reboot schedule saved.';
+      break;
+    }
+    case 'add-backup': case 'edit-backup': {
+      body = backupRequestFromForm();
+      path = action === 'add-backup' ? '/api/backups/schedules' : `/api/backups/schedules/${encodeURIComponent(state.modalBackupId)}`;
+      method = action === 'add-backup' ? 'POST' : 'PUT';
+      message = 'Backup schedule saved.';
+      break;
+    }
+    case 'delete-backup':
+      path = `/api/backups/schedules/${encodeURIComponent(state.modalBackupId)}`;
+      method = 'DELETE';
+      message = 'Backup schedule deleted. Existing bundles were kept.';
+      break;
+    case 'delete-backup-run':
+      path = `/api/backups/runs/${encodeURIComponent(state.modalBackupRunId)}`;
+      method = 'DELETE';
+      message = 'Backup deleted.';
+      break;
+    case 'run-backup':
+      body = {serverId:values.serverId, definitionId:values.definitionId};
+      path = '/api/backups/runs';
+      message = 'Backup started. Its result appears in history.';
+      break;
+    case 'restore': {
+      const upload = values.source === 'upload' ? values.save : null;
+      if (values.source === 'upload' && !upload?.name) throw new Error('Select a .sav file to restore.');
+      const settings = {confirm:state.modalServerId, ...(values.purgeConfirm ? {purgeConfirm:values.purgeConfirm} : {}), ...(upload ? {} : {runId:values.runId})};
+      if (upload) {
+        if (!upload.name.endsWith('.sav') || upload.name.startsWith('.') || upload.name.startsWith('-') || /[/\\\x00-\x1f\x7f]/.test(upload.name)) throw new Error('Select a .sav file with a plain filename without a leading hyphen.');
+        if (upload.size === 0) throw new Error('Save file must not be empty.');
+        if (upload.size > 32 * 1024 * 1024) throw new Error('Save file must be at most 32 MiB.');
+        body = new FormData();
+        body.append('request', JSON.stringify(settings));
+        body.append('save', upload);
+      } else {
+        if (!settings.runId) throw new Error('Choose a tracked backup to restore.');
+        body = settings;
+      }
+      path = `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/restore`;
+      message = 'World restored. Start the server when you are ready.';
       break;
     }
     case 'delete-reboot':
@@ -1484,7 +1646,9 @@ async function submitModal(event) {
   $('#modal-error').hidden = true;
   $('#modal').querySelectorAll('[data-action="close-modal"]').forEach((button) => { button.disabled = true; });
   try {
-    const result = await api(path,{method,body:action === 'add-server' ? createRequestBody(body) : body ? JSON.stringify(body) : undefined});
+    // FormData goes through untouched so api() leaves the multipart Content-Type to the browser.
+    const payload = action === 'add-server' ? createRequestBody(body) : body instanceof FormData ? body : body ? JSON.stringify(body) : undefined;
+    const result = await api(path,{method,body:payload});
     if (epoch !== state.epoch) return;
     if (action === 'add-server') {
       const created = rememberCreatedServer(result);
@@ -1547,7 +1711,7 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
-  const permission = {'add-server':'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', restart:'restart', stop:'stop', start:'start', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'load-older-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots'}[action];
+  const permission = {'add-server':'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', restart:'restart', stop:'stop', start:'start', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-event':'events', 'export-events':'events', 'load-older-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots', 'add-backup':'backups', 'edit-backup':'backups', 'delete-backup':'backups', 'run-backup':'backups', 'run-backup-now':'backups', 'download-backup':'backups', 'delete-backup-run':'backups', restore:'backups'}[action];
   if (permission && !can(permission)) return;
   try {
     switch (action) {
@@ -1566,6 +1730,19 @@ async function handleAction(event) {
       case 'add-server': case 'restart': case 'stop': case 'start': case 'update': case 'edit-settings': openModal(action, '', button.dataset.id); break;
       case 'delete': openModal(action, button.dataset.id); break;
       case 'add-reboot': case 'edit-reboot': case 'delete-reboot': openModal(action, button.dataset.id || ''); break;
+      case 'add-backup': case 'edit-backup': case 'delete-backup': case 'delete-backup-run': openModal(action, button.dataset.id || ''); break;
+      case 'run-backup': case 'restore': openModal(action, '', button.dataset.id); break;
+      case 'run-backup-now':
+        button.disabled = true;
+        await api(`/api/backups/schedules/${encodeURIComponent(button.dataset.id)}/run`,{method:'POST'});
+        await refresh();
+        notice('Backup started. Its result appears in history.');
+        break;
+      case 'download-backup':
+        button.disabled = true;
+        await downloadBackupBundle(button.dataset.id);
+        notice('Backup bundle download ready.');
+        break;
       case 'add-admin-id': addAdminIDField(); break;
       case 'add-daily-time': addDailyTime(); break;
       case 'remove-daily-time': removeDailyTime(button); break;
@@ -1625,6 +1802,7 @@ function navigate() {
   const parsed = parseLocationHash(location.hash);
   state.page = pages[parsed.page] && (!state.identity || can(parsed.page)) ? parsed.page : 'dashboard';
   state.integrationView = state.page === 'integrations' ? parsed.integrationView : 'hub';
+  state.backupView = state.page === 'backups' ? (parsed.backupView || 'hub') : 'hub';
   state.routeError = '';
   applyRouteScope();
   const [title, description] = pageHeading();
@@ -1652,10 +1830,17 @@ function handleChange(event) {
   if (event.target.id === 'telemetry-range') { state.range = event.target.value; clearTelemetry(); render(); refresh(); }
   if (event.target.id === 'event-range') { state.eventRange = event.target.value; state.selectedEventId = ''; render(); refresh(); }
   if (event.target.id === 'reboot-mode') { syncRebootModeFields(); updateDailyTimeControls(); }
+  if (event.target.id === 'restore-source') {
+    const upload = event.target.value === 'upload';
+    $('#restore-upload').hidden = !upload;
+    $('[data-testid="restore-save"]').disabled = !upload;
+    $('#restore-tracked').hidden = upload;
+    $('[data-testid="restore-run"]').disabled = upload;
+  }
   if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
   if (event.target.id === 'server-filter') {
     state.serverId = event.target.value; clearTelemetry(); state.logs = ''; state.selectedEventId = '';
-    if (['telemetry','maintenance','events','reboots'].includes(state.page)) {
+    if (['telemetry','maintenance','events','reboots','backups'].includes(state.page)) {
       state.routeScope = Boolean(state.serverId);
       history.replaceState(null, '', scopedHash(state.page));
     }

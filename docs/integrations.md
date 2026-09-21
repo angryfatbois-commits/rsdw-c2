@@ -58,7 +58,9 @@ Each event has an immutable `id`, `kind`, `source`, `accuracy`, timestamp, serve
 | `server_recovered` | After an established outage, two consecutive healthy observations span at least 15 seconds. The event captures the current player count and limit when available. |
 | `server_stopped` | An operator parked the world from Maintenance. Inventory, secrets, and volumes remain. Enabling this rule is allowed. |
 | `server_started` | An operator started a parked world. The same server ID and disk come back. Enabling this rule is allowed. |
-| `backup_started`, `backup_completed`, `backup_failed` | Reserved, visibly unavailable rules. No backup producer exists. Enabling them is rejected. Save import does not count as a backup. |
+| `backup_started` | The C2 backup collector claimed a run for one server, either on demand or from a schedule. |
+| `backup_completed` | A bundle was published to the backup repository. The alert names the collected save and whether its source was a running or stopped world. |
+| `backup_failed` | A run ended without publishing a bundle. No existing backup was deleted. See [world backups](backups.md) for the failure reasons. |
 
 Runtime identity combines the owned Pod UID and server container ID. The existing collector checks Deployment, ReplicaSet, and Pod ownership and verifies container identity again after collection. A scaled-to-zero Deployment, no active owned Pod, a non-running server container, Pod unreadiness, or an explicit false engine-ready result is definitive unhealthy evidence unless C2 has persisted status `stopped` for that server. An intentional park is not `server_down` or `server_recovered`; those producers stay silent until an operator starts the world again. C2 parks with `kubectl scale` on the existing Deployment. It does not pass Helm `replicaCount`. Discovery failures, ambiguous Pod selection, failed identity verification, and game API transport or parse failures with an otherwise ready Pod are unknown.
 

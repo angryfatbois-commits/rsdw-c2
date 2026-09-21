@@ -55,6 +55,13 @@ state:
     size: 1Gi
     storageClass: null
 
+# Backups never share the state PVC; a full backup volume would break state writes.
+backups:
+  enabled: true
+  size: 20Gi
+  storageClass: null
+  maxRepositoryBytes: 0
+
 rbac:
   create: true
 

@@ -14,3 +14,20 @@ spec:
     requests:
       storage: {{ .Values.state.persistence.size }}
 {{- end }}
+{{- if and .Values.backups.enabled .Values.state.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rsdwc2.fullname" . }}-backups
+  labels:
+    {{- include "rsdwc2.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if ne .Values.backups.storageClass nil }}
+  storageClassName: {{ .Values.backups.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backups.size }}
+{{- end }}

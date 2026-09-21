@@ -153,6 +153,8 @@ type State struct {
 	Deliveries      map[string]Delivery           `json:"deliveries"`
 	RebootSchedules map[string]rebootSchedule     `json:"rebootSchedules,omitempty"`
 	RebootHistory   []rebootExecution             `json:"rebootHistory,omitempty"`
+	BackupSchedules map[string]backupSchedule     `json:"backupSchedules,omitempty"`
+	BackupRuns      []backupRun                   `json:"backupRuns,omitempty"`
 	DiscordRetryAt  time.Time                     `json:"discordRetryAt,omitempty"`
 	Servers         map[string]Server             `json:"servers"`
 	Events          []Event                       `json:"events"`
@@ -241,6 +243,7 @@ func NewStore(path string, demo bool) (*Store, error) {
 	s := &Store{path: path, state: State{Servers: map[string]Server{}, Users: map[string]User{}}}
 	s.state.initIntegrations()
 	s.state.initReboots()
+	s.state.initBackups()
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := json.Unmarshal(data, &s.state); err != nil {
@@ -254,8 +257,14 @@ func NewStore(path string, demo bool) (*Store, error) {
 			}
 			s.state.initIntegrations()
 			s.state.initReboots()
+			s.state.initBackups()
 			s.state.Events = pruneEvents(s.state.Events)
-			if err := s.Update(func(state *State) error { state.recoverAlerts(); state.recoverReboots(time.Now().UTC()); return nil }); err != nil {
+			if err := s.Update(func(state *State) error {
+				state.recoverAlerts()
+				state.recoverReboots(time.Now().UTC())
+				state.recoverBackups(time.Now().UTC())
+				return nil
+			}); err != nil {
 				return nil, err
 			}
 			return s, nil
@@ -312,6 +321,25 @@ func (s State) clone() State {
 		schedule.NextRun = cloneTimePtr(schedule.NextRun)
 		schedule.LastOccurrenceAt = cloneTimePtr(schedule.LastOccurrenceAt)
 		next.RebootSchedules[id] = schedule
+	}
+	next.BackupSchedules = maps.Clone(s.BackupSchedules)
+	next.BackupRuns = append([]backupRun(nil), s.BackupRuns...)
+	for index := range next.BackupRuns {
+		next.BackupRuns[index].OccurrenceAt = cloneTimePtr(next.BackupRuns[index].OccurrenceAt)
+		next.BackupRuns[index].FinishedAt = cloneTimePtr(next.BackupRuns[index].FinishedAt)
+		// Snapshot() feeds HTTP handlers while the collector mutates runs; the manifest must not alias.
+		if manifest := next.BackupRuns[index].Manifest; manifest != nil {
+			clone := *manifest
+			clone.Items = append([]backupItem(nil), manifest.Items...)
+			next.BackupRuns[index].Manifest = &clone
+		}
+	}
+	for id, schedule := range next.BackupSchedules {
+		schedule.Definition.DailyTimes = append([]string(nil), schedule.Definition.DailyTimes...)
+		schedule.IntervalAnchor = cloneTimePtr(schedule.IntervalAnchor)
+		schedule.NextRun = cloneTimePtr(schedule.NextRun)
+		schedule.LastOccurrenceAt = cloneTimePtr(schedule.LastOccurrenceAt)
+		next.BackupSchedules[id] = schedule
 	}
 	for id, server := range next.Servers {
 		server.ServerPassword, server.AdminPassword = "", ""
@@ -931,6 +959,10 @@ func (a *App) api(w http.ResponseWriter, r *http.Request) {
 		a.handleReboots(w, r)
 		return
 	}
+	if r.URL.Path == "/api/backups" || strings.HasPrefix(r.URL.Path, "/api/backups/") {
+		a.handleBackups(w, r)
+		return
+	}
 	if r.URL.Path == "/api/image-tags" && r.Method == http.MethodGet {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
@@ -1269,6 +1301,8 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 			a.handleUpdate(w, r, server)
 		case "check-update":
 			a.handleCheckUpdate(w, r, server)
+		case "restore":
+			a.handleRestore(w, r, server)
 		default:
 			writeError(w, http.StatusNotFound, "action not found")
 		}
@@ -1581,9 +1615,11 @@ func main() {
 		orchestrator = demoOrchestrator{}
 	}
 	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure}
+	app.recoverBackupRepository()
 	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
 	go app.runRebootScheduler(context.Background())
+	go app.runBackupScheduler(context.Background())
 	go app.runDeletionReconciler(context.Background())
 	go app.runDeliveries(context.Background())
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")
