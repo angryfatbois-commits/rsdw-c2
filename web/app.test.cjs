@@ -1199,7 +1199,7 @@ test('only a published bundle offers download and a running backup cannot be del
   assert.doesNotMatch(html, /data-action="download-backup" data-id="gone"/);
   assert.doesNotMatch(html, /data-action="delete-backup-run" data-id="live"/);
   assert.match(html, /data-action="delete-backup-run" data-id="gone"/);
-  assert.match(html, /Running \.bak/);
+  assert.match(html, /Running \.sav\.backup/);
 });
 
 test('unavailable backups still show history and hide the add control', () => {
@@ -1225,7 +1225,7 @@ test('backup settings view renders storage health and read-only profiles', () =>
   let html = context.ui.backupsPage();
   assert.match(html, /data-testid="backup-storage"/);
   assert.match(html, /Connected/);
-  assert.match(html, /Running world \.bak, Stopped world \.sav/);
+  assert.match(html, /Running world \.sav\.backup, Stopped world \.sav/);
   assert.doesNotMatch(html, /data-action="(?:add-backup|edit-backup)"/);
   state.backupStorage = {available:false, reason:'backups require persistent C2 state storage'};
   html = context.ui.backupsPage();

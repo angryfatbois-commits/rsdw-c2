@@ -12,15 +12,15 @@ v1 ships exactly one built-in profile, `dragonwilds-world-save`, using the `logi
 
 C2 decides the source from verified server state, never from the status text on screen:
 
-- A **running** server contributes only the game-generated `.bak` in `RSDragonwilds/Saved/SaveGames`. C2 never reads the live `.sav` from a running world, because the game rewrites that file in place and a copy taken mid-write is silently corrupt.
+- A **running** server contributes only the game's rotated `.sav.backup` in `RSDragonwilds/Saved/SaveGames`. C2 never reads the live `.sav` from a running world, because the game rewrites that file in place and a copy taken mid-write is silently corrupt.
 - A **stopped** server contributes only the flat `.sav` in the same directory. A stopped world is a perfectly valid backup source, so stopping a server does not disable its schedule.
 - Anything else — starting, no active Pod, or an unreadable deployment — is skipped with `Server is in a transitional state; backups require a running or stopped server`.
 
-There is **no fallback between the two**. A running server with no `.bak` fails rather than reaching for the `.sav`.
+There is **no fallback between the two**. A running server with no `.sav.backup` fails rather than reaching for the `.sav`.
 
 The save's filename is discovered at runtime, never assumed. Different worlds use different names. If the directory holds no candidate, or more than one, the run fails and names what it found; C2 does not guess which world to back up.
 
-Because the game does not publish `.bak` atomically, C2 lists the directory twice about two seconds apart and requires identical size and modification time before copying. A file that moved under it fails the run with `Backup source changed while it was being read`.
+Because the game does not publish `.sav.backup` atomically, C2 lists the directory twice about two seconds apart and requires identical size and modification time before copying. A file that moved under it fails the run with `Backup source changed while it was being read`.
 
 A stopped server has no container to exec into. C2 creates a short-lived `rsdw-backup-<id>` Pod that mounts the world volume read-only, copies the save out, and deletes the Pod — including on every failure path, and including when the request that started the run was cancelled.
 
@@ -67,7 +67,7 @@ Restore lives on the server's **Maintenance** panel, not on the Backups page, an
 
 The source is either a tracked backup from history or an uploaded `.sav`. Uploads use the same limits as save import: one `.sav` file of at most 32 MiB with a plain filename, no path separators, and no control characters.
 
-C2 writes through a short-lived `rsdw-restore-<id>` Pod that mounts the world volume writable, copies the file to a temporary name, then `chmod`s, syncs, and renames it into place. The Pod is always deleted afterwards. A restored `.bak` is published as the live `.sav`. The outcome is recorded as a system event on that server.
+C2 writes through a short-lived `rsdw-restore-<id>` Pod that mounts the world volume writable, copies the file to a temporary name, then `chmod`s, syncs, and renames it into place. The Pod is always deleted afterwards. A restored `.sav.backup` is published as the live `.sav`. The outcome is recorded as a system event on that server.
 
 Start the server when you are ready; restore never starts it for you.
 

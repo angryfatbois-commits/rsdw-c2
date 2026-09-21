@@ -41,7 +41,7 @@ const (
 	backupSchemaVersion  = 1
 )
 
-// The game does not publish .bak atomically. Two listings must agree before a copy starts.
+// The game does not publish .sav.backup atomically. Two listings must agree before a copy starts.
 var backupStabilityDelay = 2 * time.Second
 
 type backupResult string
@@ -898,7 +898,7 @@ func selectBackupCandidate(candidates []backupCandidate, mode backupSourceMode) 
 		return candidates[0], nil
 	case 0:
 		if mode == backupSourceRunningBak {
-			return backupCandidate{}, errors.New("Running server has no game-generated .bak to collect")
+			return backupCandidate{}, errors.New("Running server has no game-generated .sav.backup to collect")
 		}
 		return backupCandidate{}, errors.New("Stopped server has no .sav file to collect")
 	default:
@@ -915,7 +915,7 @@ func backupSuffix(mode backupSourceMode) string {
 	if mode == backupSourceStoppedSav {
 		return ".sav"
 	}
-	return ".bak"
+	return ".sav.backup"
 }
 
 // collectBackup copies one verified save out of the world volume and checksums it on the way in.
@@ -1024,7 +1024,7 @@ func backupItemFromStaging(repo *backupRepository, runID string, mode backupSour
 	return backupItem{
 		Name: name, Path: remote, Size: info.Size(),
 		Checksum: "sha256:" + hex.EncodeToString(digest.Sum(nil)),
-		StoredAs: "items/" + name + path.Ext(chosen.name),
+		StoredAs: "items/" + name + backupSuffix(mode),
 	}, nil
 }
 
@@ -1514,10 +1514,10 @@ type restoreRequest struct {
 
 func purgeWorldToken(serverID string) string { return "REPLACE WORLD " + serverID }
 
-// restoreSaveName derives the on-disk save name. A .bak copy is restored as the live .sav.
+// restoreSaveName derives the on-disk save name. A collected .sav.backup is restored as the live .sav.
 func restoreSaveName(sourcePath string) string {
 	name := path.Base(sourcePath)
-	name = strings.TrimSuffix(name, ".bak")
+	name = strings.TrimSuffix(name, ".sav.backup")
 	if !strings.HasSuffix(name, ".sav") {
 		name += ".sav"
 	}

@@ -155,9 +155,9 @@ func waitForTerminalBackupRun(t *testing.T, app *App) {
 	t.Fatal("backup run never reached a terminal state")
 }
 
-func TestBackupRunningServerCollectsOnlyBak(t *testing.T) {
+func TestBackupRunningServerCollectsOnlySavBackup(t *testing.T) {
 	backupStabilityDelay = 0
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, server := backupApp(t, runner)
 	run := runBackupToCompletion(t, app, server)
 	if run.Result != backupCompleted {
@@ -166,17 +166,17 @@ func TestBackupRunningServerCollectsOnlyBak(t *testing.T) {
 	if run.SourceMode != backupSourceRunningBak {
 		t.Fatalf("source mode = %q", run.SourceMode)
 	}
-	if !runner.listedSuffix(".bak") {
-		t.Fatalf("collector never listed .bak files: %v", runner.recorded())
+	if !runner.listedSuffix(".sav.backup") {
+		t.Fatalf("collector never listed .sav.backup files: %v", runner.recorded())
 	}
 	if runner.listedSuffix(".sav") {
-		t.Fatal("running server was asked for .sav files")
+		t.Fatal("running server was asked for the plain .sav")
 	}
 	if runner.issued("create -f") {
 		t.Fatal("running server spawned an inspector Pod")
 	}
-	if !runner.issued("cp -c server world-pod:/home/steam/rsdw-dedicated/RSDragonwilds/Saved/SaveGames/World.bak") {
-		t.Fatalf("collector did not copy the .bak: %v", runner.recorded())
+	if !runner.issued("cp -c server world-pod:/home/steam/rsdw-dedicated/RSDragonwilds/Saved/SaveGames/World.sav.backup") {
+		t.Fatalf("collector did not copy the .sav.backup: %v", runner.recorded())
 	}
 }
 
@@ -197,7 +197,7 @@ func TestBackupStoppedServerUsesInspectorPodAndAlwaysDeletesIt(t *testing.T) {
 			if run.Result != tc.want {
 				t.Fatalf("result = %q, reason %q", run.Result, run.Reason)
 			}
-			if !runner.listedSuffix(".sav") || runner.listedSuffix(".bak") {
+			if !runner.listedSuffix(".sav") || runner.listedSuffix(".sav.backup") {
 				t.Fatalf("stopped server used the wrong suffix: %v", runner.recorded())
 			}
 			if !runner.issued("create -f") {
@@ -212,7 +212,7 @@ func TestBackupStoppedServerUsesInspectorPodAndAlwaysDeletesIt(t *testing.T) {
 
 func TestBackupTransitionalServerIsSkippedWithoutCopy(t *testing.T) {
 	backupStabilityDelay = 0
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, server := backupApp(t, runner)
 	// A Pod that is not ready leaves resolvePod in StatusStarting.
 	runner.mu.Lock()
@@ -244,11 +244,11 @@ func (r *startingRunner) Run(ctx context.Context, name string, args ...string) (
 func TestBackupUnstableSourceFailsWithoutPublishing(t *testing.T) {
 	backupStabilityDelay = 0
 	for _, tc := range []struct{ name, second string }{
-		{"size changed", "9 1700000000 World.bak\n"},
-		{"mtime changed", "5 1700000099 World.bak\n"},
+		{"size changed", "9 1700000000 World.sav.backup\n"},
+		{"mtime changed", "5 1700000099 World.sav.backup\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runner := &backupRunner{replicas: 1, listing: []string{"5 1700000000 World.bak\n", tc.second}, copyBody: "world"}
+			runner := &backupRunner{replicas: 1, listing: []string{"5 1700000000 World.sav.backup\n", tc.second}, copyBody: "world"}
 			app, server := backupApp(t, runner)
 			run := runBackupToCompletion(t, app, server)
 			if run.Result != backupFailedRes || run.Reason != errBackupSourceMoved.Error() {
@@ -271,7 +271,7 @@ func TestBackupUnstableSourceFailsWithoutPublishing(t *testing.T) {
 
 func TestBackupQuotaPreservesExistingBundles(t *testing.T) {
 	backupStabilityDelay = 0
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, server := backupApp(t, runner)
 	first := runBackupToCompletion(t, app, server)
 	if first.Result != backupCompleted {
@@ -295,7 +295,7 @@ func TestBackupQuotaPreservesExistingBundles(t *testing.T) {
 
 func TestBackupInterruptedPublishIsNotOfferedForDownload(t *testing.T) {
 	backupStabilityDelay = 0
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, server := backupApp(t, runner)
 	run := runBackupToCompletion(t, app, server)
 	repo, err := app.backupRepo()
@@ -341,7 +341,7 @@ func TestBackupStaleRunningRunIsFailedByRecovery(t *testing.T) {
 }
 
 func TestBackupLateOccurrenceIsMissedAndCursorAdvances(t *testing.T) {
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, server := backupApp(t, runner)
 	now := time.Now().UTC().Truncate(time.Second)
 	app.clock = func() time.Time { return now }
@@ -380,7 +380,7 @@ func TestBackupLateOccurrenceIsMissedAndCursorAdvances(t *testing.T) {
 
 func TestBackupRunNowLeavesScheduleCursorUntouched(t *testing.T) {
 	backupStabilityDelay = 0
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, _ := backupApp(t, runner)
 	created := requestJSON(t, app, "POST", "/api/backups/schedules", `{"serverId":"world","enabled":true,"mode":"daily","dailyTimes":["05:00"],"executionTimezone":"UTC","warningMinutes":0,"acknowledgeDisconnect":false,"definitionId":"dragonwilds-world-save"}`)
 	if created.Code != 201 {
@@ -406,7 +406,7 @@ func TestBackupRunNowLeavesScheduleCursorUntouched(t *testing.T) {
 }
 
 func TestBackupWarningMinutesRejected(t *testing.T) {
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, _ := backupApp(t, runner)
 	res := requestJSON(t, app, "POST", "/api/backups/schedules", `{"serverId":"world","enabled":true,"mode":"daily","dailyTimes":["05:00"],"executionTimezone":"UTC","warningMinutes":5,"acknowledgeDisconnect":false,"definitionId":"dragonwilds-world-save"}`)
 	if res.Code != 400 || !strings.Contains(res.Body.String(), "warningMinutes does not apply to backup schedules") {
@@ -440,7 +440,7 @@ func TestBackupRoutesRejectViewers(t *testing.T) {
 
 func TestRestorePreconditions(t *testing.T) {
 	backupStabilityDelay = 0
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, server := backupApp(t, runner)
 	run := runBackupToCompletion(t, app, server)
 	if run.Result != backupCompleted {
@@ -480,7 +480,7 @@ func TestRestorePreconditions(t *testing.T) {
 
 func TestBackupBundleContainsManifestAndItem(t *testing.T) {
 	backupStabilityDelay = 0
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 11), copyBody: "world-bytes"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 11), copyBody: "world-bytes"}
 	app, server := backupApp(t, runner)
 	run := runBackupToCompletion(t, app, server)
 	if run.Result != backupCompleted {
@@ -510,7 +510,7 @@ func TestBackupBundleContainsManifestAndItem(t *testing.T) {
 			payload = string(data)
 		}
 	}
-	if len(names) != 2 || names[0] != backupManifestEntry || names[1] != "items/world-running.bak" {
+	if len(names) != 2 || names[0] != backupManifestEntry || names[1] != "items/world-running.sav.backup" {
 		t.Fatalf("bundle entries = %v", names)
 	}
 	if payload != "world-bytes" {
@@ -522,7 +522,7 @@ func TestBackupBundleContainsManifestAndItem(t *testing.T) {
 }
 
 func TestBackupSecondRunPerServerIsRejected(t *testing.T) {
-	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
+	runner := &backupRunner{replicas: 1, listing: stableListing("World.sav.backup", 5), copyBody: "world"}
 	app, server := backupApp(t, runner)
 	if _, _, err := app.startBackupRun(server.ID, dragonwildsWorldSave.ID); err != nil {
 		t.Fatal(err)
@@ -539,8 +539,8 @@ func TestBackupAmbiguousAndMissingSourcesFail(t *testing.T) {
 		listing []string
 		want    string
 	}{
-		{"no candidate", []string{"\n"}, "Running server has no game-generated .bak to collect"},
-		{"two candidates", []string{"5 1700000000 A.bak\n5 1700000000 B.bak\n"}, "C2 never guesses which world to back up"},
+		{"no candidate", []string{"\n"}, "Running server has no game-generated .sav.backup to collect"},
+		{"two candidates", []string{"5 1700000000 A.sav.backup\n5 1700000000 B.sav.backup\n"}, "C2 never guesses which world to back up"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &backupRunner{replicas: 1, listing: tc.listing, copyBody: "world"}
