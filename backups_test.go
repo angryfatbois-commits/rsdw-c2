@@ -139,6 +139,22 @@ func runBackupToCompletion(t *testing.T, app *App, server Server) backupRun {
 	return backupRun{}
 }
 
+// waitForTerminalBackupRun polls for the async goroutine dispatched by an
+// HTTP-triggered run to reach a terminal state, since that path never blocks
+// the request on collection the way runBackupToCompletion does.
+func waitForTerminalBackupRun(t *testing.T, app *App) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runs := app.store.Snapshot().BackupRuns
+		if len(runs) > 0 && !backupRunActive(runs[len(runs)-1].Result) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("backup run never reached a terminal state")
+}
+
 func TestBackupRunningServerCollectsOnlyBak(t *testing.T) {
 	backupStabilityDelay = 0
 	runner := &backupRunner{replicas: 1, listing: stableListing("World.bak", 5), copyBody: "world"}
@@ -379,6 +395,7 @@ func TestBackupRunNowLeavesScheduleCursorUntouched(t *testing.T) {
 	if res := requestJSON(t, app, "POST", "/api/backups/schedules/"+schedule.ID+"/run", ""); res.Code != 202 {
 		t.Fatalf("run now = %d: %s", res.Code, res.Body.String())
 	}
+	waitForTerminalBackupRun(t, app)
 	afterJSON, _ := json.Marshal(app.store.Snapshot().BackupSchedules[schedule.ID])
 	if string(beforeJSON) != string(afterJSON) {
 		t.Fatalf("run now mutated the schedule:\n%s\n%s", beforeJSON, afterJSON)
