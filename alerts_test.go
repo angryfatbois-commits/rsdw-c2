@@ -215,8 +215,8 @@ func TestRestartFailureRequiresFreshDefinitiveObservation(t *testing.T) {
 		t.Fatal(eventKinds(s))
 	}
 	for _, kind := range []EventKind{BackupStarted, BackupCompleted, BackupFailed} {
-		if event := emitAlert(s, server, kind, "op", "backup", now); event.ID != "" {
-			t.Fatal("unavailable backup producer emitted event")
+		if event := emitAlert(s, server, kind, "op", "backup", now); event.ID == "" || event.Kind != kind {
+			t.Fatal("backup producer did not emit its event")
 		}
 	}
 }

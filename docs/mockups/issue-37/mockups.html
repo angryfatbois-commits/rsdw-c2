@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Issue 37 · Backups mockups</title>
+  <link rel="stylesheet" href="../../../web/styles.css">
+  <style>
+    :root {
+      --mockup-warn-bg: #3d3215;
+      --mockup-success-bg: #153721;
+    }
+    body { min-width: 1100px; background: var(--color-background); }
+    .mockup-shell { min-height: 1100px; }
+    .mockup-main { padding-bottom: 42px; }
+    .mockup-main .page-heading { margin-bottom: 20px; }
+    .mockup-main .page-heading p { max-width: 720px; }
+    .mockup-nav-icon { width: 22px; height: 22px; flex: 0 0 22px; color: currentColor; }
+    .mockup-nav-label { min-width: 0; }
+    .mockup-sidebar-note { margin: 28px 26px 0; padding-top: 20px; border-top: 1px solid var(--color-divider); color: var(--color-muted-foreground); font-size: 12px; line-height: 1.55; }
+    .mockup-sidebar-note strong { display: block; color: var(--color-foreground); font-size: 12px; margin-bottom: 4px; }
+    .section-gap { margin-top: 16px; }
+    .panel-heading .heading-copy { min-width: 0; }
+    .panel-heading .heading-copy p { max-width: 720px; }
+    .mockup-heading-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    .mockup-heading-actions .subtle { background: transparent; color: var(--link); }
+    .storage-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    .storage-card { min-height: 140px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-muted); padding: 16px 18px; display: flex; flex-direction: column; justify-content: space-between; }
+    .storage-card.local { border-color: var(--link); box-shadow: inset 3px 0 0 var(--color-primary); }
+    .storage-card.future { background: var(--color-background); opacity: .78; }
+    .storage-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .storage-card-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .storage-card-title .mockup-nav-icon { color: var(--link); }
+    .storage-card h3 { overflow-wrap: anywhere; }
+    .storage-card p { margin-top: 4px; font-size: 13px; }
+    .status-pill { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: 13px; }
+    .status-pill::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--color-muted-foreground); }
+    .status-pill.connected { color: var(--success); }
+    .status-pill.connected::before { background: var(--success); }
+    .status-pill.disconnected { color: var(--color-muted-foreground); }
+    .storage-card-foot { border-top: 1px solid var(--color-divider); padding-top: 11px; margin-top: 14px; display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--color-muted-foreground); }
+    .storage-card-foot .mono { color: var(--color-foreground); }
+    .profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .profile-card { border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-muted); padding: 18px 20px; min-height: 190px; display: flex; flex-direction: column; }
+    .profile-card.selected { border-color: var(--link); box-shadow: 0 0 0 1px #69afff33; }
+    .profile-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+    .profile-card h3 { font-size: 20px; }
+    .profile-card p { font-size: 14px; margin-top: 5px; }
+    .profile-kicker { color: var(--color-muted-foreground); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .profile-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px; border: 1px solid var(--link); color: var(--link); border-radius: 999px; font-size: 11px; white-space: nowrap; }
+    .profile-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--color-divider); color: var(--color-muted-foreground); font-size: 13px; }
+    .profile-meta strong { display: block; color: var(--color-foreground); font-size: 16px; margin-bottom: 2px; }
+    .profile-card-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: auto; padding-top: 16px; }
+    .profile-card-foot .button-row { display: flex; align-items: center; gap: 8px; }
+    .profile-card-foot button { min-height: 36px; padding: 7px 12px; font-size: 13px; }
+    .profile-browser-toolbar { display: grid; grid-template-columns: minmax(260px, 1fr) 190px auto; gap: 10px; align-items: end; margin-top: 16px; }
+    .profile-search { display: flex; flex-direction: column; gap: 6px; color: var(--color-muted-foreground); font-size: 12px; }
+    .profile-search input { width: 100%; min-height: 40px; padding: 8px 10px; }
+    .profile-filter { display: flex; flex-direction: column; gap: 6px; color: var(--color-muted-foreground); font-size: 12px; }
+    .profile-filter select { width: 100%; min-height: 40px; padding: 8px 10px; }
+    .profile-count { align-self: center; color: var(--color-muted-foreground); font-size: 12px; white-space: nowrap; }
+    .profile-list { max-height: 336px; margin-top: 12px; overflow-y: scroll; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--color-divider); border-radius: 4px; }
+    .profile-list-head, .profile-list-row { display: grid; grid-template-columns: minmax(200px, 1.35fr) minmax(140px, .9fr) minmax(130px, .8fr) minmax(100px, .65fr) auto; gap: 12px; align-items: center; }
+    .profile-list-head { position: sticky; top: 0; z-index: 1; padding: 9px 12px; color: var(--color-muted-foreground); background: var(--color-log-console); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+    .profile-list-row { min-height: 58px; padding: 9px 12px; border-top: 1px solid var(--color-divider); background: var(--color-background); }
+    .profile-list-row:hover { background: var(--color-muted); }
+    .profile-list-row.selected { box-shadow: inset 3px 0 0 var(--color-primary); background: var(--color-info-surface); }
+    .profile-list-row strong { display: block; font-size: 14px; }
+    .profile-list-row small { display: block; margin-top: 3px; color: var(--color-muted-foreground); font-size: 12px; }
+    .profile-list-row .profile-badge { justify-self: start; }
+    .profile-list-row .table-actions { justify-content: flex-end; }
+    .profile-list-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 9px; color: var(--color-muted-foreground); font-size: 12px; }
+    .definition-detail { display: grid; grid-template-columns: minmax(0,1.2fr) minmax(320px,.8fr); gap: 16px; align-items: start; }
+    .definition-summary { border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); padding: 16px 18px; }
+    .definition-summary h3 { margin-bottom: 5px; }
+    .definition-summary p { font-size: 14px; }
+    .definition-summary .detail-list { margin-top: 12px; }
+    .definition-summary .detail-list > div { padding: 8px 0; font-size: 14px; }
+    .item-list { border: 1px solid var(--color-divider); border-radius: 4px; overflow: hidden; }
+    .item-row { display: grid; grid-template-columns: minmax(150px,1fr) minmax(260px,1.5fr) auto; gap: 14px; align-items: center; padding: 13px 14px; background: var(--color-background); }
+    .item-row + .item-row { border-top: 1px solid var(--color-divider); }
+    .item-label { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .item-label .mockup-nav-icon { color: var(--link); width: 18px; height: 18px; flex-basis: 18px; }
+    .item-label strong, .item-path { overflow-wrap: anywhere; }
+    .item-path { color: var(--color-muted-foreground); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .item-source { color: var(--color-muted-foreground); font-size: 12px; white-space: nowrap; }
+    .item-source strong { color: var(--color-foreground); display: block; font-size: 13px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { padding: 0 12px 9px; color: var(--color-muted-foreground); font-size: 12px; font-weight: 500; letter-spacing: .05em; text-align: left; text-transform: uppercase; white-space: nowrap; }
+    td { padding: 12px; border-top: 1px solid var(--color-divider); vertical-align: middle; }
+    th:first-child, td:first-child { padding-left: 0; }
+    th:last-child, td:last-child { padding-right: 0; }
+    tr:hover td { background: var(--color-muted); }
+    td small { display: block; color: var(--color-muted-foreground); margin-top: 3px; }
+    .table-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .table-actions button { min-height: 36px; padding: 7px 11px; font-size: 13px; }
+    .result { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .result::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+    .result-success { color: var(--success); }
+    .result-error { color: var(--color-destructive); }
+    .result-warning { color: var(--warning); }
+    .result-unknown { color: var(--color-muted-foreground); }
+    .source-chip { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--color-border); color: var(--color-muted-foreground); font-size: 12px; white-space: nowrap; }
+    .source-chip.live { border-color: var(--link); color: var(--link); background: #0063ff14; }
+    .source-chip.stopped { border-color: var(--warning); color: var(--warning); background: #ffc32914; }
+    .schedule-note { margin-top: 14px; color: var(--color-muted-foreground); font-size: 14px; }
+    .schedule-note strong { color: var(--color-foreground); }
+    .form-modal-backdrop { position: relative; min-height: 970px; margin: -24px -30px -42px; padding: 66px 30px 80px; background: #0008; }
+    .mockup-dialog { width: min(800px, calc(100% - 40px)); max-height: none; margin: 0 auto; border: 1px solid var(--color-border); border-radius: 4px; padding: 28px; background: var(--color-card); color: var(--color-foreground); box-shadow: 0 20px 80px #000c; }
+    .mockup-dialog.narrow { width: min(620px, calc(100% - 40px)); }
+    .mockup-dialog .modal-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+    .mockup-dialog .modal-heading h2 { font-size: 24px; }
+    .mockup-dialog .modal-heading p { font-size: 14px; margin-top: 4px; }
+    .mockup-dialog .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+    .mockup-dialog .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .mockup-dialog .field { display: flex; flex-direction: column; gap: 6px; font-size: 15px; min-width: 0; }
+    .mockup-dialog .field.full { grid-column: 1 / -1; }
+    .mockup-dialog input, .mockup-dialog select { width: 100%; }
+    .mockup-dialog small { color: var(--color-muted-foreground); font-size: 13px; }
+    .mockup-dialog fieldset { border: 1px solid var(--color-divider); border-radius: 4px; margin: 0 0 16px; padding: 13px 16px 16px; }
+    .mockup-dialog legend { padding: 0 6px; color: var(--color-muted-foreground); font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+    .mockup-dialog .notice { margin: 0 0 16px; }
+    .form-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 4px 0 12px; }
+    .form-section-heading h3 { font-size: 16px; }
+    .form-section-heading button { min-height: 36px; padding: 7px 12px; font-size: 13px; }
+    .profile-item-form { border: 1px solid var(--color-divider); border-radius: 4px; overflow: hidden; }
+    .profile-item-form-head, .profile-item-form-row { display: grid; grid-template-columns: minmax(130px,1fr) minmax(230px,1.6fr) 130px 42px; gap: 10px; align-items: center; }
+    .profile-item-form-head { padding: 9px 10px; color: var(--color-muted-foreground); background: var(--color-background); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+    .profile-item-form-row { padding: 10px; border-top: 1px solid var(--color-divider); background: var(--color-muted); }
+    .profile-item-form-row input, .profile-item-form-row select { min-height: 40px; padding: 7px 10px; font-size: 13px; }
+    .profile-item-form-row button { min-height: 40px; width: 40px; padding: 6px; color: var(--color-destructive); }
+    .yaml-preview { margin-top: 14px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-log-console); padding: 13px 15px; color: var(--color-muted-foreground); font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; overflow: hidden; }
+    .yaml-preview .key { color: #8cc4ff; }
+    .yaml-preview .value { color: #b9e6a7; }
+    .yaml-preview .comment { color: #7f8d9b; }
+    .choice-row { display: flex; align-items: center; gap: 12px; min-height: 44px; margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); }
+    .choice-row:last-child { margin-bottom: 0; }
+    .choice-row input[type=radio], .choice-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--color-primary); flex: 0 0 auto; }
+    .choice-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .choice-copy strong { font-weight: 600; overflow-wrap: anywhere; }
+    .choice-copy small { color: var(--color-muted-foreground); font-size: 13px; overflow-wrap: anywhere; }
+    .confirm-row { display: flex; align-items: flex-start; gap: 9px; color: var(--color-muted-foreground); font-size: 14px; }
+    .confirm-row input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--color-primary); flex: 0 0 auto; }
+    .inline-help { font-size: 14px; color: var(--color-muted-foreground); line-height: 1.6; margin: 0 0 18px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .muted { color: var(--color-muted-foreground); }
+    .green-text { color: var(--success); }
+    .blue-text { color: var(--link); }
+    .yellow-text { color: var(--warning); }
+    .danger-text { color: var(--color-destructive); }
+    .nowrap { white-space: nowrap; }
+    .small-button { min-height: 36px; padding: 7px 12px; font-size: 13px; }
+    .page-controls .icon-button { display: inline-flex; }
+    @media (max-width: 1280px) {
+      .storage-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .definition-detail { grid-template-columns: 1fr; }
+    }
+    /* Refined backup UX: calm hierarchy, high-signal status, and fewer competing actions. */
+    .health-panel { padding: 0; overflow: hidden; }
+    .health-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 24px 18px; }
+    .health-lockup { display: flex; align-items: flex-start; gap: 13px; min-width: 0; }
+    .health-indicator { width: 12px; height: 12px; flex: 0 0 12px; margin-top: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px #32d7661c; }
+    .health-kicker { color: var(--color-muted-foreground); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+    .health-title { margin-top: 2px; font-size: 22px; line-height: 1.25; }
+    .health-title .healthy-count { color: var(--success); }
+    .health-subtitle { margin-top: 3px; font-size: 13px; }
+    .health-top-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+    .health-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--color-divider); }
+    .health-metric { min-width: 0; padding: 15px 20px 16px; border-right: 1px solid var(--color-divider); }
+    .health-metric:last-child { border-right: 0; }
+    .health-metric-label { display: block; color: var(--color-muted-foreground); font-size: 12px; }
+    .health-metric strong { display: block; margin-top: 3px; font-size: 16px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+    .health-metric small { display: block; margin-top: 3px; color: var(--color-muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
+    .health-progress { height: 5px; margin-top: 8px; overflow: hidden; border-radius: 3px; background: var(--color-divider); }
+    .health-progress span { display: block; width: 18.4%; height: 100%; border-radius: inherit; background: var(--link); }
+    .health-attention { display: flex; align-items: center; gap: 10px; margin: 0 24px 18px; padding: 10px 12px; border: 1px solid #ffc32966; border-radius: 4px; background: #ffc3290d; }
+    .health-attention-copy { min-width: 0; color: var(--color-muted-foreground); font-size: 13px; }
+    .health-attention-copy strong { color: var(--color-foreground); }
+    .health-attention .small-button { margin-left: auto; flex: 0 0 auto; }
+    .status-tag { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: 13px; font-weight: 600; }
+    .status-tag::before { content: ''; width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: currentColor; }
+    .status-tag.success { color: var(--success); }
+    .status-tag.warning { color: var(--warning); }
+    .status-tag.error { color: var(--color-destructive); }
+    .status-tag.muted { color: var(--color-muted-foreground); }
+    .compact-section .panel-heading { margin-bottom: 14px; }
+    .compact-section .panel-heading p { max-width: 640px; }
+    .compact-table table { font-size: 13px; }
+    .compact-table th { padding-bottom: 8px; font-size: 11px; }
+    .compact-table td { padding: 11px 12px; }
+    .compact-table .server-cell strong { display: block; font-size: 14px; }
+    .compact-table .server-cell small, .compact-table .last-result small { display: block; margin-top: 3px; color: var(--color-muted-foreground); font-size: 12px; }
+    .compact-table .actions { white-space: nowrap; }
+    .compact-table .actions .table-actions { justify-content: flex-end; }
+    .compact-table .result { font-size: 13px; }
+    .compact-table .result::before { width: 8px; height: 8px; }
+    .storage-grid { grid-template-columns: minmax(0, 1fr); max-width: 700px; }
+    .storage-card { min-height: 118px; }
+    .profile-grid { gap: 12px; }
+    .profile-card { min-height: 170px; padding: 16px 18px; }
+    .definition-detail { grid-template-columns: 1fr; }
+    .item-row { grid-template-columns: minmax(180px,.7fr) minmax(300px,1.4fr) minmax(220px,.9fr); }
+    .form-modal-backdrop { min-height: 980px; padding-top: 48px; }
+    .mockup-dialog { width: min(760px, calc(100% - 40px)); padding: 24px; }
+    .mockup-dialog.narrow { width: min(660px, calc(100% - 40px)); }
+    .refined-form .form-step { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--color-divider); }
+    .refined-form .form-step-heading { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+    .refined-form .form-step-heading h3 { font-size: 16px; }
+    .refined-form .form-step-heading p { margin-top: 2px; font-size: 13px; }
+    .step-number { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex: 0 0 22px; border: 1px solid var(--link); border-radius: 50%; color: var(--link); font-size: 12px; font-weight: 700; }
+    .logical-item-card { padding: 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); }
+    .logical-item-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .logical-item-heading strong { display: block; font-size: 14px; }
+    .logical-item-heading small { display: block; margin-top: 2px; color: var(--color-muted-foreground); font-size: 12px; }
+    .source-rule-list { overflow: hidden; border: 1px solid var(--color-divider); border-radius: 4px; }
+    .source-rule-head, .source-rule-row { display: grid; grid-template-columns: 130px minmax(220px,1.25fr) minmax(190px,1fr) 40px; gap: 10px; align-items: center; }
+    .source-rule-head { padding: 8px 10px; color: var(--color-muted-foreground); background: var(--color-log-console); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+    .source-rule-row { padding: 9px 10px; border-top: 1px solid var(--color-divider); }
+    .source-rule-row input, .source-rule-row select { min-height: 38px; padding: 7px 9px; font-size: 13px; }
+    .source-rule-row button { width: 38px; min-height: 38px; padding: 7px; color: var(--color-destructive); }
+    .rule-guard { color: var(--color-muted-foreground); font-size: 12px; }
+    .refined-form .add-item { margin-top: 10px; }
+    .definition-file-bar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .definition-file-bar p { margin-top: 3px; font-size: 13px; }
+    .definition-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+    .yaml-disclosure { margin-top: 12px; border: 1px solid var(--color-divider); border-radius: 4px; overflow: hidden; }
+    .yaml-disclosure summary { min-height: 40px; padding: 10px 12px; cursor: pointer; color: var(--color-foreground); font-size: 13px; font-weight: 600; }
+    .yaml-disclosure .yaml-preview { margin: 0; border: 0; border-top: 1px solid var(--color-divider); border-radius: 0; }
+    .schedule-preview { display: grid; gap: 8px; }
+    .preview-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); }
+    .preview-row > span:first-child { color: var(--color-muted-foreground); font-size: 13px; }
+    .preview-row strong { font-size: 13px; }
+    .run-safety { margin-top: 14px; padding: 11px 12px; border-left: 3px solid var(--success); background: #32d7660d; color: var(--color-muted-foreground); font-size: 13px; }
+    .run-safety strong { color: var(--color-foreground); }
+    @media (max-width: 1280px) {
+      .health-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .health-metric:nth-child(2) { border-right: 0; }
+      .health-metric:nth-child(-n+2) { border-bottom: 1px solid var(--color-divider); }
+      .source-rule-head, .source-rule-row { grid-template-columns: 120px minmax(180px,1.2fr) minmax(160px,1fr) 40px; }
+      .profile-browser-toolbar { grid-template-columns: minmax(220px, 1fr) 170px; }
+      .profile-count { justify-self: end; }
+    }
+    .settings-button { color: var(--link); }
+    .settings-button[aria-current="page"] { background: var(--color-info-surface); border-color: var(--link); }
+    .settings-context { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-card); }
+    .settings-context-copy { min-width: 0; }
+    .settings-context-copy .eyebrow { display: block; }
+    .settings-context-copy strong { display: block; margin-top: 2px; font-size: 16px; }
+    .settings-tabs { display: flex; align-items: center; gap: 6px; }
+    .settings-tabs button[aria-current="page"] { background: var(--color-info-surface); border-color: var(--link); color: var(--color-foreground); }
+    .schedule-action-bar { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--color-divider); }
+    .schedule-action-bar-copy { min-width: 0; margin-right: auto; }
+    .schedule-action-bar-copy strong { display: block; font-size: 13px; }
+    .schedule-action-bar-copy span { display: block; margin-top: 2px; color: var(--color-muted-foreground); font-size: 12px; }
+    .schedule-action-bar select { min-width: 220px; min-height: 40px; padding: 7px 10px; font-size: 13px; }
+    .detail-modal { display: grid; gap: 16px; }
+    .detail-status { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid #32d76666; border-radius: 4px; background: #32d7660d; }
+    .detail-status strong { display: block; font-size: 16px; }
+    .detail-status small { display: block; margin-top: 3px; color: var(--color-muted-foreground); font-size: 12px; }
+    .detail-status .result { color: var(--success); }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; padding: 0 2px; }
+    .detail-line { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--color-divider); font-size: 13px; }
+    .detail-line dt { color: var(--color-muted-foreground); }
+    .detail-line dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+    .detail-source { padding: 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); }
+    .detail-source h3 { font-size: 14px; }
+    .detail-source p { margin-top: 3px; font-size: 12px; }
+    .detail-source-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 13px; }
+    .confirmation-panel { padding: 14px 16px; border: 1px solid var(--color-notice-error-border); border-radius: 4px; background: var(--color-notice-error-bg); }
+    .confirmation-panel h3 { color: var(--color-notice-error-fg); font-size: 16px; }
+    .confirmation-panel p { margin-top: 5px; color: var(--color-muted-foreground); font-size: 13px; }
+    .confirmation-panel strong { color: var(--color-foreground); }
+    .restore-target { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); }
+    .restore-target strong { display: block; margin-top: 3px; font-size: 14px; }
+    .restore-target small { display: block; margin-top: 3px; color: var(--color-muted-foreground); font-size: 12px; }
+    .maintenance-card { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(220px,.7fr); gap: 16px; align-items: center; }
+    .maintenance-card-main h2 { font-size: 22px; }
+    .maintenance-card-main p { margin-top: 4px; font-size: 14px; }
+    .maintenance-card-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 12px; color: var(--color-muted-foreground); font-size: 13px; }
+    .maintenance-card-action { display: flex; justify-content: flex-end; }
+    .restore-warning { display: flex; align-items: flex-start; gap: 10px; padding: 11px 12px; border: 1px solid #ffc32966; border-radius: 4px; background: #ffc3290d; color: var(--color-muted-foreground); font-size: 13px; }
+    .restore-warning strong { color: var(--color-foreground); }
+    .restore-choice-list { display: grid; gap: 8px; }
+    .restore-choice { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-background); cursor: pointer; }
+    .restore-choice.selected { border-color: var(--link); background: var(--color-info-surface); }
+    .restore-choice input { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--color-primary); flex: 0 0 auto; }
+    .restore-choice-copy { min-width: 0; }
+    .restore-choice-copy strong { display: block; font-size: 14px; }
+    .restore-choice-copy small { display: block; margin-top: 3px; color: var(--color-muted-foreground); font-size: 12px; }
+    .restore-source-panel { margin-top: 12px; padding: 12px; border: 1px solid var(--color-divider); border-radius: 4px; background: var(--color-card); }
+    .restore-source-panel .field { font-size: 13px; }
+    .restore-source-panel input[type=file] { width: 100%; }
+    .restore-source-panel p { margin-top: 7px; font-size: 12px; }
+    .maintenance-nav-active #backups-nav { background: transparent; border-left-color: transparent; color: var(--color-muted-foreground); }
+    .maintenance-nav-active #maintenance-nav { background: var(--color-nav-current); border-left-color: var(--color-primary); color: var(--color-foreground); }
+    .maintenance-nav-active #maintenance-nav svg { color: var(--link); }
+    @media (max-width: 1280px) {
+      .health-top { flex-wrap: wrap; }
+      .schedule-action-bar { flex-wrap: wrap; }
+      .schedule-action-bar-copy { flex-basis: 100%; }
+      .maintenance-card { grid-template-columns: 1fr; }
+      .maintenance-card-action { justify-content: flex-start; }
+      .profile-list-head, .profile-list-row { grid-template-columns: minmax(170px, 1.4fr) minmax(120px, .9fr) minmax(120px, .8fr) auto; }
+      .profile-list-head span:nth-child(4), .profile-list-row > div:nth-child(4) { display: none; }
+    }
+  </style>
+</head>
+<body data-view="overview">
+  <header class="topbar">
+    <a class="brand" href="#backups" aria-label="Dragonwilds Control backups">
+      <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="m20 3 15 9v17l-15 9L5 29V12Z" stroke="currentColor" stroke-width="2"/><path d="m12 13 8 5 8-5-3 14-5 5-5-5Z" fill="currentColor"/><path d="m17 22 3 2 3-2" stroke="#0f172a" stroke-width="2"/></svg>
+      <span>DRAGONWILDS <span class="brand-light">CONTROL</span></span>
+    </a>
+    <div class="cluster-meta"><span class="sr-only">Connected cluster</span>pc2-prod</div>
+    <span class="environment">Demo mode</span>
+    <div class="session-controls"><span>Admin</span><button type="button">Sign out</button></div>
+  </header>
+  <div class="shell mockup-shell">
+    <aside class="sidebar">
+      <nav aria-label="Primary navigation">
+        <a href="#dashboard" id="dashboard-nav"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span class="mockup-nav-label">Dashboard</span></a>
+        <a href="#telemetry"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20V13m5 7V7m6 13V3m5 17V10"/></svg><span class="mockup-nav-label">Telemetry</span></a>
+        <a href="#events"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="16" height="17" rx="2"/><path d="M8 2v4m8-4v4M4 10h16m-12 4h8m-8 3h5"/></svg><span class="mockup-nav-label">Events</span></a>
+        <a href="#maintenance" id="maintenance-nav"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m14 6 4 4m-2-7a6 6 0 0 0-7 8L3 17a3 3 0 0 0 4 4l6-6a6 6 0 0 0 8-7l-4 4-5-5Z"/></svg><span class="mockup-nav-label">Maintenance</span></a>
+        <a href="#users"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="8" r="3"/><path d="M3 19c0-3 3-5 6-5s6 2 6 5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 19c0-2 1.5-3.5 3.5-4"/></svg><span class="mockup-nav-label">Saved IDs</span></a>
+        <a href="#integrations"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="7" width="14" height="11" rx="2"/><path d="M9 7V5m6 2V5M9 18v2m6-2v2M8 13h.01M16 13h.01M11 13h2"/></svg><span class="mockup-nav-label">Integrations</span></a>
+        <a href="#reboots"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2M5 4l-2 2m16-2 2 2"/></svg><span class="mockup-nav-label">Reboots</span></a>
+        <a href="#backups" id="backups-nav" aria-current="page"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M7 4v3m10-3v3M7 12v5m10-5v5"/></svg><span class="mockup-nav-label">Backups</span></a>
+      </nav>
+      <div class="mockup-sidebar-note"><strong>Admin workspace</strong>Backups are visible to administrators only. Scheduled runs use the server-aware source rules.</div>
+    </aside>
+    <main class="mockup-main" id="main">
+      <div class="page-heading">
+        <div><h1 id="page-title">Backups</h1><p id="page-subtitle">Protect server data with verified, versioned backup bundles.</p></div>
+        <div class="page-controls"><button class="primary" id="run-backup-header">Run backup now</button><button class="icon-button" aria-label="Refresh data"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/></svg></button><button id="pause-updates">Pause updates</button><button class="icon-button settings-button" id="backup-settings" aria-label="Backup settings" title="Backup settings"><svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="m19.2 13.4 1.7 1-.9 1.6-1.8-.6a7.7 7.7 0 0 1-1.3 1.3l.6 1.8-1.6.9-1-1.7a7.5 7.5 0 0 1-1.8.2l-.6 1.8h-1.9l-.6-1.8a7.5 7.5 0 0 1-1.8-.2l-1 1.7-1.6-.9.6-1.8a7.7 7.7 0 0 1-1.3-1.3l-1.8.6-.9-1.6 1.7-1a7.3 7.3 0 0 1-.2-1.8l-1.8-.6v-1.9l1.8-.6a7.3 7.3 0 0 1 .2-1.8l-1.7-1 .9-1.6 1.8.6a7.7 7.7 0 0 1 1.3-1.3l-.6-1.8 1.6-.9 1 1.7a7.5 7.5 0 0 1 1.8-.2l.6-1.8h1.9l.6 1.8a7.5 7.5 0 0 1 1.8.2l1-1.7 1.6.9-.6 1.8a7.7 7.7 0 0 1 1.3 1.3l1.8-.6.9 1.6-1.7 1a7.3 7.3 0 0 1 .2 1.8l1.8.6v1.9l-1.8.6a7.3 7.3 0 0 1-.2 1.8Z"/></svg></button><span id="updated-at">Updated 2:53:21 AM</span></div>
+      </div>
+      <div id="mockup-content"></div>
+      <footer><span id="connection-status" class="connected">Connected · refreshes every 10s</span></footer>
+    </main>
+  </div>
+  <script>
+    const icon = (name) => {
+      const paths = {
+        plus: '<path d="M12 5v14M5 12h14"/>',
+        arrow: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
+        download: '<path d="M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5"/>',
+        file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 13h6m-6 4h5"/>',
+        folder: '<path d="M3 7h7l2 2h9v10H3z"/>',
+        database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5m-16 7v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/>',
+        upload: '<path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4"/>',
+        edit: '<path d="m4 16-.7 4.7L8 20l11-11-4-4zM13 6l4 4"/>',
+        trash: '<path d="M4 7h16m-10 4v5m4-5v5M9 7V4h6v3m-9 0 1 14h10l1-14"/>',
+        clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2M5 4l-2 2m16-2 2 2"/>',
+        check: '<path d="m5 12 4 4L19 6"/>',
+        warning: '<path d="m12 3 10 18H2Z M12 9v5m0 3v.01"/>',
+        info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8v.01"/>',
+      };
+      return '<svg class="mockup-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[name] || paths.info) + '</svg>';
+    };
+    const status = (label, type) => '<span class="result result-' + type + '">' + label + '</span>';
+    const storage = () => '<section class="panel"><div class="panel-heading"><div class="heading-copy"><h2>Storage</h2><p>Backup artifacts live outside the game PVC. Local storage is managed by C2 and cannot be removed. Additional backend types can be added later.</p></div><div class="mockup-heading-actions"><button class="subtle">View storage policy</button></div></div><div class="storage-grid"><article class="storage-card local"><div class="storage-card-head"><div class="storage-card-title">' + icon('database') + '<div><h3>Local</h3><p>Dedicated C2 backup volume</p></div></div><span class="status-pill connected">Connected</span></div><div class="storage-card-foot"><span>Used <strong class="mono">18.4 GiB / 100 GiB</strong></span><span class="mono">/var/lib/rsdw-c2/backups</span></div></article></div></section>';
+    const profileCard = (selected = false) => '<article class="profile-card' + (selected ? ' selected' : '') + '"><div class="profile-card-head"><div><span class="profile-kicker">Built-in definition · Dragonwilds</span><h3>World save</h3><p>Server-created .sav.backup while running; flat .sav when stopped.</p></div><span class="profile-badge">Logical files</span></div><div class="profile-meta"><div><strong>1</strong>logical item</div><div><strong>Auto</strong>source mode</div><div><strong>2</strong>source rules</div></div><div class="profile-card-foot"><span class="muted">Managed by server type</span><div class="button-row"><button class="small-button">View definition</button><button class="small-button primary">Run backup</button></div></div></article>';
+    const profiles = (detail = true) => {
+      const rows = [
+        '<div class="profile-list-row selected"><div><strong>World save</strong><small>Built-in · Dragonwilds</small></div><div><strong>logical-files</strong><small>1 logical item</small></div><div><strong>Auto</strong><small>.sav.backup / .sav</small></div><div><span class="profile-badge">Used by 3</span></div><div class="table-actions"><button class="small-button">View</button></div></div>',
+        '<div class="profile-list-row"><div><strong>Diagnostics bundle</strong><small>Future · Dragonwilds</small></div><div><strong>log-bundle</strong><small>0 items</small></div><div><strong>Future</strong><small>Collector</small></div><div><span class="profile-badge">Unavailable</span></div><div class="table-actions"><button class="small-button" disabled>View</button></div></div>',
+        '<div class="profile-list-row"><div><strong>Minecraft world</strong><small>Custom · Minecraft</small></div><div><strong>logical-files</strong><small>3 logical items</small></div><div><strong>Auto</strong><small>Server-aware</small></div><div><span class="profile-badge">Draft</span></div><div class="table-actions"><button class="small-button">View</button></div></div>',
+        '<div class="profile-list-row"><div><strong>Valheim world</strong><small>Custom · Valheim</small></div><div><strong>logical-files</strong><small>2 logical items</small></div><div><strong>Auto</strong><small>Server-aware</small></div><div><span class="profile-badge">Draft</span></div><div class="table-actions"><button class="small-button">View</button></div></div>',
+        '<div class="profile-list-row"><div><strong>Mod configuration</strong><small>Custom · Minecraft</small></div><div><strong>logical-files</strong><small>4 logical items</small></div><div><strong>Manual</strong><small>Profile rules</small></div><div><span class="profile-badge">Draft</span></div><div class="table-actions"><button class="small-button">View</button></div></div>',
+        '<div class="profile-list-row"><div><strong>Server logs</strong><small>Custom · Generic</small></div><div><strong>log-bundle</strong><small>2 logical items</small></div><div><strong>Collector</strong><small>Generated</small></div><div><span class="profile-badge">Draft</span></div><div class="table-actions"><button class="small-button">View</button></div></div>',
+        '<div class="profile-list-row"><div><strong>Player data</strong><small>Custom · Generic</small></div><div><strong>logical-files</strong><small>1 logical item</small></div><div><strong>Stopped</strong><small>Verified state</small></div><div><span class="profile-badge">Draft</span></div><div class="table-actions"><button class="small-button">View</button></div></div>'
+      ].join('');
+      const detailPanel = detail ? '<div class="definition-detail section-gap"><div class="definition-summary"><h3>World save definition</h3><p>Server-aware source selection keeps live saves consistent.</p><dl class="detail-list"><div><dt>Strategy</dt><dd>logical-files</dd></div><div><dt>Server type</dt><dd>Dragonwilds</dd></div><div><dt>Running source</dt><dd class="mono">GameSaves/World.sav.backup · verified path</dd></div><div><dt>Stopped source</dt><dd class="mono">GameSaves/World.sav · verified path</dd></div><div><dt>Download</dt><dd>Always a bundle</dd></div></dl></div><div class="item-list"><div class="item-row"><div class="item-label">' + icon('file') + '<strong>world-save</strong></div><div class="item-path">Resolved at run time from the server profile</div><div class="item-source"><strong>Automatic</strong>running .sav.backup / stopped .sav</div></div></div></div>' : '';
+      return '<section class="panel section-gap"><div class="panel-heading"><div class="heading-copy"><h2>Backup profiles</h2><p>Profiles define what C2 can collect. Runs and schedules select a profile; they never accept arbitrary paths.</p></div><div class="mockup-heading-actions"><button class="subtle">' + icon('upload') + 'Import YAML</button><button class="subtle">Export YAML</button><button class="primary">' + icon('plus') + 'New profile</button></div></div><div class="profile-browser-toolbar"><label class="profile-search">Search profiles<input type="search" placeholder="Name, server type, or strategy…" aria-label="Search backup profiles"></label><label class="profile-filter">Server type<select aria-label="Filter profiles by server type"><option>All server types</option><option>Dragonwilds</option><option>Minecraft</option><option>Valheim</option></select></label><span class="profile-count">24 profiles</span></div><div class="profile-list"><div class="profile-list-head"><span>Profile</span><span>Strategy</span><span>Source mode</span><span>Availability</span><span></span></div>' + rows + '</div><div class="profile-list-footer"><span>24 profiles total · scroll to browse</span><button class="subtle small-button">Clear filters</button></div>' + detailPanel + '</section>';
+    };
+    const recentBackups = () => '<section class="panel section-gap"><div class="panel-heading"><div class="heading-copy"><h2>Recent backups</h2><p>Completed artifacts are immutable, inspectable, and always downloaded as bundles.</p></div><div class="mockup-heading-actions"><select aria-label="Filter backups"><option>All servers</option><option>Aurora Expanse</option><option>Ember Hollow</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Server</th><th>Profile</th><th>Source</th><th>Created</th><th>Size</th><th>Status</th><th>Actions</th></tr></thead><tbody><tr><td><strong>Aurora Expanse</strong><small class="mono">aurora-expanse</small></td><td>World save<small>1 item · bundle</small></td><td><span class="source-chip live">Running .sav.backup</span></td><td class="mono">Today, 02:00</td><td class="mono">842 MiB</td><td>' + status('Completed', 'success') + '</td><td><div class="table-actions"><button class="small-button">Details</button><button class="small-button">Download</button></div></td></tr><tr><td><strong>Ember Hollow</strong><small class="mono">ember-hollow</small></td><td>World save<small>1 item · bundle</small></td><td><span class="source-chip stopped">Stopped .sav</span></td><td class="mono">Yesterday, 23:30</td><td class="mono">796 MiB</td><td>' + status('Completed', 'success') + '</td><td><div class="table-actions"><button class="small-button">Details</button><button class="small-button">Restore</button></div></td></tr><tr><td><strong>Northwatch</strong><small class="mono">northwatch</small></td><td>World save<small>1 item · bundle</small></td><td><span class="source-chip live">Running .sav.backup</span></td><td class="mono">Today, 01:00</td><td class="mono">—</td><td>' + status('Failed', 'error') + '<small>.sav.backup missing or unstable</small></td><td><div class="table-actions"><button class="small-button">Details</button><button class="small-button">Retry</button></div></td></tr></tbody></table></div></section>';
+    const schedules = (full = false) => '<section class="panel' + (full ? '' : ' section-gap') + '"><div class="panel-heading"><div class="heading-copy"><h2>Scheduled backups</h2><p>Each schedule selects a server, profile, destination, cadence, and execution timezone.</p></div><div class="mockup-heading-actions"><label class="field timezone-control"><span class="muted">Display timezone</span><select><option>America/New_York</option></select></label><button class="primary">' + icon('plus') + 'Add schedule</button></div></div><div class="table-wrap"><table><thead><tr><th>Server</th><th>Profile</th><th>Timing</th><th>Execution zone</th><th>State</th><th>Next run</th><th>Last result</th><th>Actions</th></tr></thead><tbody><tr><td><strong>Aurora Expanse</strong><small class="mono">aurora-expanse</small></td><td>World save</td><td>Daily at <span class="mono">02:00</span></td><td class="mono">America/New_York</td><td>' + status('Enabled', 'success') + '</td><td class="mono">9/19/2026, 2:00 AM</td><td>' + status('Completed', 'success') + '<small>Running .sav.backup</small></td><td><div class="table-actions"><button class="small-button">Edit</button><button class="small-button danger">Delete</button></div></td></tr><tr><td><strong>Ember Hollow</strong><small class="mono">ember-hollow</small></td><td>World save</td><td>Every <span class="mono">12 hours</span></td><td class="mono">UTC</td><td>' + status('Enabled', 'success') + '</td><td class="mono">9/18/2026, 12:00 PM</td><td>' + status('Completed', 'success') + '<small>Stopped .sav</small></td><td><div class="table-actions"><button class="small-button">Edit</button><button class="small-button danger">Delete</button></div></td></tr><tr><td><strong>Northwatch</strong><small class="mono">northwatch</small></td><td>World save</td><td>Daily at <span class="mono">01:00</span></td><td class="mono">America/Los_Angeles</td><td>' + status('Disabled', 'unknown') + '</td><td class="mono">—</td><td>' + status('Failed', 'error') + '<small>Source unavailable</small></td><td><div class="table-actions"><button class="small-button">Edit</button><button class="small-button danger">Delete</button></div></td></tr></tbody></table></div><p class="schedule-note"><strong>Source selection is automatic:</strong> running servers use the generated .sav.backup; stopped servers use the flat .sav. Missed runs are skipped after C2 downtime.</p></section>';
+    const history = () => '<section class="panel section-gap"><div class="panel-heading"><div class="heading-copy"><h2>Execution history</h2><p>Audit trail for scheduled attempts. A run can fail without publishing a completed artifact.</p></div></div><div class="table-wrap"><table><thead><tr><th>When</th><th>Server</th><th>Profile</th><th>Result</th><th>Source</th><th>Details</th></tr></thead><tbody><tr><td class="mono">9/18/2026, 2:00 AM</td><td>Aurora Expanse</td><td>World save</td><td>' + status('Completed', 'success') + '</td><td><span class="source-chip live">Running .sav.backup</span></td><td>842 MiB stored in Local</td></tr><tr><td class="mono">9/18/2026, 1:00 AM</td><td>Northwatch</td><td>World save</td><td>' + status('Failed', 'error') + '</td><td><span class="source-chip live">Running .sav.backup</span></td><td>Expected .sav.backup file was missing</td></tr><tr><td class="mono">9/17/2026, 11:30 PM</td><td>Ember Hollow</td><td>World save</td><td>' + status('Completed', 'success') + '</td><td><span class="source-chip stopped">Stopped .sav</span></td><td>796 MiB stored in Local</td></tr></tbody></table></div></section>';
+    const modalShell = (title, subtitle, body, classes = '') => '<div class="form-modal-backdrop"><div class="mockup-dialog ' + classes + '"><div class="modal-heading"><div><h2>' + title + '</h2><p>' + subtitle + '</p></div><button class="icon-button" aria-label="Close">×</button></div>' + body + '</div></div>';
+    const profileForm = () => modalShell('New backup profile', 'Define a reusable logical-files profile. Runs and schedules will reference this profile.', '<div class="hero-notice"><span class="blue-text">' + icon('info') + '</span><span><strong>Advanced authoring.</strong> The profile defines allowed items. A completed run generates the artifact manifest with real sizes, checksums, and storage keys.</span></div><fieldset><legend>Profile identity</legend><div class="form-grid"><label class="field">Profile name<input value="World save" autofocus></label><label class="field">Server type<select><option>Dragonwilds</option><option>Other server type</option></select></label><label class="field full">Strategy<select><option>Logical files</option><option>Volume snapshot (not available)</option><option>Log bundle (not available)</option></select><small>Only strategies supported by the server type and connected storage backends can be selected.</small></label></div></fieldset><fieldset><legend>Items</legend><div class="form-section-heading"><h3>Collected items</h3><button class="subtle small-button">' + icon('plus') + 'Add item</button></div><div class="profile-item-form"><div class="profile-item-form-head"><span>Name</span><span>Safe relative path</span><span>Source state</span><span></span></div><div class="profile-item-form-row"><input value="world-save"><input value="GameSaves/World.sav"><select><option>Stopped</option><option>Running</option></select><button aria-label="Remove item">×</button></div><div class="profile-item-form-row"><input value="world-backup"><input value="GameSaves/World.sav.backup"><select><option>Running</option><option>Stopped</option></select><button aria-label="Remove item">×</button></div></div><small>Paths are profile-controlled and validated. During a run, C2 resolves exactly one source item from the verified server state.</small></fieldset><fieldset><legend>Definition file</legend><div class="form-grid"><label class="field full">Import or export YAML<input type="file" accept=".yaml,.yml"><small>YAML imports definitions only. It cannot set a generated checksum or stored-object key.</small></label></div><div class="yaml-preview"><span class="key">apiVersion</span>: <span class="value">rsdw.petzko.sh/v1</span><br><span class="key">kind</span>: <span class="value">BackupDefinition</span><br><span class="key">strategy</span>: <span class="value">logical-files</span><br><span class="key">items</span>:<br>  - <span class="key">name</span>: <span class="value">world-backup</span><br>    <span class="key">sourceState</span>: <span class="value">running</span></div></fieldset><div class="modal-actions"><button>Cancel</button><button class="primary">Save profile</button></div>');
+    const scheduleForm = () => modalShell('Add backup schedule', 'Choose a server and profile. Source selection remains automatic at run time.', '<div class="hero-notice"><span class="blue-text">' + icon('info') + '</span><span><strong>No path entry required.</strong> Running servers use .sav.backup; stopped servers use .sav. C2 skips catch-up bursts after downtime.</span></div><fieldset><legend>Backup target</legend><div class="form-grid"><label class="field">Server<select><option>Aurora Expanse</option><option>Ember Hollow</option><option>Northwatch</option></select></label><label class="field">Backup profile<select><option>World save · logical files</option></select></label><label class="field full">Destination storage<select><option>Local · Connected</option></select><small>Local is the only connected backend in this version.</small></label></div></fieldset><fieldset><legend>Timing</legend><div class="form-grid"><label class="field">Schedule mode<select><option>Daily</option><option>Interval</option><option>Custom cron</option></select></label><label class="field">Execution timezone<select><option>America/New_York</option><option>UTC</option><option>America/Los_Angeles</option></select></label><label class="field">Time<input type="time" value="02:00"></label><label class="field">Enabled<select><option>Enabled</option><option>Disabled</option></select></label></div></fieldset><label class="confirm-row"><input type="checkbox" checked><span>I understand that backup collection reads server storage and may be unavailable while the server is transitioning.</span></label><div class="modal-actions"><button>Cancel</button><button class="primary">Save schedule</button></div>', 'narrow');
+    const runForm = () => modalShell('Run backup now', 'Create an immutable bundle from the selected server.', '<fieldset><legend>Backup request</legend><div class="form-grid"><label class="field">Server<select><option>Aurora Expanse</option><option>Ember Hollow</option></select></label><label class="field">Backup profile<select><option>World save · logical files</option></select></label><label class="field full">Destination storage<select><option>Local · Connected</option></select></label></div></fieldset><section class="definition-summary"><h3>Source preview</h3><p>Resolved automatically from current server state.</p><dl class="detail-list"><div><dt>Current state</dt><dd><span class="status online">Online</span></dd></div><div><dt>Source</dt><dd><span class="source-chip live">Server-created .sav.backup</span></dd></div><div><dt>Items</dt><dd>1 logical file · bundle download</dd></div><div><dt>Safety</dt><dd>Flat .sav will not be read</dd></div></dl></section><label class="confirm-row" style="margin-top:16px"><input type="checkbox" checked><span>I understand that C2 will fail this run if the expected .sav.backup is missing or unstable.</span></label><div class="modal-actions"><button>Cancel</button><button class="primary">Start backup</button></div>', 'narrow');
+    const healthPanel = () => [
+      '<section class="panel health-panel">',
+      '<div class="health-top"><div class="health-lockup"><span class="health-indicator" aria-hidden="true"></span><div><span class="health-kicker">Backup health</span><h2 class="health-title"><span class="healthy-count">2 of 3</span> schedules healthy</h2><p class="health-subtitle">Last successful backup 12 minutes ago · completed artifacts are stored locally</p></div></div><div class="health-top-actions"><button class="subtle small-button">Review attention</button></div></div>',
+      '<div class="health-metrics"><div class="health-metric"><span class="health-metric-label">Next backup</span><strong>In 42 min</strong><small>Aurora Expanse · 02:00</small></div><div class="health-metric"><span class="health-metric-label">Last successful</span><strong>12 min ago</strong><small>Ember Hollow · 796 MiB</small></div><div class="health-metric"><span class="health-metric-label">Local storage</span><strong>18.4 / 100 GiB</strong><small>Connected · fail when full</small><div class="health-progress" aria-label="18.4 percent storage used"><span></span></div></div><div class="health-metric"><span class="health-metric-label">Coverage</span><strong>3 servers</strong><small>1 profile · 3 schedules</small></div></div>',
+      '<div class="health-attention"><span class="status-tag warning">Needs attention</span><span class="health-attention-copy"><strong>Northwatch</strong> · expected running <span class="mono">.sav.backup</span> is missing or unstable</span><button class="small-button">View failed run</button></div>',
+      '</section>'
+    ].join('');
+
+    const refinedRecentBackups = () => [
+      '<section class="panel section-gap compact-section"><div class="panel-heading"><div class="heading-copy"><h2>Recent backups</h2><p>Start here to confirm the latest artifacts were captured and stored.</p></div><div class="mockup-heading-actions"><select aria-label="Filter recent backups"><option>All servers</option><option>Aurora Expanse</option><option>Ember Hollow</option><option>Northwatch</option></select><button class="subtle small-button">View history</button></div></div>',
+      '<div class="table-wrap compact-table"><table><thead><tr><th>Server / profile</th><th>Created</th><th>Source</th><th>Size</th><th>Result</th><th></th></tr></thead><tbody>',
+      '<tr><td class="server-cell"><strong>Aurora Expanse</strong><small>World save · Local</small></td><td class="mono">Today, 02:00</td><td><span class="source-chip live">Running .sav.backup</span></td><td class="mono">842 MiB</td><td class="last-result">' + status('Completed', 'success') + '</td><td class="actions"><div class="table-actions"><button class="small-button">Details</button><button class="small-button">Download</button></div></td></tr>',
+      '<tr><td class="server-cell"><strong>Ember Hollow</strong><small>World save · Local</small></td><td class="mono">Yesterday, 23:30</td><td><span class="source-chip stopped">Stopped .sav</span></td><td class="mono">796 MiB</td><td class="last-result">' + status('Completed', 'success') + '</td><td class="actions"><div class="table-actions"><button class="small-button">Details</button><button class="small-button">Restore</button></div></td></tr>',
+      '<tr><td class="server-cell"><strong>Northwatch</strong><small>World save · Local</small></td><td class="mono">Today, 01:00</td><td><span class="source-chip live">Running .sav.backup</span></td><td class="mono">—</td><td class="last-result">' + status('Failed', 'error') + '<small>.sav.backup missing or unstable</small></td><td class="actions"><div class="table-actions"><button class="small-button">Details</button><button class="small-button">Retry</button></div></td></tr>',
+      '</tbody></table></div></section>'
+    ].join('');
+
+    const refinedSchedules = (full = false) => {
+      const title = full ? 'Scheduled backups' : 'Upcoming schedules';
+      const description = full ? 'Every schedule selects a server, profile, destination, cadence, and execution timezone.' : 'The next scheduled collection for each server, with its last result beside it.';
+      const actions = full ? '<label class="field timezone-control"><span class="muted">Display timezone</span><select><option>America/New_York</option></select></label><button class="primary">' + icon('plus') + 'Add schedule</button>' : '<button class="subtle small-button">Manage schedules</button>';
+      return [
+        '<section class="panel' + (full ? '' : ' section-gap') + ' compact-section"><div class="panel-heading"><div class="heading-copy"><h2>' + title + '</h2><p>' + description + '</p></div><div class="mockup-heading-actions">' + actions + '</div></div>',
+        '<div class="table-wrap compact-table"><table><thead><tr><th>Server / profile</th><th>Cadence</th><th>Next run</th><th>Last result</th><th>State</th><th></th></tr></thead><tbody>',
+        '<tr><td class="server-cell"><strong>Aurora Expanse</strong><small>World save · Local</small></td><td>Daily at <span class="mono">02:00</span><small>America/New_York</small></td><td class="mono">Tomorrow, 02:00</td><td class="last-result">' + status('Completed', 'success') + '<small>Running .sav.backup · 842 MiB</small></td><td>' + status('Enabled', 'success') + '</td><td class="actions"><div class="table-actions"><button class="small-button">Edit</button><button class="small-button danger">Delete</button></div></td></tr>',
+        '<tr><td class="server-cell"><strong>Ember Hollow</strong><small>World save · Local</small></td><td>Every <span class="mono">12 hours</span><small>UTC</small></td><td class="mono">Today, 12:00 PM</td><td class="last-result">' + status('Completed', 'success') + '<small>Stopped .sav · 796 MiB</small></td><td>' + status('Enabled', 'success') + '</td><td class="actions"><div class="table-actions"><button class="small-button">Edit</button><button class="small-button danger">Delete</button></div></td></tr>',
+        '<tr><td class="server-cell"><strong>Northwatch</strong><small>World save · Local</small></td><td>Daily at <span class="mono">01:00</span><small>America/Los_Angeles</small></td><td class="mono">—</td><td class="last-result">' + status('Failed', 'error') + '<small>Source unavailable</small></td><td>' + status('Disabled', 'unknown') + '</td><td class="actions"><div class="table-actions"><button class="small-button">Edit</button><button class="small-button danger">Delete</button></div></td></tr>',
+        '</tbody></table></div><p class="schedule-note"><strong>Automatic source rule:</strong> running servers use the generated <span class="mono">.sav.backup</span>; stopped servers use the flat <span class="mono">.sav</span>. Missed runs are skipped after C2 downtime.</p></section>'
+      ].join('');
+    };
+
+    const refinedProfileForm = () => {
+      const body = [
+        '<div class="refined-form">',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">1</span><div><h3>Profile details</h3><p>Give the definition a clear name and bind it to a server type.</p></div></div><div class="form-grid"><label class="field">Profile name<input value="World save" autofocus></label><label class="field">Server type<select><option>Dragonwilds</option><option>Other server type</option></select></label><label class="field full">Strategy<select><option>Logical files</option><option>Volume snapshot · unavailable</option><option>Log bundle · unavailable</option></select><small>Logical files are the only strategy available for Dragonwilds v1.</small></label></div></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">2</span><div><h3>Logical items</h3><p>Each item becomes one entry in the generated backup manifest. Add more items later for server types with multiple files.</p></div></div><div class="logical-item-card"><div class="logical-item-heading"><div><strong>world-save</strong><small>1 logical item · automatic source selection</small></div><button class="subtle small-button">Remove item</button></div><div class="source-rule-list"><div class="source-rule-head"><span>Server state</span><span>Allowed path</span><span>Safety check</span><span></span></div><div class="source-rule-row"><select aria-label="First source state"><option>Running</option><option>Stopped</option></select><input value="GameSaves/World.sav.backup"><span class="rule-guard">Stable size + modified time</span><button class="icon-button" aria-label="Remove running source rule">' + icon('trash') + '</button></div><div class="source-rule-row"><select aria-label="Second source state"><option>Stopped</option><option>Running</option></select><input value="GameSaves/World.sav"><span class="rule-guard">Server verified stopped</span><button class="icon-button" aria-label="Remove stopped source rule">' + icon('trash') + '</button></div></div></div><button class="subtle small-button add-item">' + icon('plus') + 'Add logical item</button></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">3</span><div><h3>Import / export</h3><p>Use YAML to move a reusable definition between environments. Generated checksums and stored-object keys are never imported.</p></div></div><div class="definition-file-bar"><p>Definition YAML</p><div class="definition-actions"><button class="subtle small-button">' + icon('upload') + 'Import YAML</button><button class="subtle small-button">' + icon('download') + 'Export YAML</button></div></div><details class="yaml-disclosure" open><summary>Preview definition</summary><div class="yaml-preview"><span class="key">apiVersion</span>: <span class="value">rsdw.petzko.sh/v1</span><br><span class="key">kind</span>: <span class="value">BackupDefinition</span><br><span class="key">strategy</span>: <span class="value">logical-files</span><br><span class="key">items</span>:<br>  - <span class="key">name</span>: <span class="value">world-save</span><br>    <span class="key">sourceState</span>: <span class="value">running</span><br>    <span class="key">path</span>: <span class="value">GameSaves/World.sav.backup</span></div></details></section>',
+        '<div class="modal-actions"><button>Cancel</button><button class="primary">Save profile</button></div>',
+        '</div>'
+      ].join('');
+      return modalShell('New backup profile', 'Define exactly what a server-aware backup is allowed to collect.', body);
+    };
+
+    const refinedScheduleForm = () => {
+      const body = [
+        '<div class="refined-form">',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">1</span><div><h3>Backup target</h3><p>Select the server, reusable profile, and connected storage backend.</p></div></div><div class="form-grid"><label class="field">Server<select><option>Aurora Expanse</option><option>Ember Hollow</option><option>Northwatch</option></select></label><label class="field">Backup profile<select><option>World save · logical files</option></select></label><label class="field full">Destination storage<select><option>Local · Connected</option></select><small>Local is the only connected backend in v1.</small></label></div></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">2</span><div><h3>Timing</h3><p>Use the same timezone behavior as Reboots. Missed runs do not create catch-up bursts.</p></div></div><div class="form-grid"><label class="field">Schedule mode<select><option>Daily</option><option>Every 12 hours</option><option>Custom cron</option></select></label><label class="field">Time<input type="time" value="02:00"></label><label class="field">Execution timezone<select><option>America/New_York</option><option>UTC</option><option>America/Los_Angeles</option></select></label><label class="field">Status<select><option>Enabled</option><option>Disabled</option></select></label></div></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">3</span><div><h3>Run preview</h3><p>C2 verifies server state immediately before reading the source.</p></div></div><div class="schedule-preview"><div class="preview-row"><span>When server is running</span><strong><span class="source-chip live">Read server-created .sav.backup</span></strong></div><div class="preview-row"><span>When server is stopped</span><strong><span class="source-chip stopped">Read flat .sav</span></strong></div><div class="preview-row"><span>When source is missing or unstable</span><strong class="danger-text">Fail without publishing</strong></div></div></section>',
+        '<div class="modal-actions"><button>Cancel</button><button class="primary">Save schedule</button></div>',
+        '</div>'
+      ].join('');
+      return modalShell('Add backup schedule', 'Choose a target and cadence; the server profile controls the files.', body, 'narrow');
+    };
+
+    const refinedRunForm = () => {
+      const body = [
+        '<div class="refined-form">',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">1</span><div><h3>Backup target</h3><p>Select the server and reusable profile.</p></div></div><div class="form-grid"><label class="field">Server<select><option>Aurora Expanse</option><option>Ember Hollow</option></select></label><label class="field">Backup profile<select><option>World save · logical files</option></select></label><label class="field full">Destination storage<select><option>Local · Connected</option></select></label></div></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">2</span><div><h3>Resolved source</h3><p>Based on the verified server state at run time.</p></div></div><div class="schedule-preview"><div class="preview-row"><span>Current state</span><strong><span class="status-tag success">Online</span></strong></div><div class="preview-row"><span>Source item</span><strong><span class="source-chip live">Server-created .sav.backup</span></strong></div><div class="preview-row"><span>Bundle</span><strong>1 logical item · always packaged</strong></div></div><div class="run-safety"><strong>Safe failure:</strong> if the expected <span class="mono">.sav.backup</span> is missing or unstable, this run fails without reading the flat <span class="mono">.sav</span> or creating a partial backup.</div></section>',
+        '<div class="modal-actions"><button>Cancel</button><button class="primary">Start backup</button></div>',
+        '</div>'
+      ].join('');
+      return modalShell('Run backup now', 'Create an immutable bundle from the selected server.', body, 'narrow');
+    };
+
+    const settingsContext = (section) => '<div class="settings-context"><div class="settings-context-copy"><span class="eyebrow">Backups</span><strong>Settings</strong></div><div class="settings-tabs"><button' + (section === 'profiles' ? ' aria-current="page"' : '') + '>Profiles</button><button' + (section === 'storage' ? ' aria-current="page"' : '') + '>Storage</button></div><button class="subtle small-button">Back to backups</button></div>';
+    const settingsPage = (section = 'profiles') => {
+      const settings = settingsContext(section) + (section === 'storage' ? storage() : profiles(true));
+      return settings.replace('<button class="small-button primary">Run backup</button>', '<span class="muted">Used by 3 schedules</span>');
+    };
+
+    const operationalSchedules = (full = false) => {
+      let page = refinedSchedules(full).replaceAll('<button class="small-button danger">Delete</button>', '<button class="small-button">Run now</button>');
+      if (full) {
+        page = page.replace('</tbody></table></div><p class="schedule-note">', '</tbody></table></div><div class="schedule-action-bar"><div class="schedule-action-bar-copy"><strong>Schedule actions</strong><span>Choose a schedule to run it now or remove it from the bottom menu.</span></div><select aria-label="Selected schedule"><option>Northwatch · World save</option><option>Aurora Expanse · World save</option><option>Ember Hollow · World save</option></select><button class="small-button">Run now</button><button class="small-button danger">Delete</button></div><p class="schedule-note">');
+      }
+      return page;
+    };
+
+    const scheduledRunForm = () => {
+      const body = [
+        '<div class="refined-form">',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">1</span><div><h3>Selected schedule</h3><p>These values are read-only for this run.</p></div></div><div class="schedule-preview"><div class="preview-row"><span>Schedule</span><strong>Aurora Expanse · World save</strong></div><div class="preview-row"><span>Cadence</span><strong>Daily at 02:00 · America/New_York</strong></div><div class="preview-row"><span>Destination</span><strong>Local · Connected</strong></div><div class="preview-row"><span>Next scheduled run</span><strong>Tomorrow, 02:00 · unchanged</strong></div></div></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">2</span><div><h3>Resolved source</h3><p>C2 verifies the server state immediately before collection.</p></div></div><div class="schedule-preview"><div class="preview-row"><span>Current state</span><strong><span class="status-tag success">Online</span></strong></div><div class="preview-row"><span>Source item</span><strong><span class="source-chip live">Server-created .sav.backup</span></strong></div><div class="preview-row"><span>Failure behavior</span><strong class="danger-text">Fail without publishing if missing or unstable</strong></div></div></section>',
+        '<div class="modal-actions"><button>Cancel</button><button class="primary">Run scheduled backup now</button></div>',
+        '</div>'
+      ].join('');
+      return modalShell('Run scheduled backup now', 'Run this configured schedule immediately without changing its cadence.', body, 'narrow');
+    };
+
+    const serverCreatePage = () => '<section class="panel"><div class="panel-heading"><div class="heading-copy"><h2>Servers</h2><p>2 worlds · manage server health, storage, and lifecycle actions.</p></div><button class="primary">' + icon('plus') + 'Add server</button></div><div class="table-wrap"><table><thead><tr><th>Server</th><th>Status</th><th>Players</th><th>World storage</th><th></th></tr></thead><tbody><tr><td><strong>Aurora Expanse</strong><small class="mono">aurora-expanse</small></td><td>' + status('Online', 'success') + '</td><td>3 / 4</td><td class="mono">40 GiB</td><td><button class="small-button">Open</button></td></tr><tr><td><strong>Ember Hollow</strong><small class="mono">ember-hollow</small></td><td>' + status('Stopped', 'unknown') + '</td><td>—</td><td class="mono">40 GiB</td><td><button class="small-button">Open</button></td></tr></tbody></table></div></section>';
+
+    const createServerFromBackup = () => {
+      const body = [
+        '<div class="refined-form">',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">1</span><div><h3>Backup source</h3><p>Choose a completed bundle. The source server and its world PVC remain unchanged.</p></div></div><label class="field">Completed backup<select><option>Aurora Expanse · Today, 02:00 · 842 MiB</option><option>Aurora Expanse · Yesterday, 02:00 · 839 MiB</option></select></label><div class="schedule-preview"><div class="preview-row"><span>Profile</span><strong>World save · 1 logical item</strong></div><div class="preview-row"><span>Captured source</span><strong><span class="source-chip live">Running .sav.backup</span></strong></div><div class="preview-row"><span>Bundle</span><strong>Manifest + item contents</strong></div></div></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">2</span><div><h3>New server details</h3><p>Create a separate server identity for this restored world.</p></div></div><div class="form-grid"><label class="field">Server name<input value="Aurora Expanse copy"></label><label class="field">Owner name<input value="Admin"></label><label class="field full">Server image<select><option>Dragonwilds · current</option></select></label></div></section>',
+        '<section class="form-step"><div class="form-step-heading"><span class="step-number">3</span><div><h3>New world storage</h3><p>The restore creates a new world PVC and never overwrites an existing server.</p></div></div><div class="form-grid"><label class="field">World storage<select><option>Create new world PVC · 40 GiB</option></select></label><label class="field">Start after restore<select><option>Start server</option><option>Leave stopped</option></select></label></div><div class="schedule-preview"><div class="preview-row"><span>Existing servers</span><strong>Unaffected</strong></div><div class="preview-row"><span>Stable identity</span><strong>New server ID</strong></div></div></section>',
+        '<label class="confirm-row"><input type="checkbox" checked><span>I understand this creates a new server and restores the selected bundle into a new world volume.</span></label>',
+        '<div class="modal-actions"><button>Cancel</button><button class="primary">Create server from backup</button></div>',
+        '</div>'
+      ].join('');
+      return serverCreatePage() + modalShell('Create a server from backup', 'Provision a new world from a completed backup bundle.', body);
+    };
+
+    const backupDetails = () => {
+      const body = [
+        '<div class="detail-modal">',
+        '<div class="detail-status"><div><strong>Aurora Expanse</strong><small>World save · completed today at 02:00</small></div>' + status('Completed', 'success') + '</div>',
+        '<dl class="detail-grid"><div class="detail-line"><dt>Backup ID</dt><dd class="mono">bkp_20260918_0200_aurora</dd></div><div class="detail-line"><dt>Duration</dt><dd class="mono">00:02:41</dd></div><div class="detail-line"><dt>Source state</dt><dd>Running</dd></div><div class="detail-line"><dt>Destination</dt><dd>Local · Connected</dd></div><div class="detail-line"><dt>Bundle size</dt><dd class="mono">842 MiB</dd></div><div class="detail-line"><dt>Items</dt><dd>1 logical item</dd></div></dl>',
+        '<div class="detail-source"><h3>Captured item</h3><p>The completed manifest records the verified source and stored content.</p><div class="detail-source-row"><span>Logical item</span><strong class="mono">world-save</strong></div><div class="detail-source-row"><span>Source</span><span class="source-chip live">Running .sav.backup</span></div><div class="detail-source-row"><span>Relative path</span><strong class="mono">GameSaves/World.sav.backup</strong></div><div class="detail-source-row"><span>Checksum</span><strong class="mono">sha256: 8c1e…42d9</strong></div></div>',
+        '<div class="modal-actions"><button>Close</button><button class="primary">' + icon('download') + 'Download bundle</button></div>',
+        '</div>'
+      ].join('');
+      return modalShell('Backup details', 'Completed artifact · downloads always include the manifest and item contents.', body);
+    };
+
+    const scheduleDeleteForm = () => {
+      const body = [
+        '<div class="refined-form">',
+        '<div class="confirmation-panel"><h3>Delete Northwatch schedule?</h3><p>This removes the recurring schedule only. Existing completed backups remain available in Local storage.</p></div>',
+        '<dl class="detail-grid"><div class="detail-line"><dt>Schedule</dt><dd>Northwatch · World save</dd></div><div class="detail-line"><dt>Cadence</dt><dd>Daily at 01:00</dd></div><div class="detail-line"><dt>Timezone</dt><dd class="mono">America/Los_Angeles</dd></div><div class="detail-line"><dt>Next run</dt><dd>— · schedule disabled</dd></div></dl>',
+        '<label class="confirm-row"><input type="checkbox" checked><span>I understand that future automatic runs will stop. Existing backup artifacts will not be deleted.</span></label>',
+        '<div class="modal-actions"><button>Cancel</button><button class="danger">Delete schedule</button></div>',
+        '</div>'
+      ].join('');
+      return modalShell('Delete schedule', 'Confirm this destructive schedule action.', body, 'narrow');
+    };
+
+    const maintenancePage = () => '<section class="panel"><div class="maintenance-card"><div class="maintenance-card-main"><span class="eyebrow">Server maintenance</span><h2>Aurora Expanse</h2><p>Manage world data and recovery actions for this server.</p><div class="maintenance-card-meta"><span><strong>Online</strong></span><span>World PVC mounted</span><span>Last backup today, 02:00</span></div></div><div class="maintenance-card-action"><button class="primary">' + icon('upload') + 'Restore</button></div></div></section><section class="panel section-gap"><div class="panel-heading"><div class="heading-copy"><h2>Maintenance actions</h2><p>Destructive world-data operations are separated from ordinary backup downloads.</p></div></div><div class="maintenance-card-meta"><span>Reboot server</span><span>Inspect world storage</span><span>Restore world data</span></div></section>';
+
+    const maintenanceRestore = (custom = false) => {
+      const backupChoice = '<label class="restore-choice' + (custom ? '' : ' selected') + '"><input type="radio" name="restore-source"' + (custom ? '' : ' checked') + '><span class="restore-choice-copy"><strong>From Backup</strong><small>Select a completed C2 backup bundle from history.</small></span></label>';
+      const customChoice = '<label class="restore-choice' + (custom ? ' selected' : '') + '"><input type="radio" name="restore-source"' + (custom ? ' checked' : '') + '><span class="restore-choice-copy"><strong>Custom</strong><small>Choose a valid .sav file from your computer.</small></span></label>';
+      const sourcePanel = custom ? '<div class="restore-source-panel"><label class="field">Custom .sav file<input type="file" accept=".sav"><small>Only .sav files are accepted. The upload is validated before any world data is changed.</small></label></div>' : '<div class="restore-source-panel"><label class="field">Backup to restore<select><option>Aurora Expanse · Today, 02:00 · 842 MiB</option><option>Aurora Expanse · Yesterday, 02:00 · 839 MiB</option></select></label><div class="detail-source-row"><span>Captured source</span><span class="source-chip live">Running .sav.backup</span></div><p>Existing targets must be empty. Restoring into a world containing save data requires separate destructive confirmation.</p></div>';
+      const action = custom ? 'Restore custom .sav' : 'Restore from backup';
+      const body = '<div class="refined-form"><div class="restore-warning">' + icon('warning') + '<span><strong>World data will change.</strong> Stop the server and verify the target before restoring.</span></div><div class="restore-target"><div><span class="eyebrow">Target world</span><strong>Aurora Expanse · existing world</strong><small>World PVC stays in place · restore requires an empty target</small></div><span class="status-tag muted">Stop required</span></div><div class="restore-choice-list">' + backupChoice + customChoice + '</div>' + sourcePanel + '<label class="confirm-row"><input type="checkbox" checked><span>I confirm the server is stopped and the target world contains no save data.</span></label><div class="modal-actions"><button>Cancel</button><button class="primary">' + action + '</button></div></div>';
+      return maintenancePage() + modalShell('Restore Aurora Expanse', 'Choose the source for this server restore.', body);
+    };
+
+    const overview = () => healthPanel() + refinedRecentBackups() + operationalSchedules();
+    const profilePage = () => settingsPage('profiles');
+    const schedulePage = () => operationalSchedules(true) + history();
+    const view = new URLSearchParams(location.search).get('view') || 'overview';
+    const content = view === 'profiles' ? profilePage() : view === 'profile-form' ? profilePage() + profileForm() : view === 'schedules' ? schedulePage() : view === 'schedule-form' ? schedulePage() + scheduleForm() : view === 'run-form' ? overview() + runForm() : overview();
+    const refinedContent = view === 'settings' ? settingsPage('storage') : view === 'profile-form' ? settingsPage('profiles') + refinedProfileForm() : view === 'schedule-form' ? schedulePage() + refinedScheduleForm() : view === 'run-form' ? overview() + refinedRunForm() : view === 'scheduled-run-form' ? schedulePage() + scheduledRunForm() : view === 'backup-details' ? overview() + backupDetails() : view === 'schedule-delete' ? schedulePage() + scheduleDeleteForm() : view === 'maintenance-restore-backup' ? maintenanceRestore(false) : view === 'maintenance-restore-custom' ? maintenanceRestore(true) : view === 'new-server-from-backup' ? createServerFromBackup() : view === 'schedules' ? schedulePage() : view === 'profiles' ? profilePage() : overview();
+    const configureShell = (currentView) => {
+      const title = document.querySelector('#page-title');
+      const subtitle = document.querySelector('#page-subtitle');
+      const runButton = document.querySelector('#run-backup-header');
+      const pauseButton = document.querySelector('#pause-updates');
+      const settingsButton = document.querySelector('#backup-settings');
+      const dashboardNav = document.querySelector('#dashboard-nav');
+      const backupsNav = document.querySelector('#backups-nav');
+      const maintenanceNav = document.querySelector('#maintenance-nav');
+      const settingsView = currentView === 'settings' || currentView === 'profiles' || currentView === 'profile-form';
+      const maintenanceView = currentView === 'maintenance-restore-backup' || currentView === 'maintenance-restore-custom';
+      const newServerView = currentView === 'new-server-from-backup';
+      if (newServerView) {
+        title.textContent = 'Server overview';
+        subtitle.textContent = 'Status, players, and server controls.';
+        backupsNav.removeAttribute('aria-current');
+        dashboardNav.setAttribute('aria-current', 'page');
+        runButton.hidden = true;
+        pauseButton.hidden = true;
+        settingsButton.hidden = true;
+      } else if (maintenanceView) {
+        title.textContent = 'Maintenance';
+        subtitle.textContent = 'Manage server data and restore world saves safely.';
+        document.body.classList.add('maintenance-nav-active');
+        backupsNav.removeAttribute('aria-current');
+        maintenanceNav.setAttribute('aria-current', 'page');
+        runButton.hidden = true;
+        pauseButton.hidden = true;
+        settingsButton.hidden = true;
+      } else if (settingsView) {
+        title.textContent = 'Backup settings';
+        subtitle.textContent = 'Configure backup profiles and storage backends.';
+        runButton.hidden = true;
+        pauseButton.hidden = true;
+        settingsButton.setAttribute('aria-current', 'page');
+      }
+    };
+    configureShell(view);
+    const renderedContent = refinedContent
+      .replace('<legend>Items</legend>', '<legend>Source rules</legend>')
+      .replace('<h3>Collected items</h3>', '<h3>World-save source rules</h3>')
+      .replace('<span>Name</span><span>Safe relative path</span>', '<span>Rule name</span><span>Safe relative path</span>')
+      .replace('Paths are profile-controlled and validated. During a run, C2 resolves exactly one source item from the verified server state.', 'These are two source rules for one logical save item. Paths are profile-controlled and validated; C2 resolves exactly one rule from the verified server state.')
+      .replace('<span class="value">world-backup</span>', '<span class="value">world-save</span>')
+      .replace('<span class="key">sourceState</span>: <span class="value">running</span><br>    <span class="key">path</span>: <span class="value">GameSaves/World.sav.backup</span>', '<span class="key">sourceRules</span>:<br>  - <span class="key">state</span>: <span class="value">running</span><br>    <span class="key">path</span>: <span class="value">GameSaves/World.sav.backup</span><br>  - <span class="key">state</span>: <span class="value">stopped</span><br>    <span class="key">path</span>: <span class="value">GameSaves/World.sav</span>')
+      .replace('<button class="small-button">Restore</button>', '<button class="small-button">Download</button>');
+    document.querySelector('#mockup-content').innerHTML = renderedContent;
+  </script>
+</body>
+</html>

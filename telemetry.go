@@ -189,7 +189,7 @@ func (a *App) collectTelemetry(ctx context.Context) {
 					previous = history[historyLength-1].network
 				}
 				cache.mu.RUnlock()
-				result := observation{metrics: emptyMetrics(), status: StatusUnknown}
+				result := observation{metrics: emptyMetrics(), status: server.Status, image: server.CurrentImage}
 				if k, ok := a.orchestrator.(*kubeOrchestrator); ok && !a.demo {
 					result = k.collectObservation(ctx, server, previous)
 				}
@@ -370,6 +370,9 @@ func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 	history := append([]observation(nil), cache.history[server.ID]...)
 	cache.mu.RUnlock()
 	current := observation{metrics: emptyMetrics(), status: StatusUnknown}
+	if a.demo {
+		current.status, current.image, current.at = server.Status, server.CurrentImage, now
+	}
 	if len(history) > 0 {
 		current = history[len(history)-1]
 	}

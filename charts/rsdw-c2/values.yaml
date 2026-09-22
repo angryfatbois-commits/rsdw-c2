@@ -55,6 +55,16 @@ state:
     size: 1Gi
     storageClass: null
 
+backups:
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: null
+  path: /var/lib/rsdw-c2/backups
+  maxRepositoryBytes: 9663676416
+  maxItemBytes: 33554432
+  maxBundleBytes: 268435456
+
 rbac:
   create: true
 

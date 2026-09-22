@@ -128,8 +128,12 @@ func TestIntegrationAPIConfigurationAndNoReplay(t *testing.T) {
 	}
 	for _, kind := range []EventKind{BackupStarted, BackupCompleted, BackupFailed, "made_up"} {
 		input.Rules[kind] = true
-		if got := requestJSON(t, app, "PUT", "/api/integrations/"+saved.ID, integrationJSON(t, input)); got.Code != 400 {
-			t.Fatal("unavailable rule accepted", kind, got.Code)
+		want := 200
+		if kind == "made_up" {
+			want = 400
+		}
+		if got := requestJSON(t, app, "PUT", "/api/integrations/"+saved.ID, integrationJSON(t, input)); got.Code != want {
+			t.Fatal("incorrect backup rule availability", kind, got.Code)
 		}
 		delete(input.Rules, kind)
 	}
@@ -182,7 +186,7 @@ func TestIntegrationAPIConfigurationAndNoReplay(t *testing.T) {
 		t.Fatal("reenabling replayed history")
 	}
 	listed := requestJSON(t, app, "GET", "/api/integrations", "")
-	if !strings.Contains(listed.Body.String(), "rotated") || !strings.Contains(listed.Body.String(), "unavailable until a backup producer") {
+	if !strings.Contains(listed.Body.String(), "rotated") || !strings.Contains(listed.Body.String(), "C2 backup collection") {
 		t.Fatal(listed.Body.String())
 	}
 	reloaded, err := NewStore(app.store.path, false)

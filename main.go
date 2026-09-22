@@ -146,17 +146,22 @@ type Event struct {
 }
 
 type State struct {
-	Deletions       map[string]deletionRecord     `json:"deletions,omitempty"`
-	Integrations    map[string]DiscordIntegration `json:"integrations"`
-	Producers       map[string]AlertProducer      `json:"alertProducers"`
-	Deliveries      map[string]Delivery           `json:"deliveries"`
-	RebootSchedules map[string]rebootSchedule     `json:"rebootSchedules,omitempty"`
-	RebootHistory   []rebootExecution             `json:"rebootHistory,omitempty"`
-	DiscordRetryAt  time.Time                     `json:"discordRetryAt,omitempty"`
-	Servers         map[string]Server             `json:"servers"`
-	Events          []Event                       `json:"events"`
-	Users           map[string]User               `json:"users"`
-	PendingSeeds    map[string]PendingSeed        `json:"pendingSeeds,omitempty"`
+	Deletions         map[string]deletionRecord     `json:"deletions,omitempty"`
+	Integrations      map[string]DiscordIntegration `json:"integrations"`
+	Producers         map[string]AlertProducer      `json:"alertProducers"`
+	Deliveries        map[string]Delivery           `json:"deliveries"`
+	RebootSchedules   map[string]rebootSchedule     `json:"rebootSchedules,omitempty"`
+	RebootHistory     []rebootExecution             `json:"rebootHistory,omitempty"`
+	BackupDefinitions map[string]BackupDefinition   `json:"backupDefinitions,omitempty"`
+	BackupSchedules   map[string]BackupSchedule     `json:"backupSchedules,omitempty"`
+	BackupRuns        []BackupRun                   `json:"backupRuns,omitempty"`
+	BackupManifests   map[string]BackupManifest     `json:"backupManifests,omitempty"`
+	StorageBackends   map[string]StorageBackend     `json:"storageBackends,omitempty"`
+	DiscordRetryAt    time.Time                     `json:"discordRetryAt,omitempty"`
+	Servers           map[string]Server             `json:"servers"`
+	Events            []Event                       `json:"events"`
+	Users             map[string]User               `json:"users"`
+	PendingSeeds      map[string]PendingSeed        `json:"pendingSeeds,omitempty"`
 }
 
 type User struct {
@@ -240,6 +245,7 @@ func NewStore(path string, demo bool) (*Store, error) {
 	s := &Store{path: path, state: State{Servers: map[string]Server{}, Users: map[string]User{}}}
 	s.state.initIntegrations()
 	s.state.initReboots()
+	s.state.initBackups()
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			if err := json.Unmarshal(data, &s.state); err != nil {
@@ -253,8 +259,14 @@ func NewStore(path string, demo bool) (*Store, error) {
 			}
 			s.state.initIntegrations()
 			s.state.initReboots()
+			s.state.initBackups()
 			s.state.Events = pruneEvents(s.state.Events)
-			if err := s.Update(func(state *State) error { state.recoverAlerts(); state.recoverReboots(time.Now().UTC()); return nil }); err != nil {
+			if err := s.Update(func(state *State) error {
+				state.recoverAlerts()
+				state.recoverReboots(time.Now().UTC())
+				state.recoverBackupSchedules(time.Now().UTC())
+				return nil
+			}); err != nil {
 				return nil, err
 			}
 			return s, nil
@@ -296,6 +308,26 @@ func (s State) clone() State {
 		next.Deletions[id] = record
 	}
 	next.Servers, next.Users, next.PendingSeeds = maps.Clone(s.Servers), maps.Clone(s.Users), maps.Clone(s.PendingSeeds)
+	next.BackupDefinitions, next.BackupSchedules, next.BackupManifests, next.StorageBackends = maps.Clone(s.BackupDefinitions), maps.Clone(s.BackupSchedules), maps.Clone(s.BackupManifests), maps.Clone(s.StorageBackends)
+	next.BackupRuns = append([]BackupRun(nil), s.BackupRuns...)
+	for id, definition := range next.BackupDefinitions {
+		definition.Items = append([]BackupItemSpec(nil), definition.Items...)
+		for index := range definition.Items {
+			definition.Items[index].Sources = append([]BackupSourceRule(nil), definition.Items[index].Sources...)
+		}
+		next.BackupDefinitions[id] = definition
+	}
+	for id, schedule := range next.BackupSchedules {
+		schedule.NextRun = cloneTimePtr(schedule.NextRun)
+		schedule.LastRun = cloneTimePtr(schedule.LastRun)
+		schedule.IntervalAnchor = cloneTimePtr(schedule.IntervalAnchor)
+		schedule.DailyTimes = append([]string(nil), schedule.DailyTimes...)
+		next.BackupSchedules[id] = schedule
+	}
+	for id, manifest := range next.BackupManifests {
+		manifest.Items = append([]BackupManifestItem(nil), manifest.Items...)
+		next.BackupManifests[id] = manifest
+	}
 	next.Events = append([]Event(nil), s.Events...)
 	for index := range next.Events {
 		next.Events[index] = next.Events[index].clone()
@@ -445,7 +477,29 @@ type CommandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
 }
 
+type streamCommandRunner interface {
+	RunStream(context.Context, io.Writer, string, ...string) error
+}
+
 type shellRunner struct{}
+
+func (shellRunner) RunStream(ctx context.Context, destination io.Writer, name string, args ...string) error {
+	runContext, cancel := context.WithTimeout(ctx, commandWaitDelay*600)
+	defer cancel()
+	command := exec.CommandContext(runContext, name, args...)
+	command.Stdout = destination
+	var stderr boundedOutput
+	stderr.limit = maxCommandStderrBytes
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		diagnostic := commandDiagnostic(nil, stderr.data)
+		if diagnostic == "" {
+			return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+		}
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, diagnostic)
+	}
+	return nil
+}
 
 const (
 	maxCommandStdoutBytes  = 8 << 20
@@ -624,6 +678,14 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 		// The game chart hardcodes Deployment replicas: 1, so Helm would un-park.
 		return errServerStopped
 	}
+	return k.deploy(ctx, server, false)
+}
+
+func (k *kubeOrchestrator) DeployStopped(ctx context.Context, server Server) error {
+	return k.deploy(ctx, server, true)
+}
+
+func (k *kubeOrchestrator) deploy(ctx context.Context, server Server, stopped bool) error {
 	if server.GamePort == 0 {
 		server.GamePort = 7777
 	}
@@ -716,7 +778,57 @@ func (k *kubeOrchestrator) Deploy(ctx context.Context, server Server) error {
 			args = append(args, "--set-string", fmt.Sprintf("server.extraEnv[%d].name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.name=%s,server.extraEnv[%d].valueFrom.secretKeyRef.key=%s", i, entry.name, i, server.PasswordSecret, i, entry.key))
 		}
 	}
-	if _, err := k.runner.Run(ctx, k.helm, args...); err != nil {
+	runName := k.helm
+	if stopped {
+		// The upstream chart fixes replicas at one. Render it stopped before Kubernetes sees it.
+		renderer, err := os.CreateTemp("", "rsdw-stopped-renderer-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(renderer.Name())
+		executable, err := os.Executable()
+		if err != nil {
+			renderer.Close()
+			return err
+		}
+		quotedExecutable := "'" + strings.ReplaceAll(executable, "'", "'\"'\"'") + "'"
+		_, writeErr := renderer.WriteString("#!/bin/sh\nset -eu\nexec " + quotedExecutable + " --render-stopped-workloads\n")
+		closeErr := renderer.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if err := os.Chmod(renderer.Name(), 0o700); err != nil {
+			return err
+		}
+		version, err := k.runner.Run(ctx, k.helm, "version", "--template", "{{.Version}}")
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(strings.TrimSpace(string(version)), "v4.") {
+			pluginRoot, err := os.MkdirTemp("", "rsdw-helm-plugins-*")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(pluginRoot)
+			plugin := filepath.Join(pluginRoot, "rsdw-stopped")
+			if err := os.Mkdir(plugin, 0o700); err != nil {
+				return err
+			}
+			manifest := "apiVersion: v1\ntype: postrenderer/v1\nname: rsdw-stopped\nversion: 0.1.0\nruntime: subprocess\nruntimeConfig:\n  platformCommand:\n    - command: " + renderer.Name() + "\n"
+			if err := os.WriteFile(filepath.Join(plugin, "plugin.yaml"), []byte(manifest), 0o600); err != nil {
+				return err
+			}
+			args = append(args, "--post-renderer", "rsdw-stopped")
+			args = append([]string{"HELM_PLUGINS=" + pluginRoot, k.helm}, args...)
+			runName = "env"
+		} else {
+			args = append(args, "--post-renderer", renderer.Name())
+		}
+	}
+	if _, err := k.runner.Run(ctx, runName, args...); err != nil {
 		return fmt.Errorf("helm deploy: %w", err)
 	}
 	if server.PasswordUpdate != nil {
@@ -902,6 +1014,7 @@ type App struct {
 	telemetryOnce  sync.Once
 	telemetry      *telemetryStore
 	clock          func() time.Time
+	backups       *backupController
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -924,6 +1037,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) api(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/backups" || strings.HasPrefix(r.URL.Path, "/api/backups/") {
+		a.handleBackups(w, r)
+		return
+	}
 	if r.URL.Path == "/api/reboots" || strings.HasPrefix(r.URL.Path, "/api/reboots/") {
 		a.handleReboots(w, r)
 		return
@@ -1199,7 +1316,13 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not persist the server; any seed storage remains owned for recovery")
 		return
 	}
-	a.markTelemetryPending(server)
+	// Demo orchestration completes synchronously, so the persisted online state
+	// is already authoritative. A pending telemetry sample would mask that
+	// state as starting until the next collector pass and make demo-only flows
+	// such as backup source selection appear unavailable.
+	if !a.demo {
+		a.markTelemetryPending(server)
+	}
 	writeJSON(w, http.StatusCreated, server)
 }
 
@@ -1250,6 +1373,10 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, http.StatusOK, telemetry)
 		}
+		return
+	}
+	if len(parts) == 2 && parts[1] == "restore" && r.Method == http.MethodPost {
+		a.handleRestore(w, r, serverID)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "actions" && r.Method == http.MethodPost {
@@ -1577,10 +1704,21 @@ func main() {
 	if demo {
 		orchestrator = demoOrchestrator{}
 	}
-	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure}
+	backups, err := newBackupController(store, demo)
+	if err != nil {
+		log.Fatal(err)
+	}
+	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure, backups: backups}
+	if err := app.updateBackupBackend(); err != nil {
+		log.Fatal(err)
+	}
+	if err := app.recoverBackupRepository(context.Background()); err != nil {
+		log.Printf("backup repository recovery: %v", err)
+	}
 	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
 	go app.runRebootScheduler(context.Background())
+	go app.runBackupScheduler(context.Background())
 	go app.runDeletionReconciler(context.Background())
 	go app.runDeliveries(context.Background())
 	addr := envOr("RSDW_LISTEN_ADDR", ":8080")

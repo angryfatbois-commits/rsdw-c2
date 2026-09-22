@@ -83,6 +83,16 @@ spec:
               value: {{ .Values.memoryPressure.thresholdPercent | quote }}
             - name: RSDW_MEMORY_PRESSURE_DURATION
               value: {{ .Values.memoryPressure.duration | quote }}
+            - name: RSDW_BACKUP_PATH
+              value: {{ .Values.backups.path | quote }}
+            - name: RSDW_BACKUP_MAX_REPOSITORY_BYTES
+              value: {{ .Values.backups.maxRepositoryBytes | int64 | quote }}
+            - name: RSDW_BACKUP_MAX_ITEM_BYTES
+              value: {{ .Values.backups.maxItemBytes | int64 | quote }}
+            - name: RSDW_BACKUP_MAX_BUNDLE_BYTES
+              value: {{ .Values.backups.maxBundleBytes | int64 | quote }}
+            - name: RSDW_BACKUPS_ENABLED
+              value: {{ and .Values.state.persistence.enabled .Values.backups.persistence.enabled | quote }}
             - name: RSDW_AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
             {{- if eq .Values.auth.mode "token" }}
@@ -113,6 +123,8 @@ spec:
           volumeMounts:
             - name: state
               mountPath: /var/lib/rsdw-c2
+            - name: backups
+              mountPath: {{ .Values.backups.path | quote }}
           readinessProbe:
             httpGet:
               path: /api/auth
@@ -128,6 +140,13 @@ spec:
           {{- if .Values.state.persistence.enabled }}
           persistentVolumeClaim:
             claimName: {{ include "rsdwc2.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: backups
+          {{- if and .Values.state.persistence.enabled .Values.backups.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "rsdwc2.fullname" . }}-backups
           {{- else }}
           emptyDir: {}
           {{- end }}

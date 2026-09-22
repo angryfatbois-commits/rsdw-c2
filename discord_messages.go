@@ -56,6 +56,9 @@ var discordMessageSpecs = []discordMessageSpec{
 	{ServerRecovered, "Server recovered", "It is back. Nobody knows why, and nobody should trust it.", 0x22C55E, true},
 	{ServerStopped, "Server stopped", "The operator parked this world. The volume is still here. The players are not.", 0xF59E0B, true},
 	{ServerStarted, "Server started", "Same world, same id, same disk. Try not to immediately fill it with tragedy.", 0x22C55E, true},
+	{BackupStarted, "Backup started", "C2 is collecting the configured backup profile.", 0x3B82F6, true},
+	{BackupCompleted, "Backup completed", "The backup bundle is stored and ready to download.", 0x22C55E, true},
+	{BackupFailed, "Backup failed", "No completed backup was published. Review the failure in C2.", 0xEF4444, true},
 	{IntegrationTest, "Discord integration test", "The bot successfully vomited into Discord and called it a test. The webhook works; civilization remains a mistake.", 0x8B5CF6, false},
 }
 

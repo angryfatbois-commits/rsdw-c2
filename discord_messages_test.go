@@ -28,6 +28,9 @@ func TestDiscordMessagePayloads(t *testing.T) {
 		{ServerRecovered, "Server recovered", "It is back. Nobody knows why, and nobody should trust it.", 0x22C55E, []discordEmbedField{{"Server", "Example server"}}},
 		{ServerStopped, "Server stopped", "The operator parked this world. The volume is still here. The players are not.", 0xF59E0B, []discordEmbedField{{"Server", "Example server"}}},
 		{ServerStarted, "Server started", "Same world, same id, same disk. Try not to immediately fill it with tragedy.", 0x22C55E, []discordEmbedField{{"Server", "Example server"}}},
+		{BackupStarted, "Backup started", "C2 is collecting the configured backup profile.", 0x3B82F6, []discordEmbedField{{"Server", "Example server"}}},
+		{BackupCompleted, "Backup completed", "The backup bundle is stored and ready to download.", 0x22C55E, []discordEmbedField{{"Server", "Example server"}}},
+		{BackupFailed, "Backup failed", "No completed backup was published. Review the failure in C2.", 0xEF4444, []discordEmbedField{{"Server", "Example server"}}},
 		{IntegrationTest, "Discord integration test", "The bot successfully vomited into Discord and called it a test. The webhook works; civilization remains a mistake.", 0x8B5CF6, nil},
 	}
 	covered := map[EventKind]bool{}
@@ -77,7 +80,7 @@ func TestDiscordMessageRejectsUnsupportedKinds(t *testing.T) {
 		t.Fatal("unsupported message contacted Discord")
 		return nil, nil
 	})
-	for _, kind := range []EventKind{BackupStarted, BackupCompleted, BackupFailed, "unknown-private-kind", ""} {
+	for _, kind := range []EventKind{"unknown-private-kind", ""} {
 		delivery := Delivery{Event: Event{Kind: kind, Message: "private message", Details: "private details"}}
 		if _, err := renderDiscordEmbed(delivery.Event); err != errUnsupportedDiscordMessage {
 			t.Fatalf("render error = %v", err)
@@ -118,7 +121,7 @@ func TestDiscordDeliveryViewsUseRenderedEmbed(t *testing.T) {
 	if views[0].Embed == nil || views[0].Embed.Title != "Restart completed" || views[0].Embed.Description != "The corpse has staggered back online. It did the bare minimum and expects a fucking parade." {
 		t.Fatalf("embed = %+v", views[0].Embed)
 	}
-	unsupported := discordDeliveryViews([]Delivery{{Event: Event{Kind: BackupStarted}}})
+	unsupported := discordDeliveryViews([]Delivery{{Event: Event{Kind: "unsupported"}}})
 	if len(unsupported) != 1 || unsupported[0].Embed != nil {
 		t.Fatalf("unsupported view = %+v", unsupported)
 	}

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "replicaCount", "memoryPressure", "service", "ingress", "cluster", "auth", "state", "rbac", "resources", "podSecurityContext", "containerSecurityContext", "nodeSelector", "tolerations", "affinity"],
+  "required": ["image", "replicaCount", "memoryPressure", "service", "ingress", "cluster", "auth", "state", "backups", "rbac", "resources", "podSecurityContext", "containerSecurityContext", "nodeSelector", "tolerations", "affinity"],
   "properties": {
     "image": {
       "type": "object",
@@ -132,6 +132,23 @@
       "additionalProperties": false,
       "required": ["persistence"],
       "properties": {
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "size"],
+          "properties": {"enabled": {"type": "boolean"}, "size": {"type": "string", "minLength": 1}, "storageClass": {"type": ["string", "null"]}}
+        }
+      }
+    },
+    "backups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["persistence", "path", "maxRepositoryBytes", "maxItemBytes", "maxBundleBytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "maxRepositoryBytes": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "maxBundleBytes": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
         "persistence": {
           "type": "object",
           "additionalProperties": false,

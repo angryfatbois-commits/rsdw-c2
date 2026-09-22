@@ -23,6 +23,7 @@ This is a personal project, not a hosted service. Expect opinionated defaults an
 - Creates Dragonwilds servers from the `rsdragonwilds-helm` chart.
 - Restarts servers and updates their container image.
 - Schedules per-server reboots with cron, elapsed intervals, daily local times, and IANA timezones. See [scheduled reboots](docs/reboots.md) for the single-replica and persistent-state requirements.
+- Creates server-aware backup bundles from verified `.sav.backup` or stopped `.sav` sources. See [backups](docs/backups.md) for storage, profiles, schedules, and restore behavior.
 - Deletes servers while keeping their world by default. See [server deletion](docs/server-deletion.md) for the details.
 - Imports optional `.sav` files and saves named player IDs.
 - Sends Discord alerts and supports OIDC sign in with admin and viewer roles.
@@ -73,6 +74,7 @@ Scheduled reboots require the chart's default single replica and persistent stat
 - [Import custom saves](docs/custom-saves.md)
 - [Delete servers safely](docs/server-deletion.md)
 - [Schedule server reboots](docs/reboots.md)
+- [Back up and restore worlds](docs/backups.md)
 - [Run a local kind cluster](docs/kind.md)
 - [Read the architecture notes](ARCHITECTURE.md)
 

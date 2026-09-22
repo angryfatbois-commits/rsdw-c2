@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/url"
@@ -326,8 +327,25 @@ func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTa
 func (k *kubeOrchestrator) podExec(ctx context.Context, target podTarget, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, telemetryCommandTimeout)
 	defer cancel()
-	base := []string{"-n", target.pod.Metadata.Namespace, "exec", "pod/" + target.pod.Metadata.Name, "-c", "server", "--"}
+	container := target.container.Name
+	if container == "" {
+		container = "server"
+	}
+	base := []string{"-n", target.pod.Metadata.Namespace, "exec", "pod/" + target.pod.Metadata.Name, "-c", container, "--"}
 	return k.runner.Run(ctx, k.kubectl, append(base, args...)...)
+}
+
+func (k *kubeOrchestrator) podExecStream(ctx context.Context, target podTarget, destination io.Writer, args ...string) error {
+	runner, ok := k.runner.(streamCommandRunner)
+	if !ok {
+		return errors.New("Kubernetes backup streaming is unavailable")
+	}
+	container := target.container.Name
+	if container == "" {
+		container = "server"
+	}
+	base := []string{"-n", target.pod.Metadata.Namespace, "exec", "pod/" + target.pod.Metadata.Name, "-c", container, "--"}
+	return runner.RunStream(ctx, destination, k.kubectl, append(base, args...)...)
 }
 
 func (k *kubeOrchestrator) podGameAPI(ctx context.Context, target podTarget, endpoint string) ([]byte, error) {

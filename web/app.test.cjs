@@ -173,14 +173,14 @@ context.document = {querySelector(selector) {
   assert.equal(selector, '[data-testid="server-owner"]');
   return ownerField;
 }};
-context.ui.handleChange({target:{id:'saved-user', value:'stable-one'}});
+context.ui.handleChange({target:{matches:()=>false,id:'saved-user', value:'stable-one'}});
 assert.equal(ownerField.value, '0123456789abcdef0123456789abcdef');
-context.ui.handleChange({target:{id:'saved-user', value:'stable-two'}});
+context.ui.handleChange({target:{matches:()=>false,id:'saved-user', value:'stable-two'}});
 assert.equal(ownerField.value, '11111111111111111111111111111111');
 ownerField.value = 'abcdef0123456789abcdef0123456789';
-context.ui.handleChange({target:{id:'saved-user', value:''}});
+context.ui.handleChange({target:{matches:()=>false,id:'saved-user', value:''}});
 assert.equal(ownerField.value, 'abcdef0123456789abcdef0123456789');
-context.ui.handleChange({target:{id:'saved-user', value:'deleted-id'}});
+context.ui.handleChange({target:{matches:()=>false,id:'saved-user', value:'deleted-id'}});
 assert.equal(ownerField.value, 'abcdef0123456789abcdef0123456789');
 assert.equal(state.users[0].playerId, '0123456789abcdef0123456789abcdef');
 state.servers = savedServers;
@@ -299,7 +299,7 @@ for (const action of ['add-user', 'edit-user', 'delete-user', 'edit-settings']) 
   context.ui.submitModal({preventDefault(){}});
 }
 state.modalAction = '';
-context.ui.handleChange({target:{id:'saved-user', value:'stable-one'}});
+context.ui.handleChange({target:{matches:()=>false,id:'saved-user', value:'stable-one'}});
 assert.equal(ownerField.value, 'abcdef0123456789abcdef0123456789');
 state.events = [{message:'SECRET EVENT', details:'SECRET DETAILS'}];
 state.logs = 'SECRET LOG';
@@ -782,7 +782,7 @@ test('switching servers clears rendered names immediately and aborts before auth
   const first = f.ui.refresh();
   await f.discover();
   const oldRequest = f.requests.at(-1);
-  f.ui.handleChange({target:{id:'server-filter',value:'b'}});
+  f.ui.handleChange({target:{matches:()=>false,id:'server-filter',value:'b'}});
   assert.equal(oldRequest.options.signal.aborted,true);
   assert.equal(f.ui.state.telemetry,null);
   assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
@@ -830,10 +830,10 @@ test('A to B to A rejects the first A generation and late errors', async () => {
   const oldA = f.ui.refresh();
   await f.discover();
   const firstRequest = f.requests.at(-1);
-  f.ui.handleChange({target:{id:'server-filter',value:'b'}});
+  f.ui.handleChange({target:{matches:()=>false,id:'server-filter',value:'b'}});
   await f.discover();
   const bRequest = f.requests.at(-1);
-  f.ui.handleChange({target:{id:'server-filter',value:'a'}});
+  f.ui.handleChange({target:{matches:()=>false,id:'server-filter',value:'a'}});
   await f.discover();
   const latestRequest = f.requests.at(-1);
   const response = (body) => ({status:200,ok:true,headers:{get:()=>null},text:async()=>JSON.stringify(body)});
@@ -857,7 +857,7 @@ test('range and page changes, response identity, failures, and logout cannot exp
     const pending = f.ui.refresh();
     await f.discover();
     if (change === 'range') {
-      f.ui.handleChange({target:{id:'telemetry-range',value:'5m'}});
+      f.ui.handleChange({target:{matches:()=>false,id:'telemetry-range',value:'5m'}});
       assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
     } else if (change === 'page') {
       f.ui.navigate();
