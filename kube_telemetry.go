@@ -172,7 +172,7 @@ func (k *kubeOrchestrator) resolveEndpoint(ctx context.Context, server Server) s
 			break
 		}
 	}
-	if host == "" && service.Spec.Type == "NodePort" {
+	if host == "" && (service.Spec.Type == "NodePort" || service.Spec.Type == "LoadBalancer") {
 		nodePort := 0
 		for _, candidate := range service.Spec.Ports {
 			if candidate.Name == "game" {
@@ -189,16 +189,26 @@ func (k *kubeOrchestrator) resolveEndpoint(ctx context.Context, server Server) s
 		if err := k.kubeJSON(ctx, &nodes, "get", "nodes", "-o", "json"); err != nil || len(nodes.Items) == 0 {
 			return ""
 		}
-		for _, address := range nodes.Items[0].Status.Addresses {
-			if address.Type == "ExternalIP" {
-				host = address.Address
+		for _, node := range nodes.Items {
+			for _, address := range node.Status.Addresses {
+				if address.Type == "ExternalIP" && address.Address != "" {
+					host = address.Address
+					break
+				}
+			}
+			if host != "" {
 				break
 			}
 		}
 		if host == "" {
-			for _, address := range nodes.Items[0].Status.Addresses {
-				if address.Type == "InternalIP" {
-					host = address.Address
+			for _, node := range nodes.Items {
+				for _, address := range node.Status.Addresses {
+					if address.Type == "InternalIP" && address.Address != "" {
+						host = address.Address
+						break
+					}
+				}
+				if host != "" {
 					break
 				}
 			}

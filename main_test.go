@@ -819,7 +819,9 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) ([
 }
 
 type metricsRunner struct {
-	calls []string
+	calls       []string
+	serviceJSON string
+	nodesJSON   string
 }
 
 func (r *metricsRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -847,7 +849,15 @@ func (r *metricsRunner) Run(_ context.Context, name string, args ...string) ([]b
 		}
 		return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":"world-pod","namespace":%q,"uid":"pod","ownerReferences":[{"kind":"ReplicaSet","uid":"rs","controller":true}]},"spec":{"containers":[{"name":"server","image":"example/server:1.2.3"}]},"status":{"phase":"Running","containerStatuses":[{"name":"server","containerID":"container","ready":true,"state":{"running":{"startedAt":"2026-01-01T00:00:00Z"}}}]}}]}`, namespace)), nil
 	case strings.Contains(call, "get service"):
+		if r.serviceJSON != "" {
+			return []byte(r.serviceJSON), nil
+		}
 		return nil, errors.New("service lookup unavailable in this fixture")
+	case strings.Contains(call, "get nodes"):
+		if r.nodesJSON != "" {
+			return []byte(r.nodesJSON), nil
+		}
+		return nil, errors.New("node lookup unavailable in this fixture")
 	case strings.Contains(call, "api/health"):
 		return []byte(`{"engineReady":true,"uptimeSeconds":123.5}`), nil
 	case strings.Contains(call, "api/players"):
@@ -877,6 +887,63 @@ func TestKubeOrchestratorRefreshOnlyDiscoversImage(t *testing.T) {
 		if reading.Value != nil {
 			t.Fatalf("image discovery returned metric %s: %+v", key, reading)
 		}
+	}
+}
+
+func TestKubeOrchestratorRefreshResolvesGameEndpoint(t *testing.T) {
+	nodes := `{"items":[{"status":{"addresses":[{"type":"InternalIP","address":"10.0.0.8"},{"type":"ExternalIP","address":"203.0.113.42"}]}}]}`
+	for _, tc := range []struct {
+		name        string
+		serviceJSON string
+		nodesJSON   string
+		want        string
+	}{
+		{
+			name:        "load balancer ingress IP",
+			serviceJSON: `{"spec":{"type":"LoadBalancer","ports":[{"name":"game","port":7777,"nodePort":30100}]},"status":{"loadBalancer":{"ingress":[{"ip":"203.0.113.42"}]}}}`,
+			want:        "203.0.113.42:7777",
+		},
+		{
+			name:        "load balancer ingress hostname",
+			serviceJSON: `{"spec":{"type":"LoadBalancer","ports":[{"name":"game","port":7777,"nodePort":30100}]},"status":{"loadBalancer":{"ingress":[{"hostname":"game.example.test"}]}}}`,
+			want:        "game.example.test:7777",
+		},
+		{
+			name:        "load balancer without ingress uses node port",
+			serviceJSON: `{"spec":{"type":"LoadBalancer","ports":[{"name":"game","port":7777,"nodePort":30100}]},"status":{"loadBalancer":{"ingress":[]}}}`,
+			nodesJSON:   nodes,
+			want:        "203.0.113.42:30100",
+		},
+		{
+			name:        "node port prefers an external address from any node",
+			serviceJSON: `{"spec":{"type":"NodePort","ports":[{"name":"game","port":7777,"nodePort":30100}]}}`,
+			nodesJSON:   `{"items":[{"status":{"addresses":[{"type":"InternalIP","address":"10.0.0.8"}]}},{"status":{"addresses":[{"type":"ExternalIP","address":"203.0.113.99"}]}}]}`,
+			want:        "203.0.113.99:30100",
+		},
+		{
+			name:        "node port falls back to an internal IPv6 address",
+			serviceJSON: `{"spec":{"type":"NodePort","ports":[{"name":"game","port":7777,"nodePort":30100}]}}`,
+			nodesJSON:   `{"items":[{"status":{"addresses":[{"type":"InternalIP","address":"2001:db8::8"}]}}]}`,
+			want:        "[2001:db8::8]:30100",
+		},
+		{
+			name:        "cluster IP service has no player endpoint",
+			serviceJSON: `{"spec":{"type":"ClusterIP","ports":[{"name":"game","port":7777}]}}`,
+			want:        "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &metricsRunner{serviceJSON: tc.serviceJSON, nodesJSON: tc.nodesJSON}
+			orchestrator := &kubeOrchestrator{runner: runner, kubectl: "kubectl", gameAPIPort: "8080"}
+			server := Server{Release: "night-shift", Namespace: "dragonwilds", DesiredImage: "example/server:1.2.3"}
+			refreshed, err := orchestrator.Refresh(context.Background(), server)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if refreshed.Endpoint != tc.want {
+				t.Fatalf("endpoint = %q, want %q", refreshed.Endpoint, tc.want)
+			}
+		})
 	}
 }
 
