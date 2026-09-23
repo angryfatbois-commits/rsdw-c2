@@ -390,7 +390,7 @@ func (k *kubeOrchestrator) captureBackupItem(ctx context.Context, target podTarg
 	if kind == BackupItemDirectory {
 		exclude := ""
 		if state == BackupServerRunning {
-			exclude = " --ignore-case --exclude='*.sav'"
+			exclude = " --exclude='*.[sS][aA][v]'"
 		}
 		if err := k.podExecStream(ctx, target, writer, "sh", "-ec", guard+"exec tar -cf - -C "+shellQuote(backupDataRoot)+exclude+" -- "+shellQuote(manifestPath)); err != nil {
 			cleanupFile()

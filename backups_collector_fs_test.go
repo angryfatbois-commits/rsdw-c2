@@ -15,11 +15,12 @@ import (
 )
 
 type backupFilesystemRunner struct {
-	root      string
-	reads     int
-	streams   int
-	afterRead func(int)
-	transform func([]byte) []byte
+	root           string
+	reads          int
+	streams        int
+	streamCommands [][]string
+	afterRead      func(int)
+	transform      func([]byte) []byte
 }
 
 func (r *backupFilesystemRunner) command(ctx context.Context, args []string) *exec.Cmd {
@@ -51,6 +52,7 @@ func (r *backupFilesystemRunner) Run(ctx context.Context, _ string, args ...stri
 
 func (r *backupFilesystemRunner) RunStream(ctx context.Context, destination io.Writer, _ string, args ...string) error {
 	r.streams++
+	r.streamCommands = append(r.streamCommands, append([]string(nil), args...))
 	output, err := r.command(ctx, args).Output()
 	if err != nil {
 		return err
@@ -60,6 +62,22 @@ func (r *backupFilesystemRunner) RunStream(ctx context.Context, destination io.W
 	}
 	_, err = destination.Write(output)
 	return err
+}
+
+func TestRunningDirectoryArchiveUsesPortableSaveExclusion(t *testing.T) {
+	k, r := backupFilesystem(t)
+	writeBackupFixture(t, r.root, "saves/World.sav.backup", "world")
+	_, _, err := k.captureBackupItem(context.Background(), backupKubeTarget(), BackupItemSpec{Name: "world", Kind: BackupItemDirectory}, BackupSourceRule{Path: "saves"}, BackupServerRunning, t.TempDir(), 102400)
+	if err != nil {
+		t.Fatalf("capture directory: %v", err)
+	}
+	if len(r.streamCommands) != 1 {
+		t.Fatalf("stream commands = %d, want 1", len(r.streamCommands))
+	}
+	script := strings.Join(r.streamCommands[0], " ")
+	if strings.Contains(script, "--ignore-case") || !strings.Contains(script, "--exclude='*.[sS][aA][v]'") {
+		t.Fatalf("running directory archive does not use a portable case-insensitive .sav exclusion: %s", script)
+	}
 }
 
 func backupFilesystem(t *testing.T) (*kubeOrchestrator, *backupFilesystemRunner) {

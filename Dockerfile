@@ -4,6 +4,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 COPY *.go ./
 COPY web ./web
+COPY charts/rsdw-c2/values.yaml ./charts/rsdw-c2/values.yaml
 COPY verification/tick-live-observations.json ./verification/tick-live-observations.json
 RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/rsdw-c2 .
 
