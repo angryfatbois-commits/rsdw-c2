@@ -5,7 +5,10 @@ work
 todo.md
 ARCHITECTURE.md
 scripts
-charts
+charts/*
+!charts/rsdw-c2/
+charts/rsdw-c2/*
+!charts/rsdw-c2/values.yaml
 .tmp
 outputs
 node_modules
