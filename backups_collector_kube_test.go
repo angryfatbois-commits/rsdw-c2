@@ -61,6 +61,7 @@ func TestBackupInspectorDoesNotRequireDeployment(t *testing.T) {
 			if err := json.Unmarshal([]byte(args[len(args)-1]), &override); err != nil {
 				t.Fatal(err)
 			}
+			assertBackupInspectorIsReadOnlyAndRestricted(t, override)
 			if !strings.Contains(call, "sleep 600") || !strings.Contains(call, backupInspectorLabel) || !strings.Contains(call, "new-world-pvc") {
 				t.Fatalf("wrong inspector command %s", call)
 			}
@@ -85,6 +86,66 @@ func TestBackupInspectorDoesNotRequireDeployment(t *testing.T) {
 	cleanup()
 	if !deleted {
 		t.Fatal("cleanup did not delete inspector")
+	}
+}
+
+func assertBackupInspectorIsReadOnlyAndRestricted(t *testing.T, override map[string]any) {
+	t.Helper()
+	spec, ok := override["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("inspector spec = %#v", override["spec"])
+	}
+	if spec["automountServiceAccountToken"] != false {
+		t.Fatal("inspector must not mount a service account token")
+	}
+	podSecurity, ok := spec["securityContext"].(map[string]any)
+	if !ok || podSecurity["runAsNonRoot"] != true || podSecurity["runAsUser"] != float64(1000) || podSecurity["runAsGroup"] != float64(1000) {
+		t.Fatalf("inspector pod security context = %#v", spec["securityContext"])
+	}
+	seccomp, ok := podSecurity["seccompProfile"].(map[string]any)
+	if !ok || seccomp["type"] != "RuntimeDefault" {
+		t.Fatalf("inspector seccomp profile = %#v", podSecurity["seccompProfile"])
+	}
+	containers, ok := spec["containers"].([]any)
+	if !ok || len(containers) != 1 {
+		t.Fatalf("inspector containers = %#v", spec["containers"])
+	}
+	container, ok := containers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("inspector container = %#v", containers[0])
+	}
+	containerSecurity, ok := container["securityContext"].(map[string]any)
+	if !ok || containerSecurity["allowPrivilegeEscalation"] != false || containerSecurity["readOnlyRootFilesystem"] != true {
+		t.Fatalf("inspector container security context = %#v", container["securityContext"])
+	}
+	capabilities, ok := containerSecurity["capabilities"].(map[string]any)
+	dropped, okDrop := capabilities["drop"].([]any)
+	if !ok || !okDrop || len(dropped) != 1 || dropped[0] != "ALL" {
+		t.Fatalf("inspector capabilities = %#v", containerSecurity["capabilities"])
+	}
+	resources, ok := container["resources"].(map[string]any)
+	if !ok || resources["requests"] == nil || resources["limits"] == nil {
+		t.Fatalf("inspector resource bounds = %#v", container["resources"])
+	}
+	mounts, ok := container["volumeMounts"].([]any)
+	if !ok || len(mounts) != 1 {
+		t.Fatalf("inspector volume mounts = %#v", container["volumeMounts"])
+	}
+	volumeMount, ok := mounts[0].(map[string]any)
+	if !ok || volumeMount["readOnly"] != true {
+		t.Fatalf("inspector volume mount = %#v", mounts[0])
+	}
+	volumes, ok := spec["volumes"].([]any)
+	if !ok || len(volumes) != 1 {
+		t.Fatalf("inspector volumes = %#v", spec["volumes"])
+	}
+	volume, ok := volumes[0].(map[string]any)
+	if !ok {
+		t.Fatalf("inspector volume = %#v", volumes[0])
+	}
+	claim, ok := volume["persistentVolumeClaim"].(map[string]any)
+	if !ok || claim["readOnly"] != true {
+		t.Fatalf("inspector PVC = %#v", volume["persistentVolumeClaim"])
 	}
 }
 

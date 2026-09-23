@@ -186,11 +186,23 @@ func (k *kubeOrchestrator) backupInspector(ctx context.Context, server Server, c
 		"activeDeadlineSeconds":         600,
 		"terminationGracePeriodSeconds": 1,
 		"restartPolicy":                 "Never",
+		"securityContext": map[string]any{
+			"runAsUser": 1000, "runAsGroup": 1000, "runAsNonRoot": true, "fsGroup": 1000,
+			"seccompProfile": map[string]string{"type": "RuntimeDefault"},
+		},
 		"containers": []any{map[string]any{
 			"name": "backup", "image": image, "command": []string{"sh", "-ec", "sleep 600"},
-			"volumeMounts": []any{map[string]any{"name": "data", "mountPath": backupDataRoot}},
+			"securityContext": map[string]any{
+				"allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true,
+				"capabilities": map[string]any{"drop": []string{"ALL"}},
+			},
+			"resources": map[string]any{
+				"requests": map[string]string{"cpu": "10m", "memory": "8Mi"},
+				"limits":   map[string]string{"cpu": "100m", "memory": "64Mi"},
+			},
+			"volumeMounts": []any{map[string]any{"name": "data", "mountPath": backupDataRoot, "readOnly": true}},
 		}},
-		"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": claim}}},
+		"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": claim, "readOnly": true}}},
 	}}
 	overrideJSON, err := json.Marshal(overrides)
 	if err != nil {
