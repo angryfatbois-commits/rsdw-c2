@@ -227,7 +227,7 @@ td:last-child.actions { text-align: right; }
 .status:before { content: ''; height: 12px; width: 12px; display: inline-block; border-radius: 50%; background: currentColor; }
 .status.online,.status.success,.status.healthy { color: var(--color-foreground); }
 .status.online:before,.status.success:before,.status.healthy:before { background: var(--success); }
-.status.attention,.status.starting,.status.warning { color: var(--warning); }
+.status.attention,.status.checking,.status.starting,.status.warning { color: var(--warning); }
 .status.deleting { color: var(--link); }
 .status.deleting:before { background: var(--link); }
 .status.stale { color: var(--warning); }

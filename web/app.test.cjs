@@ -588,7 +588,7 @@ function refreshFixture(admin = false, extraCapabilities = {}) {
     fetch:(path,options)=>new Promise((resolve,reject)=>requests.push({path,options,resolve,reject})),
   });
   sandbox.history = {replaceState(_state, _title, hash){sandbox.location.hash = hash;}};
-  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, dashboardModel, selectTelemetry, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
   const ui = sandbox.ui;
   const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin,...extraCapabilities}};
   ui.applyAuth(auth);
@@ -870,10 +870,60 @@ test('range and page changes, response identity, failures, and logout cannot exp
     }
     f.reply('/api/servers/a/telemetry?range=60s', change === 'failure' ? {error:'Collection unavailable'} : rosterResponse(change === 'response identity' ? 'b' : 'a'), change === 'failure' ? 500 : 200);
     await pending;
-    assert.equal(f.ui.state.telemetry,null,change);
+    if (change === 'failure') {
+      assert.equal(f.ui.state.telemetry.server.id,'a',change);
+      assert.equal(f.ui.state.telemetry.metrics.players.value,1,change);
+      assert.equal(f.ui.state.telemetry.playerRoster,null,change);
+    } else {
+      assert.equal(f.ui.state.telemetry,null,change);
+    }
     assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage|<dt>Name<\/dt>/,change);
     if (change === 'response identity' || change === 'failure') assert.equal(f.element('#error-banner').hidden,false);
   }
+});
+
+test('telemetry cache restores the selected server and range without leaking another server', async () => {
+  const f = refreshFixture();
+  const pending = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  await pending;
+
+  f.ui.state.range = '5m';
+  f.ui.selectTelemetry('a');
+  assert.equal(f.ui.state.telemetry,null);
+  f.ui.state.range = '60s';
+  f.ui.state.serverId = 'b';
+  f.ui.selectTelemetry('b');
+  assert.equal(f.ui.state.telemetry,null);
+  f.ui.state.serverId = 'a';
+  f.ui.selectTelemetry('a');
+  assert.equal(f.ui.state.telemetry.server.id,'a');
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Alice/);
+});
+
+test('dashboard distinguishes the first observation from a failed status check', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  const noObservation = () => ({status:'unavailable',reason:'No observation collected'});
+  f.ui.state.servers = [{
+    id:'a', status:'unknown', maxPlayers:4, metrics:{
+      players:noObservation(), tickRate:noObservation(), memoryUsedBytes:noObservation(), memoryLimitBytes:noObservation(), cpuPercent:noObservation(),
+    },
+  }];
+  let row = f.ui.dashboardModel().rows[0];
+  assert.equal(row.status,'checking');
+  assert.equal(row.statusLabel,'Checking');
+  assert.equal(row.endpoint,'Endpoint pending');
+  assert.equal(row.playersText,'Collecting / 4');
+  assert.equal(row.tickText,'Collecting');
+  assert.equal(row.resources[1].text,'Collecting');
+
+  f.ui.state.servers[0].metrics.players = {status:'unavailable',reason:'Kubernetes check timed out'};
+  row = f.ui.dashboardModel().rows[0];
+  assert.equal(row.status,'unknown');
+  assert.equal(row.statusLabel,'Unable to confirm');
+  assert.equal(row.playersText,'Check failed / 4');
 });
 
 test('paused telemetry expires names locally without another request', () => {
