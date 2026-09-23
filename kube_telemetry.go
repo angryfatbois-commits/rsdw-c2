@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -108,6 +109,116 @@ func (k *kubeOrchestrator) kubeJSON(ctx context.Context, target any, args ...str
 		return fmt.Errorf("invalid Kubernetes JSON: %w", err)
 	}
 	return nil
+}
+
+type telemetryService struct {
+	Spec struct {
+		Type  string `json:"type"`
+		Ports []struct {
+			Name     string `json:"name"`
+			Port     int    `json:"port"`
+			NodePort int    `json:"nodePort"`
+			Protocol string `json:"protocol"`
+		} `json:"ports"`
+	} `json:"spec"`
+	Status struct {
+		LoadBalancer struct {
+			Ingress []struct {
+				IP       string `json:"ip"`
+				Hostname string `json:"hostname"`
+			} `json:"ingress"`
+		} `json:"loadBalancer"`
+	} `json:"status"`
+}
+
+type telemetryNode struct {
+	Status struct {
+		Addresses []struct {
+			Type    string `json:"type"`
+			Address string `json:"address"`
+		} `json:"addresses"`
+	} `json:"status"`
+}
+
+// resolveEndpoint reads the chart's game Service and returns the address a
+// player should connect to. It never errors: a resolution failure just
+// leaves the endpoint unset, matching the other best-effort telemetry
+// sources in this file.
+func (k *kubeOrchestrator) resolveEndpoint(ctx context.Context, server Server) string {
+	ctx, cancel := context.WithTimeout(ctx, telemetryCommandTimeout)
+	defer cancel()
+	var service telemetryService
+	if err := k.kubeJSON(ctx, &service, "-n", server.Namespace, "get", "service", deploymentName(server.Release), "-o", "json"); err != nil {
+		return ""
+	}
+	var port int
+	for _, candidate := range service.Spec.Ports {
+		if candidate.Name == "game" {
+			port = candidate.Port
+			break
+		}
+	}
+	if port == 0 {
+		return ""
+	}
+	host := ""
+	for _, ingress := range service.Status.LoadBalancer.Ingress {
+		if ingress.IP != "" {
+			host = ingress.IP
+			break
+		}
+		if ingress.Hostname != "" {
+			host = ingress.Hostname
+			break
+		}
+	}
+	if host == "" && (service.Spec.Type == "NodePort" || service.Spec.Type == "LoadBalancer") {
+		nodePort := 0
+		for _, candidate := range service.Spec.Ports {
+			if candidate.Name == "game" {
+				nodePort = candidate.NodePort
+				break
+			}
+		}
+		if nodePort == 0 {
+			return ""
+		}
+		var nodes struct {
+			Items []telemetryNode `json:"items"`
+		}
+		if err := k.kubeJSON(ctx, &nodes, "get", "nodes", "-o", "json"); err != nil || len(nodes.Items) == 0 {
+			return ""
+		}
+		for _, node := range nodes.Items {
+			for _, address := range node.Status.Addresses {
+				if address.Type == "ExternalIP" && address.Address != "" {
+					host = address.Address
+					break
+				}
+			}
+			if host != "" {
+				break
+			}
+		}
+		if host == "" {
+			for _, node := range nodes.Items {
+				for _, address := range node.Status.Addresses {
+					if address.Type == "InternalIP" && address.Address != "" {
+						host = address.Address
+						break
+					}
+				}
+				if host != "" {
+					break
+				}
+			}
+		}
+		port = nodePort
+	}
+	if host == "" {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTarget, Status, error) {
@@ -258,6 +369,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 		return result
 	}
 	result.image = target.container.Image
+	result.endpoint = k.resolveEndpoint(ctx, server)
 	at := time.Now().UTC()
 	for _, item := range []struct{ resource, key string }{{"cpu", "cpuLimitCores"}, {"memory", "memoryLimitBytes"}} {
 		raw := target.container.Resources.Limits[item.resource]
