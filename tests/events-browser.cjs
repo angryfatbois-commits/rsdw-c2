@@ -53,7 +53,7 @@ async function run() {
   const updateList = page.waitForResponse((response) => response.url().includes('category=update') && response.request().method() === 'GET');
   await page.getByTestId('category-update').click();
   await updateList;
-  await page.getByTestId('event-row').first().waitFor();
+  await page.waitForFunction(() => !document.querySelector('#content')?.innerText.includes('Player connected'));
   const updateText = await page.locator('#content').innerText();
   assert.match(updateText, /Update available/);
   assert.doesNotMatch(updateText, /Player connected/);
@@ -64,7 +64,7 @@ async function run() {
   const allCategories = page.waitForResponse((response) => /category=&/.test(new URL(response.url()).search) && response.request().method() === 'GET');
   await page.getByTestId('category-all').click();
   await allCategories;
-  await page.getByTestId('event-row').first().waitFor();
+  await page.getByText('Player connected').waitFor();
   assert.match(await page.locator('#content').innerText(), /Player connected/);
 
   const [download] = await Promise.all([
