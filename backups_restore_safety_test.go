@@ -25,6 +25,12 @@ func TestRestoreBackupSuffix(t *testing.T) {
 	}
 }
 
+func TestRestoreTransactionDoesNotUseGNUFindPrintf(t *testing.T) {
+	if strings.Contains(restoreTransactionScript, "-printf") {
+		t.Fatal("restore transaction must not depend on GNU find -printf")
+	}
+}
+
 func TestStoppedRendererParsesAndFailsClosed(t *testing.T) {
 	for _, input := range []string{
 		"kind: Deployment\nspec:\n  replicas: 1 # chart default\n",

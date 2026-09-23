@@ -470,7 +470,7 @@ func (k *kubeOrchestrator) resolveBackupPath(ctx context.Context, target podTarg
 	if string(output) != "directory" {
 		return "", "", errors.New("invalid source path type")
 	}
-	script := backupPathGuard(remote) + "find " + shellQuote(remote) + " -mindepth 1 -maxdepth 1 -iname " + shellQuote("*"+extension) + " -printf '%f\\0'"
+	script := backupPathGuard(remote) + "find " + shellQuote(remote) + " -mindepth 1 -maxdepth 1 -type f -iname " + shellQuote("*"+extension) + " -print0"
 	output, err = k.backupPodExec(ctx, target, "sh", "-ec", script)
 	if err != nil {
 		return "", "", fmt.Errorf("discover source file: %w", err)
@@ -478,7 +478,17 @@ func (k *kubeOrchestrator) resolveBackupPath(ctx context.Context, target podTarg
 	if len(output) == 0 || string(output) == "MISSING" {
 		return "", "", fmt.Errorf("expected one %s source in %s, found none: %w", extension, relative, errBackupSourceMissing)
 	}
-	names := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+	if output[len(output)-1] != 0 {
+		return "", "", errors.New("source file listing is not NUL-terminated")
+	}
+	names := strings.Split(string(output[:len(output)-1]), "\x00")
+	prefix := remote + "/"
+	for index, name := range names {
+		if !strings.HasPrefix(name, prefix) {
+			return "", "", errors.New("source file listing contains an unexpected path")
+		}
+		names[index] = strings.TrimPrefix(name, prefix)
+	}
 	if len(names) != 1 {
 		return "", "", fmt.Errorf("expected one %s source in %s, found %d", extension, relative, len(names))
 	}

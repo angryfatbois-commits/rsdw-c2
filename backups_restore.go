@@ -295,7 +295,21 @@ test -z "$(find "$stage" -type l -print -quit)"
 safe RSDragonwilds/Saved/SaveGames
 if [ -d "$root/RSDragonwilds/Saved/SaveGames" ]; then
   test -z "$(find "$root/RSDragonwilds/Saved/SaveGames" -type l -print -quit)"
-  find "$root/RSDragonwilds/Saved/SaveGames" -type f \( -iname '*.sav' -o -iname '*.bak' -o -iname '*.sav.backup' \) -printf 'RSDragonwilds/Saved/SaveGames/%P\n' > "$stage/existing"
+  save_root="$root/RSDragonwilds/Saved/SaveGames"
+  find "$save_root" -type f \( -iname '*.sav' -o -iname '*.bak' -o -iname '*.sav.backup' \) -exec sh -ec '
+    root=$1
+    shift
+    newline="
+"
+    for absolute do
+      case "$absolute" in
+        "$root"/*) file=${absolute#"$root"/} ;;
+        *) exit 1 ;;
+      esac
+      case "$file" in *"$newline"*) exit 1 ;; esac
+      printf "%s\n" "$file"
+    done
+  ' sh "$root" {} + > "$stage/existing"
 else
   : > "$stage/existing"
 fi

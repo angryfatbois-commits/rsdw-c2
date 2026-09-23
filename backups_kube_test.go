@@ -46,12 +46,29 @@ func podTargetPod(name, namespace, uid string) telemetryPod {
 	return telemetryPod{Metadata: kubeMetadata{Name: name, Namespace: namespace, UID: uid}}
 }
 
+func backupSaveSearchOutput(names ...string) []byte {
+	var output strings.Builder
+	for _, name := range names {
+		output.WriteString(backupDataRoot)
+		output.WriteByte('/')
+		output.WriteString(backupWorldSaveRoot)
+		output.WriteByte('/')
+		output.WriteString(name)
+		output.WriteByte(0)
+	}
+	return []byte(output.String())
+}
+
 func TestResolveBackupPathUsesOnlyTheExpectedServerStateExtension(t *testing.T) {
 	runner := &backupKubeTestRunner{run: func(call []string) ([]byte, error) {
-		if strings.Contains(strings.Join(call, " "), "-printf") {
-			return []byte("World.sav.backup\x00"), nil
+		command := strings.Join(call, " ")
+		if strings.Contains(command, "-printf") {
+			t.Fatal("save discovery must not require GNU find -printf")
 		}
-		if strings.Contains(strings.Join(call, " "), "World.sav.backup") {
+		if strings.Contains(command, "-print0") {
+			return backupSaveSearchOutput("World.sav.backup"), nil
+		}
+		if strings.Contains(command, "World.sav.backup") {
 			return []byte("file"), nil
 		}
 		return []byte("directory"), nil
@@ -67,10 +84,14 @@ func TestResolveBackupPathUsesOnlyTheExpectedServerStateExtension(t *testing.T) 
 	}
 
 	runner.run = func(call []string) ([]byte, error) {
-		if strings.Contains(strings.Join(call, " "), "-printf") {
-			return []byte("World.sav\x00"), nil
+		command := strings.Join(call, " ")
+		if strings.Contains(command, "-printf") {
+			t.Fatal("save discovery must not require GNU find -printf")
 		}
-		if strings.Contains(strings.Join(call, " "), "World.sav") {
+		if strings.Contains(command, "-print0") {
+			return backupSaveSearchOutput("World.sav"), nil
+		}
+		if strings.Contains(command, "World.sav") {
 			return []byte("file"), nil
 		}
 		return []byte("directory"), nil
@@ -92,16 +113,20 @@ func TestResolveBackupPathUsesOnlyTheExpectedServerStateExtension(t *testing.T) 
 func TestResolveBackupPathRejectsMissingAndAmbiguousSources(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		output string
+		output []byte
 		want   string
 	}{
-		{name: "missing", output: "", want: "found none"},
-		{name: "ambiguous", output: "A.sav.backup\x00B.sav.backup\x00", want: "found 2"},
+		{name: "missing", output: backupSaveSearchOutput(), want: "found none"},
+		{name: "ambiguous", output: backupSaveSearchOutput("A.sav.backup", "B.sav.backup"), want: "found 2"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runner := &backupKubeTestRunner{run: func(call []string) ([]byte, error) {
-				if strings.Contains(strings.Join(call, " "), "-printf") {
-					return []byte(test.output), nil
+				command := strings.Join(call, " ")
+				if strings.Contains(command, "-printf") {
+					t.Fatal("save discovery must not require GNU find -printf")
+				}
+				if strings.Contains(command, "-print0") {
+					return test.output, nil
 				}
 				return []byte("directory"), nil
 			}}
