@@ -51,7 +51,7 @@ func TestBackupKINDCaptureRestoreAndSafety(t *testing.T) {
 		}
 	})
 	chart, _ := filepath.Abs("tests/fixtures/backup-chart")
-	image := envOr("RSDW_BACKUP_KIND_IMAGE", "ghcr.io/petzkod5/rsdragonwilds-server:0.1.1")
+	image := envOr("RSDW_BACKUP_KIND_IMAGE", "ghcr.io/angryfatbois-commits/rsdragonwilds-server:0.2.2")
 	k := &kubeOrchestrator{runner: runner, kubectl: "kubectl", helm: "helm", chart: chart}
 	server := Server{ID: "fixture", Release: "fixture", Namespace: ns, Name: "Fixture", OwnerID: "0123456789abcdef0123456789abcdef", CurrentImage: image, DesiredImage: image, Status: StatusOnline, MaxPlayers: 4, ServerSettings: ServerSettings{WorldName: "World", ServiceType: "ClusterIP"}}
 	if err := k.Deploy(ctx, server); err != nil {

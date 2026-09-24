@@ -71,6 +71,16 @@ spec:
               value: {{ .Values.cluster.name | quote }}
             - name: RSDW_CLUSTER_REGION
               value: {{ .Values.cluster.region | quote }}
+            - name: RSDW_CHART
+              value: {{ .Values.gameServer.chart | quote }}
+            - name: RSDW_CHART_VERSION
+              value: {{ .Values.gameServer.chartVersion | quote }}
+            - name: RSDW_IMAGE_REPOSITORY
+              value: {{ .Values.gameServer.imageRepository | quote }}
+            - name: RSDW_DEFAULT_IMAGE_TAG
+              value: {{ .Values.gameServer.defaultImageTag | quote }}
+            - name: RSDW_GAME_API_PORT
+              value: {{ .Values.gameServer.apiPort | quote }}
             - name: RSDW_STATE_FILE
               value: /var/lib/rsdw-c2/state.json
             - name: RSDW_STATE_PERSISTENT

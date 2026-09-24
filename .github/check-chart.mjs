@@ -18,7 +18,7 @@ export function checkChart(archive, version, mode = '--offline') {
   const manifest = helm('template', 'rsdw-c2', archive, ...settings);
   const deployment = parseAllDocuments(manifest).map(doc => doc.toJSON()).find(doc => doc?.kind === 'Deployment');
   const container = deployment.spec.template.spec.containers.find(item => item.name === 'rsdw-c2');
-  assert.equal(container.image, `ghcr.io/petzkod5/rsdw-c2:${version}`);
+  assert.equal(container.image, `ghcr.io/angryfatbois-commits/rsdw-c2:${version}`);
   assert.deepEqual(container.readinessProbe.httpGet, { path: '/api/auth', port: 'http' });
   assert.deepEqual(container.env.find(item => item.name === 'RSDW_ADMIN_TOKEN').valueFrom.secretKeyRef,
     { name: 'rsdw-c2-admin', key: 'token' });
@@ -35,7 +35,7 @@ export function checkChart(archive, version, mode = '--offline') {
   const kubectl = (...args) => run('kubectl', '--context', context, '--request-timeout=30s', ...args);
   try {
     run('kind', 'create', 'cluster', '--name', cluster, '--image', 'kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed', '--wait', '120s');
-    run('kind', 'load', 'docker-image', `ghcr.io/petzkod5/rsdw-c2:${version}`, '--name', cluster);
+    run('kind', 'load', 'docker-image', `ghcr.io/angryfatbois-commits/rsdw-c2:${version}`, '--name', cluster);
     kubectl('create', 'namespace', 'rsdw-system');
     kubectl('-n', 'rsdw-system', 'create', 'secret', 'generic', 'rsdw-c2-admin', '--from-literal=token=ci-install-token');
     console.log(run('helm', 'install', 'rsdw-c2', archive, ...settings, '--kube-context', context, '--wait', '--timeout', '120s'));

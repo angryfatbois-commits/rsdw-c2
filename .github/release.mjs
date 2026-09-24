@@ -4,8 +4,8 @@ import { pathToFileURL } from 'node:url';
 import semanticRelease from 'semantic-release';
 
 export async function release({ run = execFileSync, semantic = semanticRelease, env = process.env } = {}) {
-  if (env.GITHUB_EVENT_NAME !== 'push' || env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'petzkod5/rsdw-c2') {
-    throw new Error('Releases require a push to petzkod5/rsdw-c2 main');
+  if (env.GITHUB_EVENT_NAME !== 'push' || env.GITHUB_REF !== 'refs/heads/main' || env.GITHUB_REPOSITORY !== 'angryfatbois-commits/rsdw-c2') {
+    throw new Error('Releases require a push to angryfatbois-commits/rsdw-c2 main');
   }
   const git = (...args) => run('git', args, { encoding: 'utf8' }).trim();
   if (git('rev-parse', 'HEAD') !== env.GITHUB_SHA) throw new Error('Checkout does not match the verified commit');

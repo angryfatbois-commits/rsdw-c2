@@ -1,4 +1,4 @@
-module github.com/petzkod5/rsdw-c2
+module github.com/angryfatbois-commits/rsdw-c2
 
 go 1.26.0
 

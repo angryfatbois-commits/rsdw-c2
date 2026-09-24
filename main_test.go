@@ -100,6 +100,58 @@ func TestCheckUpdateRegistryBehavior(t *testing.T) {
 	}
 }
 
+func TestCheckUpdatePersistsObservedCurrentImage(t *testing.T) {
+	t.Setenv("RSDW_IMAGE_REPOSITORY", "ghcr.io/example/server")
+	registry := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.WriteHeader(200)
+			fmt.Fprint(w, `{"token":"registry-secret"}`)
+		case "/v2/example/server/tags/list":
+			w.WriteHeader(200)
+			fmt.Fprint(w, `{"tags":["1.2.3"]}`)
+		default:
+			t.Errorf("unexpected registry path %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer registry.Close()
+	original := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: registryTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "ghcr.io" {
+			return nil, fmt.Errorf("unexpected host %s", r.URL.Host)
+		}
+		clone := r.Clone(r.Context())
+		clone.URL.Host = strings.TrimPrefix(registry.URL, "https://")
+		return registry.Client().Transport.RoundTrip(clone)
+	})}
+	t.Cleanup(func() { http.DefaultClient = original })
+	app := newTestApp(t, false)
+	runner := &metricsRunner{}
+	app.orchestrator = &kubeOrchestrator{runner: runner, kubectl: "kubectl", imageRepository: "ghcr.io/example/server", gameAPIPort: "8080"}
+	// Deployed out-of-band (e.g. a manual helm upgrade): the stored record still
+	// reflects the old image, but the cluster is already running the new one.
+	server := Server{ID: "world", Release: "world", CurrentImage: "ghcr.io/example/server:1.2.2", DesiredImage: "ghcr.io/example/server:1.2.2"}
+	if err := app.store.Update(func(s *State) error { s.Servers[server.ID] = server; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	res := requestJSON(t, app, http.MethodPost, "/api/servers/world/actions/check-update", "")
+	if res.Code != http.StatusOK {
+		t.Fatalf("check-update = %d: %s", res.Code, res.Body.String())
+	}
+	var got Server
+	if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentImage != "example/server:1.2.3" {
+		t.Fatalf("response current image = %q, want the cluster-observed image", got.CurrentImage)
+	}
+	state := app.store.Snapshot()
+	if state.Servers["world"].CurrentImage != "example/server:1.2.3" {
+		t.Fatalf("persisted current image = %q, want the cluster-observed image", state.Servers["world"].CurrentImage)
+	}
+}
+
 func TestUpdateReturnsObservedImage(t *testing.T) {
 	t.Setenv("RSDW_IMAGE_REPOSITORY", "example/server")
 	for _, tc := range []struct {

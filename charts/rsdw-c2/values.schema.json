@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "replicaCount", "memoryPressure", "service", "ingress", "cluster", "auth", "state", "backups", "rbac", "resources", "podSecurityContext", "containerSecurityContext", "nodeSelector", "tolerations", "affinity"],
+  "required": ["image", "replicaCount", "memoryPressure", "service", "ingress", "cluster", "gameServer", "auth", "state", "backups", "rbac", "resources", "podSecurityContext", "containerSecurityContext", "nodeSelector", "tolerations", "affinity"],
   "properties": {
     "image": {
       "type": "object",
@@ -80,6 +80,18 @@
       "additionalProperties": false,
       "required": ["name", "region"],
       "properties": {"name": {"type": "string", "minLength": 1}, "region": {"type": "string", "minLength": 1}}
+    },
+    "gameServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chart", "chartVersion", "imageRepository", "defaultImageTag", "apiPort"],
+      "properties": {
+        "chart": {"type": "string", "minLength": 1},
+        "chartVersion": {"type": "string", "minLength": 1},
+        "imageRepository": {"type": "string", "minLength": 1},
+        "defaultImageTag": {"type": "string", "minLength": 1},
+        "apiPort": {"type": "string", "minLength": 1}
+      }
     },
     "auth": {
       "type": "object",

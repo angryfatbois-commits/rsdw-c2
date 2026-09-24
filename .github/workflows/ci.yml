@@ -54,7 +54,7 @@ jobs:
           platforms: linux/amd64
           push: false
           load: true
-          tags: ghcr.io/petzkod5/rsdw-c2:0.0.0
+          tags: ghcr.io/angryfatbois-commits/rsdw-c2:0.0.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24.10.0'
@@ -76,7 +76,7 @@ jobs:
   release:
     name: Release
     needs: [verify, image]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'petzkod5/rsdw-c2'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'angryfatbois-commits/rsdw-c2'
     runs-on: ubuntu-24.04
     permissions:
       contents: write

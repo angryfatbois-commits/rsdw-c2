@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/petzkod5/rsdw-c2
+  repository: ghcr.io/angryfatbois-commits/rsdw-c2
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -28,6 +28,13 @@ ingress:
 cluster:
   name: local-cluster
   region: eu-central
+
+gameServer:
+  chart: oci://ghcr.io/angryfatbois-commits/charts/rsdragonwilds
+  chartVersion: 0.2.2
+  imageRepository: ghcr.io/angryfatbois-commits/rsdragonwilds-server
+  defaultImageTag: "0.2.2"
+  apiPort: "8080"
 
 auth:
   mode: token

@@ -3,11 +3,11 @@ set -euo pipefail
 
 version=${1:?release version is required}
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-[[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/heads/main && "${GITHUB_REPOSITORY:-}" == petzkod5/rsdw-c2 ]]
+[[ "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/heads/main && "${GITHUB_REPOSITORY:-}" == angryfatbois-commits/rsdw-c2 ]]
 [[ $(git rev-parse HEAD) == "$GITHUB_SHA" && $(git rev-parse "refs/tags/v${version}^{commit}") == "$GITHUB_SHA" ]]
 
-image="ghcr.io/petzkod5/rsdw-c2:$version"
-chart=oci://ghcr.io/petzkod5/charts/rsdw-c2
+image="ghcr.io/angryfatbois-commits/rsdw-c2:$version"
+chart=oci://ghcr.io/angryfatbois-commits/charts/rsdw-c2
 task_dir=$(mktemp -d)
 export HELM_CONFIG_HOME="$task_dir/helm-config" HELM_CACHE_HOME="$task_dir/helm-cache" HELM_DATA_HOME="$task_dir/helm-data"
 container=
@@ -30,7 +30,7 @@ else
   cat "$task_dir/image.err" >&2
   [[ $(<"$task_dir/image.err") == "no such manifest: $image" || $(<"$task_dir/image.err") == "manifest unknown" ]]
   docker buildx build --platform linux/amd64 --provenance=false \
-    --label "org.opencontainers.image.source=https://github.com/petzkod5/rsdw-c2" \
+    --label "org.opencontainers.image.source=https://github.com/angryfatbois-commits/rsdw-c2" \
     --label "org.opencontainers.image.revision=$GITHUB_SHA" \
     --tag "$image" --push .
 fi
@@ -43,7 +43,7 @@ if [[ "$revision" != "$GITHUB_SHA" ]]; then
 fi
 [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image") == linux/amd64 ]]
 digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")
-[[ "$digest" =~ ^ghcr.io/petzkod5/rsdw-c2@sha256:[0-9a-f]{64}$ ]]
+[[ "$digest" =~ ^ghcr.io/angryfatbois-commits/rsdw-c2@sha256:[0-9a-f]{64}$ ]]
 printf 'Immutable image: %s\n' "$digest"
 docker run --rm --entrypoint helm "$digest" version --short | grep -F 'v4.2.2'
 docker run --rm --entrypoint kubectl "$digest" version --client=true -o json | grep -F 'v1.36.2'
@@ -59,8 +59,8 @@ if helm pull "$chart" --version "$version" --destination "$task_dir/pulled" 2>"$
   printf 'Reusing existing chart %s\n' "$version"
 else
   cat "$task_dir/chart.err" >&2
-  grep -Fq "ghcr.io/petzkod5/charts/rsdw-c2:$version: not found" "$task_dir/chart.err"
-  helm push "$archive" oci://ghcr.io/petzkod5/charts
+  grep -Fq "ghcr.io/angryfatbois-commits/charts/rsdw-c2:$version: not found" "$task_dir/chart.err"
+  helm push "$archive" oci://ghcr.io/angryfatbois-commits/charts
   helm pull "$chart" --version "$version" --destination "$task_dir/pulled"
 fi
 tar -xzf "$archive" -C "$task_dir/expected"

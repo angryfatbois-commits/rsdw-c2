@@ -5,10 +5,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/petzkod5/rsdw-c2/actions/workflows/ci.yml"><img src="https://github.com/petzkod5/rsdw-c2/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/petzkod5/rsdw-c2/releases"><img src="https://img.shields.io/github/v/release/petzkod5/rsdw-c2?display_name=tag" alt="Latest release"></a>
-  <a href="https://github.com/petzkod5/rsdw-c2/blob/main/go.mod"><img src="https://img.shields.io/github/go-mod/go-version/petzkod5/rsdw-c2" alt="Go version"></a>
-  <a href="https://github.com/petzkod5/rsdw-c2/issues"><img src="https://img.shields.io/github/issues/petzkod5/rsdw-c2" alt="Open issues"></a>
+  <a href="https://github.com/angryfatbois-commits/rsdw-c2/actions/workflows/ci.yml"><img src="https://github.com/angryfatbois-commits/rsdw-c2/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/angryfatbois-commits/rsdw-c2/releases"><img src="https://img.shields.io/github/v/release/angryfatbois-commits/rsdw-c2?display_name=tag" alt="Latest release"></a>
+  <a href="https://github.com/angryfatbois-commits/rsdw-c2/blob/main/go.mod"><img src="https://img.shields.io/github/go-mod/go-version/angryfatbois-commits/rsdw-c2" alt="Go version"></a>
+  <a href="https://github.com/angryfatbois-commits/rsdw-c2/issues"><img src="https://img.shields.io/github/issues/angryfatbois-commits/rsdw-c2" alt="Open issues"></a>
 </p>
 
 A small web control panel for RuneScape: Dragonwilds dedicated servers on Kubernetes.
@@ -52,7 +52,7 @@ kubectl create namespace rsdw-system
 kubectl -n rsdw-system create secret generic rsdw-c2-admin \
   --from-literal=token="$RSDW_C2_TOKEN"
 
-helm upgrade --install rsdw-c2 oci://ghcr.io/petzkod5/charts/rsdw-c2 \
+helm upgrade --install rsdw-c2 oci://ghcr.io/angryfatbois-commits/charts/rsdw-c2 \
   --version "$VERSION" \
   --namespace rsdw-system \
   --set auth.adminTokenSecret.name=rsdw-c2-admin
@@ -62,7 +62,7 @@ kubectl -n rsdw-system port-forward service/rsdw-c2-rsdw-c2 8080:8080
 
 Open [http://localhost:8080](http://localhost:8080) and sign in with `$RSDW_C2_TOKEN`.
 
-Replace `VERSION` with a version from the [GitHub releases](https://github.com/petzkod5/rsdw-c2/releases). Use the [deployment notes](docs/oidc.md) for OIDC, ingress, and other cluster setup.
+Replace `VERSION` with a version from the [GitHub releases](https://github.com/angryfatbois-commits/rsdw-c2/releases). Use the [deployment notes](docs/oidc.md) for OIDC, ingress, and other cluster setup.
 
 Scheduled reboots require the chart's default single replica and persistent state volume. Do not enable them with multiple C2 replicas or ephemeral state; the scheduler intentionally has no leader-election layer.
 
@@ -86,4 +86,4 @@ npx --no-install playwright install chromium
 bash scripts/verify.sh
 ```
 
-If something breaks, [open an issue](https://github.com/petzkod5/rsdw-c2/issues). I built this for a small group, but bug reports are still welcome.
+If something breaks, [open an issue](https://github.com/angryfatbois-commits/rsdw-c2/issues). I built this for a small group, but bug reports are still welcome.

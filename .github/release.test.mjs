@@ -14,7 +14,7 @@ const env = {
   ...process.env,
   GITHUB_EVENT_NAME: 'push',
   GITHUB_REF: 'refs/heads/main',
-  GITHUB_REPOSITORY: 'petzkod5/rsdw-c2',
+  GITHUB_REPOSITORY: 'angryfatbois-commits/rsdw-c2',
   GITHUB_SHA: sha,
   GITHUB_RUN_ID: '123',
   GITHUB_RUN_ATTEMPT: '1',
@@ -36,7 +36,7 @@ test('workflow has one verified main release path and builds PRs without publica
   assert.equal(build.with.push, false);
   assert.equal(build.with.platforms, 'linux/amd64');
   assert.equal(build.with.load, true);
-  assert.equal(build.with.tags, 'ghcr.io/petzkod5/rsdw-c2:0.0.0');
+  assert.equal(build.with.tags, 'ghcr.io/angryfatbois-commits/rsdw-c2:0.0.0');
   for (const job of [image, publishing]) {
     const setup = job.steps.find(step => step.uses?.startsWith('helm/kind-action@'));
     assert.equal(setup.with.install_only, true);
@@ -46,7 +46,7 @@ test('workflow has one verified main release path and builds PRs without publica
   assert.match(install.run, /node \.github\/check-chart\.mjs "\$RUNNER_TEMP\/rsdw-c2-0\.0\.0\.tgz" 0\.0\.0 --kind/);
   assert.equal(publishing.steps.at(-1).env.CHART_CHECK_MODE, '--kind');
   assert.deepEqual(publishing.needs, ['verify', 'image']);
-  assert.equal(publishing.if, "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'petzkod5/rsdw-c2'");
+  assert.equal(publishing.if, "github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'angryfatbois-commits/rsdw-c2'");
   assert.deepEqual(publishing.permissions, { contents: 'write', packages: 'write' });
   assert.equal(publishing.steps[0].with['fetch-depth'], 0);
   const resolveIndex = publishing.steps.findIndex(step => step.id === 'release');
@@ -85,7 +85,7 @@ test('configured release notes include a literal chart feature before tag creati
   const { generateNotes } = await import(name);
   const notes = await generateNotes(options, {
     cwd: process.cwd(),
-    options: { repositoryUrl: 'https://github.com/petzkod5/rsdw-c2' },
+    options: { repositoryUrl: 'https://github.com/angryfatbois-commits/rsdw-c2' },
     commits: [{ hash: sha, message: 'feat(chart): add settings' }],
     lastRelease: { version: '1.1.0', gitTag: 'v1.1.0' },
     nextRelease: { version: '1.2.0', gitTag: 'v1.2.0' },
@@ -157,7 +157,7 @@ const { spawnSync } = require('node:child_process');
 const command = path.basename(process.argv[1]);
 const args = process.argv.slice(2);
 const state = process.env.TEST_STATE;
-const image = 'ghcr.io/petzkod5/rsdw-c2:1.2.3';
+const image = 'ghcr.io/angryfatbois-commits/rsdw-c2:1.2.3';
 const output = value => process.stdout.write(value + '\n');
 const fail = message => { process.stderr.write(message + '\n'); process.exit(1); };
 fs.appendFileSync(path.join(state, 'calls'), JSON.stringify([command, ...args]) + '\n');
@@ -181,7 +181,7 @@ if (command === 'git') {
     const format = args[3];
     if (format.includes('Labels')) output(fs.readFileSync(path.join(state, 'image'), 'utf8'));
     else if (format.includes('Architecture')) output('linux/amd64');
-    else output('ghcr.io/petzkod5/rsdw-c2@sha256:' + 'b'.repeat(64));
+    else output('ghcr.io/angryfatbois-commits/rsdw-c2@sha256:' + 'b'.repeat(64));
   } else if (args[0] === 'run') {
     if (args.includes('helm')) output('v4.2.2');
     else if (args.includes('kubectl')) output('{"gitVersion":"v1.36.2"}');
@@ -193,7 +193,7 @@ if (command === 'git') {
   else if (args[0] === 'pull') {
     if (process.env.TEST_FAIL === 'chart-auth') fail('unauthorized');
     if (process.env.TEST_FAIL === 'chart-network') fail('connection refused');
-    if (!fs.existsSync(path.join(state, 'chart.tgz'))) fail('Error: ghcr.io/petzkod5/charts/rsdw-c2:1.2.3: not found');
+    if (!fs.existsSync(path.join(state, 'chart.tgz'))) fail('Error: ghcr.io/angryfatbois-commits/charts/rsdw-c2:1.2.3: not found');
     fs.copyFileSync(path.join(state, 'chart.tgz'), path.join(args[args.indexOf('--destination') + 1], 'rsdw-c2-1.2.3.tgz'));
   } else if (args[0] === 'push') {
     if (!fs.existsSync(path.join(state, 'image'))) fail('chart before image');

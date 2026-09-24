@@ -458,7 +458,7 @@ func (s *Store) seedDemo() {
 	now := time.Now().UTC()
 	server := Server{
 		ID: "scuffedtards", Name: "ScuffedTards", Namespace: "dragonwilds", Release: "scuffedtards", Region: "eu-central", OwnerID: "demo-owner",
-		CurrentImage: "ghcr.io/petzkod5/rsdragonwilds-server:0.1.1", DesiredImage: "ghcr.io/petzkod5/rsdragonwilds-server:0.1.2", Status: StatusOnline,
+		CurrentImage: "ghcr.io/angryfatbois-commits/rsdragonwilds-server:0.2.1", DesiredImage: "ghcr.io/angryfatbois-commits/rsdragonwilds-server:0.2.2", Status: StatusOnline,
 		Players: 12, MaxPlayers: 12, TickRate: 60, CPUPercent: 38, MemoryUsedBytes: 6_442_450_944, MemoryLimitBytes: 16_000_000_000, DiskPercent: 41,
 		NetworkBytesPerSecond: 2_400_000, UptimeSeconds: 3*24*3600 + 14*3600 + 22*60, MetricsAvailable: true, LastRestart: now.Add(-3*24*time.Hour - 14*time.Hour).Format(time.RFC3339), LastSeen: now.Format(time.RFC3339), UpdateAvailable: true, Endpoint: "scuffedtards.dragonwilds.local:7777",
 	}
@@ -630,7 +630,7 @@ func newKubeOrchestrator() *kubeOrchestrator {
 	configureInClusterKubeconfig()
 	return &kubeOrchestrator{
 		runner: shellRunner{}, helm: envOr("RSDW_HELM_BIN", "helm"), kubectl: envOr("RSDW_KUBECTL_BIN", "kubectl"),
-		chart: envOr("RSDW_CHART", "oci://ghcr.io/petzkod5/charts/rsdragonwilds"), chartVersion: envOr("RSDW_CHART_VERSION", "0.1.1"), imageRepository: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server"), gameAPIPort: envOr("RSDW_GAME_API_PORT", "8080"),
+		chart: envOr("RSDW_CHART", "oci://ghcr.io/angryfatbois-commits/charts/rsdragonwilds"), chartVersion: envOr("RSDW_CHART_VERSION", "0.2.2"), imageRepository: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/angryfatbois-commits/rsdragonwilds-server"), gameAPIPort: envOr("RSDW_GAME_API_PORT", "8080"),
 	}
 }
 
@@ -1048,7 +1048,7 @@ func (a *App) api(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/image-tags" && r.Method == http.MethodGet {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
-		tags, err := availableImageTags(ctx, envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server"))
+		tags, err := availableImageTags(ctx, envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/angryfatbois-commits/rsdragonwilds-server"))
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "Could not load published image tags. Try again.")
 			return
@@ -1248,7 +1248,7 @@ func (a *App) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	server := Server{ID: release, Name: strings.TrimSpace(request.Name), Namespace: defaultValue(request.Namespace, "dragonwilds"), Release: release, OwnerID: request.OwnerID, CurrentImage: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server") + ":" + defaultValue(request.ImageTag, envOr("RSDW_DEFAULT_IMAGE_TAG", "0.1.1")), MaxPlayers: request.MaxPlayers, Status: StatusStarting, LastRestart: time.Now().UTC().Format(time.RFC3339), LastSeen: time.Now().UTC().Format(time.RFC3339), Endpoint: release + ".dragonwilds.local:7777"}
+	server := Server{ID: release, Name: strings.TrimSpace(request.Name), Namespace: defaultValue(request.Namespace, "dragonwilds"), Release: release, OwnerID: request.OwnerID, CurrentImage: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/angryfatbois-commits/rsdragonwilds-server") + ":" + defaultValue(request.ImageTag, envOr("RSDW_DEFAULT_IMAGE_TAG", "0.2.2")), MaxPlayers: request.MaxPlayers, Status: StatusStarting, LastRestart: time.Now().UTC().Format(time.RFC3339), LastSeen: time.Now().UTC().Format(time.RFC3339), Endpoint: release + ".dragonwilds.local:7777"}
 	server.DesiredImage = server.CurrentImage
 	server.OwnershipToken, err = randomToken()
 	if err != nil {
@@ -1419,7 +1419,7 @@ func (a *App) handleUpdate(w http.ResponseWriter, r *http.Request, server Server
 		writeError(w, http.StatusBadRequest, "imageTag must contain 1 to 64 letters, numbers, dots, underscores, or hyphens")
 		return
 	}
-	server.DesiredImage = envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server") + ":" + request.ImageTag
+	server.DesiredImage = envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/angryfatbois-commits/rsdragonwilds-server") + ":" + request.ImageTag
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	if err := a.orchestrator.Deploy(ctx, server); err != nil {
@@ -1470,8 +1470,12 @@ func (a *App) handleCheckUpdate(w http.ResponseWriter, r *http.Request, server S
 		if current.DesiredImage == server.DesiredImage {
 			current.DesiredImage = refreshed.DesiredImage
 		}
+		if refreshed.CurrentImage != "" {
+			current.CurrentImage = refreshed.CurrentImage
+		}
 		current.UpdateAvailable = refreshed.CurrentImage != "" && current.DesiredImage != refreshed.CurrentImage
 		state.Servers[server.ID] = current
+		refreshed.CurrentImage = current.CurrentImage
 		refreshed.DesiredImage = current.DesiredImage
 		refreshed.UpdateAvailable = current.UpdateAvailable
 		appendEvent(state, refreshed, "update", severityFor(refreshed.UpdateAvailable), "Update check complete", updateDetails(refreshed))
