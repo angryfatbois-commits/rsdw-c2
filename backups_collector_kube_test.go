@@ -61,7 +61,7 @@ func TestBackupInspectorDoesNotRequireDeployment(t *testing.T) {
 			if err := json.Unmarshal([]byte(args[len(args)-1]), &override); err != nil {
 				t.Fatal(err)
 			}
-			assertBackupInspectorIsReadOnlyAndRestricted(t, override)
+			assertBackupInspectorIsRestricted(t, override, true)
 			if !strings.Contains(call, "sleep 600") || !strings.Contains(call, backupInspectorLabel) || !strings.Contains(call, "new-world-pvc") {
 				t.Fatalf("wrong inspector command %s", call)
 			}
@@ -76,7 +76,7 @@ func TestBackupInspectorDoesNotRequireDeployment(t *testing.T) {
 		return nil, nil
 	}}
 	k := &kubeOrchestrator{runner: runner, kubectl: "unused"}
-	target, cleanup, err := k.backupInspector(context.Background(), server, "new-world-pvc")
+	target, cleanup, err := k.backupInspector(context.Background(), server, "new-world-pvc", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,40 @@ func TestBackupInspectorDoesNotRequireDeployment(t *testing.T) {
 	}
 }
 
-func assertBackupInspectorIsReadOnlyAndRestricted(t *testing.T, override map[string]any) {
+func TestBackupInspectorMountsWritableForRestore(t *testing.T) {
+	server := Server{ID: "world", Namespace: "dragonwilds", Release: "world-release", DesiredImage: "ghcr.io/example/server:latest"}
+	var name string
+	runner := &backupKubeTestRunner{run: func(args []string) ([]byte, error) {
+		call := strings.Join(args, " ")
+		switch {
+		case strings.Contains(call, " run "):
+			name = args[4]
+			var override map[string]any
+			if err := json.Unmarshal([]byte(args[len(args)-1]), &override); err != nil {
+				t.Fatal(err)
+			}
+			assertBackupInspectorIsRestricted(t, override, false)
+		case strings.Contains(call, " wait "):
+		case strings.Contains(call, " get pod "):
+			return []byte(fmt.Sprintf(`{"metadata":{"name":%q,"namespace":"dragonwilds","uid":"helper-uid"},"spec":{"containers":[{"name":"backup"}]},"status":{"phase":"Running"}}`, name)), nil
+		case strings.Contains(call, " delete pod "):
+		default:
+			t.Fatalf("unexpected inspector command %s", call)
+		}
+		return nil, nil
+	}}
+	k := &kubeOrchestrator{runner: runner, kubectl: "unused"}
+	target, cleanup, err := k.backupInspector(context.Background(), server, "new-world-pvc", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.container.Name != "backup" {
+		t.Fatal("inspector not available to restore")
+	}
+	cleanup()
+}
+
+func assertBackupInspectorIsRestricted(t *testing.T, override map[string]any, readOnly bool) {
 	t.Helper()
 	spec, ok := override["spec"].(map[string]any)
 	if !ok {
@@ -132,7 +165,7 @@ func assertBackupInspectorIsReadOnlyAndRestricted(t *testing.T, override map[str
 		t.Fatalf("inspector volume mounts = %#v", container["volumeMounts"])
 	}
 	volumeMount, ok := mounts[0].(map[string]any)
-	if !ok || volumeMount["readOnly"] != true {
+	if !ok || volumeMount["readOnly"] != readOnly {
 		t.Fatalf("inspector volume mount = %#v", mounts[0])
 	}
 	volumes, ok := spec["volumes"].([]any)
@@ -144,7 +177,7 @@ func assertBackupInspectorIsReadOnlyAndRestricted(t *testing.T, override map[str
 		t.Fatalf("inspector volume = %#v", volumes[0])
 	}
 	claim, ok := volume["persistentVolumeClaim"].(map[string]any)
-	if !ok || claim["readOnly"] != true {
+	if !ok || claim["readOnly"] != readOnly {
 		t.Fatalf("inspector PVC = %#v", volume["persistentVolumeClaim"])
 	}
 }
