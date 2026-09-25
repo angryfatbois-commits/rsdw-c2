@@ -79,6 +79,16 @@ Each backup listing checks current storage health once and uses that result for 
 
 Usage checks do not detect corruption that preserves a bundle's size. Full checksum validation remains part of startup recovery and actual restore, so a connected status indicates storage availability, not verified content integrity.
 
+## Retention and pruning
+
+The quota limits above are purely rejective: when a limit would be exceeded, the new backup fails and existing bundles are retained (see "Source safety"). Retention is the first proactive deletion of successful, already-published bundles, and applies only to schedules, not manual runs.
+
+Each schedule optionally sets `retainCount` (keep the newest N successful runs) and/or `retainDays` (keep runs newer than N days). A run is kept if it satisfies either condition; it is pruned only once both configured conditions exclude it. Leaving both at 0 (the default) disables pruning for that schedule — old runs accumulate until the repository quota is hit. Manual runs, and runs from other schedules, are never touched by a schedule's retention settings.
+
+Pruning runs synchronously after each successful scheduled backup, outside the run's own lock. C2 deletes the pruned run's bundle and publication record from the backend that produced it, then removes the run and its manifest from state. Deletion applies identically to Local and S3-compatible backends. If the backend delete call fails, the run stays in state and is retried on the next successful scheduled run.
+
+A completed run can also be deleted manually with `DELETE /api/backups/runs/{id}`, which performs the same backend cleanup. C2 refuses to delete a run that is still in progress.
+
 ## Restart recovery
 
 Startup recovery removes interrupted `.capture` and `.restore-*` temporary data, completes valid staged publications, and discovers already published bundles. Staged publications that exceed the configured quota are removed. Recovery reconciles manifests and runs with durable publications, preserving existing run identity, schedule association, and creation time. It records successful publications even if the earlier state update failed, creates a run for an orphan publication, and marks unfinished runs without a publication as interrupted. Repeated recovery does not duplicate runs. Published data that fails validation causes recovery to return an error.

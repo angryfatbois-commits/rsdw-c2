@@ -259,6 +259,8 @@ type BackupSchedule struct {
 	LastRun        *time.Time      `json:"lastRun,omitempty"`
 	LastResult     BackupRunStatus `json:"lastResult,omitempty"`
 	LastError      string          `json:"lastError,omitempty"`
+	RetainCount    int             `json:"retainCount,omitempty"`
+	RetainDays     int             `json:"retainDays,omitempty"`
 	Revision       int             `json:"revision"`
 }
 

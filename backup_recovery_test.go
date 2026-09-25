@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -175,6 +177,105 @@ func TestBackupUnavailableScheduleRecordsFailureWithoutCatchUp(t *testing.T) {
 				t.Fatal("storage recovery caught up a failed occurrence")
 			}
 		})
+	}
+}
+
+func TestScheduledBackupPruningRetainsOnlyConfiguredCount(t *testing.T) {
+	app := backupTestApp(t)
+	response := backupJSONRequest(t, app, http.MethodPost, "/api/servers", map[string]any{
+		"name": "Pruning world", "ownerId": "0123456789abcdef0123456789abcdef", "maxPlayers": 4,
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create server = %d: %s", response.Code, response.Body.String())
+	}
+	server := decodeBackupResponse[Server](t, response)
+	schedule := BackupSchedule{ID: "prune-sched", ServerID: server.ID, DefinitionID: "dragonwilds-world-save", BackendID: "local", Enabled: true, RetainCount: 2, Mode: rebootModeInterval, IntervalValue: 1, IntervalUnit: "hours", Timezone: "UTC"}
+	if err := app.store.Update(func(state *State) error {
+		state.BackupSchedules[schedule.ID] = schedule
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var manifestIDs []string
+	for i := 0; i < 4; i++ {
+		run, err := app.executeBackup(context.Background(), backupRunRequest{
+			ServerID: server.ID, DefinitionID: "dragonwilds-world-save", BackendID: "local", ScheduleID: schedule.ID,
+			Actor: "scheduler", IdempotencyKey: fmt.Sprintf("prune-run-%d", i), Acknowledge: true, Scheduled: true,
+		})
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		manifestIDs = append(manifestIDs, run.ManifestID)
+	}
+	snapshot := app.store.Snapshot()
+	var kept []BackupRun
+	for _, run := range snapshot.BackupRuns {
+		if run.ScheduleID == schedule.ID {
+			kept = append(kept, run)
+		}
+	}
+	if len(kept) != 2 {
+		t.Fatalf("expected 2 retained runs after pruning, got %d: %+v", len(kept), kept)
+	}
+	for _, run := range kept {
+		if run.ManifestID != manifestIDs[2] && run.ManifestID != manifestIDs[3] {
+			t.Fatalf("retained run %s is not one of the newest two", run.ManifestID)
+		}
+	}
+	for _, id := range manifestIDs[:2] {
+		if _, ok := snapshot.BackupManifests[id]; ok {
+			t.Fatalf("pruned manifest %s still present in state", id)
+		}
+		if _, err := app.backups.local.OpenBundle(context.Background(), "objects/"+id+"/bundle.zip"); err == nil {
+			t.Fatalf("pruned manifest %s bundle still readable from repository", id)
+		}
+	}
+	for _, id := range manifestIDs[2:] {
+		if _, err := app.backups.local.OpenBundle(context.Background(), "objects/"+id+"/bundle.zip"); err != nil {
+			t.Fatalf("retained manifest %s bundle missing from repository: %v", id, err)
+		}
+	}
+}
+
+func TestManualBackupRunIsNotPrunedByScheduleRetention(t *testing.T) {
+	app := backupTestApp(t)
+	response := backupJSONRequest(t, app, http.MethodPost, "/api/servers", map[string]any{
+		"name": "Manual run world", "ownerId": "0123456789abcdef0123456789abcdef", "maxPlayers": 4,
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create server = %d: %s", response.Code, response.Body.String())
+	}
+	server := decodeBackupResponse[Server](t, response)
+	manual := backupJSONRequest(t, app, http.MethodPost, "/api/backups/runs", map[string]any{
+		"serverId": server.ID, "definitionId": "dragonwilds-world-save", "backendId": "local", "idempotencyKey": "manual-untouched", "acknowledge": true,
+	})
+	if manual.Code != http.StatusCreated {
+		t.Fatalf("manual run = %d: %s", manual.Code, manual.Body.String())
+	}
+	schedule := BackupSchedule{ID: "unrelated-sched", ServerID: server.ID, DefinitionID: "dragonwilds-world-save", BackendID: "local", Enabled: true, RetainCount: 1, Mode: rebootModeInterval, IntervalValue: 1, IntervalUnit: "hours", Timezone: "UTC"}
+	if err := app.store.Update(func(state *State) error {
+		state.BackupSchedules[schedule.ID] = schedule
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := app.executeBackup(context.Background(), backupRunRequest{
+			ServerID: server.ID, DefinitionID: "dragonwilds-world-save", BackendID: "local", ScheduleID: schedule.ID,
+			Actor: "scheduler", IdempotencyKey: fmt.Sprintf("unrelated-run-%d", i), Acknowledge: true, Scheduled: true,
+		}); err != nil {
+			t.Fatalf("scheduled run %d: %v", i, err)
+		}
+	}
+	snapshot := app.store.Snapshot()
+	found := false
+	for _, run := range snapshot.BackupRuns {
+		if run.Idempotency.Key == "manual-untouched" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("manual backup run was pruned by an unrelated schedule's retention")
 	}
 }
 

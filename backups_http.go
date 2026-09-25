@@ -38,6 +38,8 @@ type backupScheduleRequest struct {
 	IntervalUnit      string     `json:"intervalUnit,omitempty"`
 	DailyTimes        []string   `json:"dailyTimes,omitempty"`
 	ExecutionTimezone string     `json:"executionTimezone"`
+	RetainCount       int        `json:"retainCount,omitempty"`
+	RetainDays        int        `json:"retainDays,omitempty"`
 	Acknowledge       bool       `json:"acknowledge"`
 }
 
@@ -130,10 +132,13 @@ func (a *App) handleBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[0] == "runs" {
-		if r.Method == http.MethodGet {
+		switch r.Method {
+		case http.MethodGet:
 			a.getBackupRun(w, parts[1])
-		} else {
-			methodNotAllowed(w, "GET")
+		case http.MethodDelete:
+			a.deleteBackupRun(w, r, parts[1])
+		default:
+			methodNotAllowed(w, "GET, DELETE")
 		}
 		return
 	}
@@ -491,6 +496,9 @@ func (a *App) executeBackup(ctx context.Context, request backupRunRequest) (Back
 	}); err != nil {
 		return setFailure(err)
 	}
+	if request.ScheduleID != "" {
+		a.pruneBackupRuns(ctx, request.ScheduleID)
+	}
 	return run, nil
 }
 
@@ -502,6 +510,67 @@ func updateBackupRun(state *State, run BackupRun) {
 		}
 	}
 	state.BackupRuns = append(state.BackupRuns, run)
+}
+
+func (a *App) pruneBackupRuns(ctx context.Context, scheduleID string) {
+	snapshot := a.store.Snapshot()
+	schedule, ok := snapshot.BackupSchedules[scheduleID]
+	if !ok || (schedule.RetainCount <= 0 && schedule.RetainDays <= 0) {
+		return
+	}
+	candidates := make([]BackupRun, 0, len(snapshot.BackupRuns))
+	for _, run := range snapshot.BackupRuns {
+		if run.ScheduleID == scheduleID && run.Status == BackupRunStatusSucceeded {
+			candidates = append(candidates, run)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].CreatedAt.After(candidates[j].CreatedAt) })
+	keep := map[string]bool{}
+	if schedule.RetainCount > 0 {
+		for i := 0; i < len(candidates) && i < schedule.RetainCount; i++ {
+			keep[candidates[i].ID] = true
+		}
+	}
+	if schedule.RetainDays > 0 {
+		cutoff := a.backupNow().AddDate(0, 0, -schedule.RetainDays)
+		for _, run := range candidates {
+			if run.CreatedAt.After(cutoff) {
+				keep[run.ID] = true
+			}
+		}
+	}
+	repository, err := a.repositoryFor(schedule.BackendID)
+	if err != nil {
+		return
+	}
+	var pruned []BackupRun
+	for _, run := range candidates {
+		if keep[run.ID] || run.ManifestID == "" {
+			continue
+		}
+		if err := repository.Delete(ctx, run.ManifestID); err != nil {
+			continue
+		}
+		pruned = append(pruned, run)
+	}
+	if len(pruned) == 0 {
+		return
+	}
+	_ = a.store.Update(func(state *State) error {
+		remove := make(map[string]bool, len(pruned))
+		for _, run := range pruned {
+			remove[run.ID] = true
+			delete(state.BackupManifests, run.ManifestID)
+		}
+		next := make([]BackupRun, 0, len(state.BackupRuns))
+		for _, run := range state.BackupRuns {
+			if !remove[run.ID] {
+				next = append(next, run)
+			}
+		}
+		state.BackupRuns = next
+		return nil
+	})
 }
 
 func nextBackupScheduleRun(schedule BackupSchedule, after time.Time) (time.Time, error) {
@@ -735,6 +804,10 @@ func (a *App) saveBackupSchedule(w http.ResponseWriter, r *http.Request, id stri
 		writeError(w, http.StatusBadRequest, "serverId and definitionId are required")
 		return
 	}
+	if request.RetainCount < 0 || request.RetainDays < 0 {
+		writeError(w, http.StatusBadRequest, "retainCount and retainDays must not be negative")
+		return
+	}
 	if !*request.Enabled || request.Acknowledge {
 		// A disabled schedule does not read storage now. An enabled schedule must be explicit.
 	} else {
@@ -770,6 +843,7 @@ func (a *App) saveBackupSchedule(w http.ResponseWriter, r *http.Request, id stri
 		saved = old
 		saved.ID, saved.ServerID, saved.DefinitionID, saved.BackendID = id, request.ServerID, request.DefinitionID, request.BackendID
 		saved.Enabled, saved.Timezone, saved.Mode, saved.Cron, saved.IntervalValue, saved.IntervalUnit, saved.DailyTimes = enabled, definition.ExecutionTimezone, definition.Mode, definition.Cron, definition.IntervalValue, definition.IntervalUnit, append([]string(nil), definition.DailyTimes...)
+		saved.RetainCount, saved.RetainDays = request.RetainCount, request.RetainDays
 		saved.Expression = scheduleExpression(definition)
 		saved.Revision = old.Revision + 1
 		if saved.Revision == 1 {
@@ -882,6 +956,61 @@ func (a *App) getBackupRun(w http.ResponseWriter, id string) {
 		}
 	}
 	writeError(w, http.StatusNotFound, "backup run not found")
+}
+
+func (a *App) deleteBackupRun(w http.ResponseWriter, r *http.Request, id string) {
+	snapshot := a.store.Snapshot()
+	var run BackupRun
+	found := false
+	for _, existing := range snapshot.BackupRuns {
+		if existing.ID == id {
+			run, found = existing, true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "backup run not found")
+		return
+	}
+	if run.Status == BackupRunStatusRunning {
+		writeError(w, http.StatusConflict, "backup run is still in progress")
+		return
+	}
+	if run.ManifestID != "" {
+		repository, err := a.repositoryFor(run.BackendID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "selected storage backend is unavailable")
+			return
+		}
+		if err := repository.Delete(r.Context(), run.ManifestID); err != nil {
+			writeError(w, http.StatusBadGateway, "delete backup object: "+err.Error())
+			return
+		}
+	}
+	err := a.store.Update(func(state *State) error {
+		next := make([]BackupRun, 0, len(state.BackupRuns))
+		removed := false
+		for _, existing := range state.BackupRuns {
+			if existing.ID == id {
+				removed = true
+				continue
+			}
+			next = append(next, existing)
+		}
+		if !removed {
+			return errors.New("backup run not found")
+		}
+		state.BackupRuns = next
+		if run.ManifestID != "" {
+			delete(state.BackupManifests, run.ManifestID)
+		}
+		return nil
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusNoContent, nil)
 }
 
 func (a *App) downloadBackupBundle(w http.ResponseWriter, r *http.Request, id string) {

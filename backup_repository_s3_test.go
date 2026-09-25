@@ -155,6 +155,39 @@ func TestS3BackupRepositoryPublishesAndOpensBundle(t *testing.T) {
 	}
 }
 
+func TestS3BackupRepositoryDeleteRemovesBundleAndPublication(t *testing.T) {
+	client := newFakeS3Client()
+	repository := testS3Repository(client, S3BackupRepositoryConfig{Bucket: "test-bucket", MaxRepositoryBytes: 1 << 30, MaxBackupBytes: 1 << 20, MaxItemBytes: 1 << 20})
+	request := testPublicationRequest(t, "s3-delete", "s3-delete-request", []testItem{
+		{name: "world", path: "RSDragonwilds/Saved/SaveGames/World.sav.backup", content: "world-data", consistency: BackupConsistencyAtomicPublish},
+	})
+	published, err := repository.Publish(context.Background(), request)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if err := repository.Delete(context.Background(), "s3-delete"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, ok := client.objects["objects/s3-delete/bundle.zip"]; ok {
+		t.Fatal("bundle object still exists after delete")
+	}
+	if _, ok := client.objects["objects/s3-delete/publication.json"]; ok {
+		t.Fatal("publication object still exists after delete")
+	}
+	if _, err := repository.OpenBundle(context.Background(), published.Bundle.Key); err == nil {
+		t.Fatal("expected OpenBundle to fail after delete")
+	}
+}
+
+func TestS3BackupRepositoryDeletePropagatesRemoveError(t *testing.T) {
+	client := newFakeS3Client()
+	client.removeErr = errors.New("network unavailable")
+	repository := testS3Repository(client, S3BackupRepositoryConfig{Bucket: "test-bucket", MaxRepositoryBytes: 1 << 30, MaxBackupBytes: 1 << 20, MaxItemBytes: 1 << 20})
+	if err := repository.Delete(context.Background(), "any-manifest"); err == nil {
+		t.Fatal("expected delete to propagate the remove error")
+	}
+}
+
 func TestS3BackupRepositoryUsesPathPrefix(t *testing.T) {
 	client := newFakeS3Client()
 	repository := testS3Repository(client, S3BackupRepositoryConfig{Bucket: "test-bucket", PathPrefix: "rsdw-backups", MaxRepositoryBytes: 1 << 30, MaxBackupBytes: 1 << 20, MaxItemBytes: 1 << 20})
