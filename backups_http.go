@@ -171,6 +171,24 @@ func (a *App) handleBackups(w http.ResponseWriter, r *http.Request) {
 		a.createServerFromBackup(w, r, parts[0])
 		return
 	}
+	if len(parts) == 1 && parts[0] == "backends" {
+		switch r.Method {
+		case http.MethodPost:
+			a.addStorageBackendHTTP(w, r)
+		default:
+			methodNotAllowed(w, "POST")
+		}
+		return
+	}
+	if len(parts) == 2 && parts[0] == "backends" {
+		switch r.Method {
+		case http.MethodDelete:
+			a.removeStorageBackendHTTP(w, r, parts[1])
+		default:
+			methodNotAllowed(w, "DELETE")
+		}
+		return
+	}
 	writeError(w, http.StatusNotFound, "backup route not found")
 }
 
@@ -193,6 +211,22 @@ func (a *App) listBackups(w http.ResponseWriter, r *http.Request) {
 		storageError = storageErr.Error()
 	}
 	backend := NewLocalStorageBackend(status)
+	storage := []StorageBackend{backend}
+	backendIDs := make([]string, 0, len(snapshot.StorageBackends))
+	for id := range snapshot.StorageBackends {
+		if id == backupLocalBackendID {
+			continue
+		}
+		backendIDs = append(backendIDs, id)
+	}
+	sort.Strings(backendIDs)
+	for _, id := range backendIDs {
+		record := snapshot.StorageBackends[id]
+		if _, connected := a.backups.repositories[id]; !connected {
+			record.Status = StorageBackendDisconnected
+		}
+		storage = append(storage, record)
+	}
 	profiles := make([]BackupDefinition, 0, len(snapshot.BackupDefinitions))
 	for _, definition := range snapshot.BackupDefinitions {
 		profiles = append(profiles, definition)
@@ -208,12 +242,20 @@ func (a *App) listBackups(w http.ResponseWriter, r *http.Request) {
 		"available":    storageErr == nil,
 		"storageError": storageError,
 		"demo":         a.demo,
-		"storage":      []StorageBackend{backend},
+		"storage":      storage,
 		"profiles":     profiles,
 		"schedules":    schedules,
 		"runs":         runs,
 		"limits":       map[string]any{"repositoryBytes": a.backupLimit(), "usedBytes": usedBytes, "maxItemBytes": a.backupItemLimit(), "maxBundleBytes": a.backupBundleLimit()},
 	})
+}
+
+func (a *App) storageBackendView(id string) StorageBackend {
+	backend := a.store.Snapshot().StorageBackends[id]
+	if _, connected := a.backups.repositories[id]; !connected {
+		backend.Status = StorageBackendDisconnected
+	}
+	return backend
 }
 
 func (a *App) backupLimit() int64 {
@@ -329,7 +371,10 @@ func (a *App) executeBackup(ctx context.Context, request backupRunRequest) (Back
 	if request.BackendID == "" {
 		request.BackendID = backupLocalBackendID
 	}
-	if request.BackendID != backupLocalBackendID || snapshot.StorageBackends[request.BackendID].Status != StorageBackendConnected {
+	if _, err := a.repositoryFor(request.BackendID); err != nil {
+		return BackupRun{}, errors.New("selected storage backend is unavailable")
+	}
+	if snapshot.StorageBackends[request.BackendID].Status != StorageBackendConnected {
 		return BackupRun{}, errors.New("selected storage backend is unavailable")
 	}
 	_, source, err := backupSourceForStatus(server.Status)
@@ -416,7 +461,11 @@ func (a *App) executeBackup(ctx context.Context, request backupRunRequest) (Back
 	if err := a.store.Update(func(state *State) error { run.UpdatedAt = a.backupNow(); updateBackupRun(state, run); return nil }); err != nil {
 		return setFailure(err)
 	}
-	publication, err := a.backups.repository.Publish(ctx, PublishBackupRequest{Idempotency: idempotency, Manifest: BackupManifestDraft{ID: run.ID, DefinitionID: definition.ID, DefinitionRevision: definition.Revision, ServerID: server.ID, ServerType: definition.ServerType, Source: source, CreatedAt: now}, Items: items})
+	repository, err := a.repositoryFor(run.BackendID)
+	if err != nil {
+		return setFailure(err)
+	}
+	publication, err := repository.Publish(ctx, PublishBackupRequest{Idempotency: idempotency, Manifest: BackupManifestDraft{ID: run.ID, DefinitionID: definition.ID, DefinitionRevision: definition.Revision, ServerID: server.ID, ServerType: definition.ServerType, Source: source, CreatedAt: now}, Items: items})
 	if err != nil {
 		return setFailure(err)
 	}
@@ -557,6 +606,52 @@ func (a *App) deleteBackupProfile(w http.ResponseWriter, _ *http.Request, id str
 		return nil
 	})
 	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusNoContent, nil)
+}
+
+type addStorageBackendRequest struct {
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Endpoint   string          `json:"endpoint"`
+	Bucket     string          `json:"bucket"`
+	Region     string          `json:"region,omitempty"`
+	PathPrefix string          `json:"pathPrefix,omitempty"`
+	UseSSL     bool            `json:"useSSL"`
+	SecretRef  SecretReference `json:"secretRef"`
+}
+
+func (a *App) addStorageBackendHTTP(w http.ResponseWriter, r *http.Request) {
+	var request addStorageBackendRequest
+	if err := decodeBackupJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	backend := StorageBackend{
+		ID:         request.ID,
+		Name:       request.Name,
+		Endpoint:   request.Endpoint,
+		Bucket:     request.Bucket,
+		Region:     request.Region,
+		PathPrefix: request.PathPrefix,
+		UseSSL:     request.UseSSL,
+		SecretRef:  request.SecretRef,
+	}
+	if err := a.addS3StorageBackend(r.Context(), backend); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, a.storageBackendView(backend.ID))
+}
+
+func (a *App) removeStorageBackendHTTP(w http.ResponseWriter, _ *http.Request, id string) {
+	if err := a.removeStorageBackend(id); err != nil {
 		status := http.StatusConflict
 		if strings.Contains(err.Error(), "not found") {
 			status = http.StatusNotFound
@@ -806,7 +901,16 @@ func (a *App) downloadBackupBundle(w http.ResponseWriter, r *http.Request, id st
 		writeError(w, http.StatusNotFound, "completed backup bundle not found")
 		return
 	}
-	reader, err := a.backups.repository.OpenBundle(r.Context(), run.Bundle.Key)
+	backendID := run.BackendID
+	if backendID == "" {
+		backendID = backupLocalBackendID
+	}
+	repository, err := a.repositoryFor(backendID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "backup bundle is unavailable")
+		return
+	}
+	reader, err := repository.OpenBundle(r.Context(), run.Bundle.Key)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "backup bundle is unavailable")
 		return

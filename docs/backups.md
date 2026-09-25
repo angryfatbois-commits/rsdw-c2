@@ -1,8 +1,45 @@
 # Backups
 
-RSDW C2 stores immutable backup bundles separately from each game server's world PVC and from `state.json`. The v1 backend is a local filesystem mounted at `/var/lib/rsdw-c2/backups` on a dedicated C2 persistent volume. The Helm chart exposes this as `backups.persistence`; disabling C2 persistence also disables backups.
+RSDW C2 stores immutable backup bundles separately from each game server's world PVC and from `state.json`. Two storage backends are available: a local filesystem backend mounted at `/var/lib/rsdw-c2/backups` on a dedicated C2 persistent volume, and an S3-compatible remote backend for off-VPS durability. The Helm chart exposes local storage as `backups.persistence`; disabling C2 persistence also disables the local backend. Local remains the default and cannot be removed; adding an S3 backend is optional and additive.
 
-S3-compatible services and network file shares are future storage backends. A Kubernetes PVC backed by NFS can use the current filesystem backend without adding an S3-specific implementation.
+## S3-compatible remote storage
+
+Connect an S3-compatible bucket (Backblaze B2, Wasabi, DigitalOcean Spaces, MinIO, AWS S3, or any S3-compatible API) as an additional backup destination from the Backups → Storage settings page. C2 never receives or stores raw credentials in `state.json`; it only stores the name of a Kubernetes Secret you create yourself, matching how Discord webhook tokens are handled.
+
+**Before connecting a backend**, create a Secret in the `rsdw-system` namespace (or your configured `RSDW_NAMESPACE`) with two fixed keys:
+
+```sh
+kubectl create secret generic rsdw-s3-offsite \
+  --namespace rsdw-system \
+  --from-literal=accessKeyId="$S3_ACCESS_KEY_ID" \
+  --from-literal=secretAccessKey="$S3_SECRET_ACCESS_KEY"
+```
+
+Then, in the dashboard, click **Add storage** and provide:
+
+| Field | Meaning |
+| --- | --- |
+| Display name | Shown on the storage card; also used to derive the backend's internal id |
+| Endpoint | Host and optional port, no scheme (for example `s3.us-west-002.backblazeb2.com`) |
+| Bucket | The bucket name; must already exist |
+| Region | Optional; some S3-compatible services ignore it |
+| Path prefix | Optional key prefix inside the bucket (for example `rsdw-backups/`) |
+| Use SSL | Enabled by default |
+| Secret name | The name of the Secret created above |
+
+C2 test-connects the bucket (bucket existence and a write/delete probe) before persisting the backend record, so a misconfigured endpoint, bucket, or Secret surfaces immediately as a form error rather than at the next scheduled run.
+
+Once connected, the backend appears as a destination option on the backup run form and on schedule forms, alongside Local. Existing runs and schedules keep referencing whichever backend they were created against; nothing migrates automatically between backends.
+
+**Storage model.** Bundle assembly (zipping the manifest and captured items) always happens on local disk first, exactly as it does for the Local backend; only the finished `bundle.zip` and its `publication.json` record are uploaded, as two objects, to `<prefix>objects/<manifestID>/`. There is no multipart upload path: uploads are single `PutObject` calls, which comfortably covers the default 256 MiB bundle limit. The same `RSDW_BACKUP_MAX_REPOSITORY_BYTES`, `RSDW_BACKUP_MAX_ITEM_BYTES`, and `RSDW_BACKUP_MAX_BUNDLE_BYTES` limits documented below apply per S3 backend as well as to Local.
+
+**Crash recovery.** Local storage reconciles interrupted captures and staged-but-unpublished bundles on every C2 restart. S3 does not: an interrupted upload can leave an orphan `bundle.zip` without a matching `publication.json`, or vice versa. C2's recovery pass silently skips incomplete pairs on an S3 backend rather than failing the whole recovery; a retried backup run with the same idempotency key detects and safely completes over the orphaned pair. This is a deliberate v1 tradeoff to avoid adding S3-specific locking; it does not affect data integrity of already-completed bundles.
+
+**Removing a backend.** Removing an S3 backend from the dashboard stops C2 from publishing new backups to it; already-published bundles remain in the bucket untouched. Removal is rejected while any enabled schedule still targets that backend — disable or reassign the schedule first. The Local backend cannot be removed.
+
+**Reconnection after restart.** On every C2 restart, each persisted S3 backend's Secret is re-resolved and its connectivity re-verified. If the Secret has been deleted or rotated incompatibly, the backend is marked disconnected in the dashboard rather than crashing C2 startup; reconnect by re-adding the backend once the Secret is restored.
+
+A Kubernetes PVC backed by NFS can also use the local filesystem backend directly without needing an S3-specific setup, if network file shares are preferred over an S3-compatible API.
 
 ## Profiles and manifests
 

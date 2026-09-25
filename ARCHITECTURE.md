@@ -45,6 +45,8 @@ ServerSpec {
 
 `Orchestrator` owns Helm and `kubectl` execution. The demo implementation updates the local state without starting a cluster process. The Kubernetes implementation creates the namespace and API token Secret, then runs `helm upgrade --install` with the chart values required by `rsdragonwilds-helm`. Refresh reads Deployment readiness and image state, then queries the game container's authenticated `/api/health` and `/api/players` endpoints for live readiness, uptime, and player count. Resource metrics remain unavailable until a Kubernetes metrics source is connected.
 
+`BackupRepository` is a pluggable backend interface (`Publish`, `Recover`, `OpenBundle`, `Usage`) with two implementations behind a registry keyed by `BackendID`: `LocalBackupRepository` (filesystem, always present, non-removable) and `S3BackupRepository` (S3-compatible bucket, optional, added and removed at runtime from the dashboard). Both share the same bundle-assembly and byte-quota logic; the S3 backend stages bundles on local disk exactly like the local backend, then uploads the finished bundle and its publication record as two objects. S3 backend credentials are resolved from a Kubernetes Secret at connect time and on every restart, the same pattern `discordToken` uses for Discord webhook secrets — raw credentials are never persisted in `state.json`.
+
 The HTTP handlers parse requests, call a domain operation, and encode JSON or the embedded web files. They do not contain Helm argument rules or UI-specific state.
 
 ## API contract

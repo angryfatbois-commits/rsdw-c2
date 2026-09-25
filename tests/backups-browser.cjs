@@ -213,6 +213,23 @@ async function run() {
   assert.equal(exportedImport.status, 409, JSON.stringify(exportedImport.data));
   await page.getByRole('link', {name:'Storage'}).click();
   await page.getByTestId('storage-card-local').waitFor();
+  assert.equal(await page.getByTestId('delete-storage-backend-local').count(), 0);
+  await page.getByTestId('add-storage-backend').click();
+  await page.getByTestId('storage-backend-name').fill('Offsite mirror');
+  await page.getByTestId('storage-backend-endpoint').fill('s3.example.com');
+  await page.getByTestId('storage-backend-bucket').fill('rsdw-backups');
+  await page.getByTestId('storage-backend-secret-name').fill('rsdw-s3-offsite');
+  await shot('07a-add-storage-backend-form.png');
+  // Demo mode has no Kubernetes Secret access, so adding an S3 backend must
+  // fail cleanly with a clear message rather than silently succeeding.
+  const backendResponse = page.waitForResponse((response) => response.url() === base + '/api/backups/backends' && response.request().method() === 'POST');
+  await page.getByTestId('confirm-modal').click();
+  const backendResult = await backendResponse;
+  assert.equal(backendResult.status(), 400, await backendResult.text());
+  await page.locator('#modal-error').waitFor({state:'visible'});
+  assert.match(await page.locator('#modal-error').innerText(), /demo mode/i);
+  await shot('07b-add-storage-backend-demo-error.png');
+  await page.getByTestId('cancel-modal').click();
   await shot('07-backup-settings.png');
 
   await page.goto(base + '/#backups/schedules');

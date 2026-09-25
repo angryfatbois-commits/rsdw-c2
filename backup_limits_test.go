@@ -27,11 +27,11 @@ func TestBackupListingUsesOneStorageHealthResult(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		t.Run(fmt.Sprint(unavailable), func(t *testing.T) {
 			app := backupTestApp(t)
-			repository := &listingBackupRepository{BackupRepository: app.backups.repository}
+			repository := &listingBackupRepository{BackupRepository: app.backups.repositories[backupLocalBackendID]}
 			if unavailable {
 				repository.err = errors.New("storage offline")
 			}
-			app.backups.repository = repository
+			app.backups.repositories[backupLocalBackendID] = repository
 			response := backupJSONRequest(t, app, http.MethodGet, "/api/backups", nil)
 			if response.Code != http.StatusOK {
 				t.Fatalf("listing = %d: %s", response.Code, response.Body.String())
@@ -143,7 +143,7 @@ func TestBackupStorageDetectsLostOrCorruptRepository(t *testing.T) {
 				t.Skip("root bypasses directory permissions")
 			}
 			repository := testRepository(t, LocalBackupRepositoryConfig{Root: filepath.Join(t.TempDir(), "backups")})
-			app := &App{backups: &backupController{available: true, repository: repository, local: repository, root: repository.root}}
+			app := &App{backups: &backupController{available: true, repositories: map[string]BackupRepository{backupLocalBackendID: repository}, local: repository, root: repository.root}}
 			if !app.backupAvailable() {
 				t.Fatal("healthy repository unavailable")
 			}
@@ -217,7 +217,7 @@ func TestBackupUsageChecksMetadataAndSizeWhileRecoveryChecksIntegrity(t *testing
 			} else if usageErr == nil {
 				t.Fatal("damaged metadata or bundle size accepted")
 			}
-			app := &App{backups: &backupController{available: true, repository: repository}}
+			app := &App{backups: &backupController{available: true, repositories: map[string]BackupRepository{backupLocalBackendID: repository}, local: repository}}
 			if (app.backupBackend().Status == StorageBackendConnected) != available {
 				t.Fatal("backend status disagrees with metadata and size health")
 			}

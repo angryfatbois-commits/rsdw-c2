@@ -425,17 +425,24 @@ func (repository *LocalBackupRepository) createStage(ctx context.Context, reques
 }
 
 func (repository *LocalBackupRepository) writePayload(ctx context.Context, destination string, source io.Reader, existingSize int64) (int64, string, error) {
+	return writeBackupPayload(ctx, destination, source, existingSize, repository.maxItemBytes, repository.maxBackupBytes)
+}
+
+// writeBackupPayload streams source into destination while hashing it,
+// enforcing per-item and per-backup byte limits. Shared by the local
+// filesystem and S3 backup repositories so both stage payloads identically.
+func writeBackupPayload(ctx context.Context, destination string, source io.Reader, existingSize, maxItemBytes, maxBackupBytes int64) (int64, string, error) {
 	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return 0, "", err
 	}
 	hash := sha256.New()
 	reader := io.Reader(&contextReader{ctx: ctx, reader: source})
-	if repository.maxItemBytes > 0 && repository.maxItemBytes < int64(^uint64(0)>>1) {
-		reader = io.LimitReader(reader, repository.maxItemBytes+1)
+	if maxItemBytes > 0 && maxItemBytes < int64(^uint64(0)>>1) {
+		reader = io.LimitReader(reader, maxItemBytes+1)
 	}
-	if repository.maxBackupBytes > 0 {
-		remaining := repository.maxBackupBytes - existingSize
+	if maxBackupBytes > 0 {
+		remaining := maxBackupBytes - existingSize
 		if remaining < 0 {
 			remaining = 0
 		}
@@ -455,11 +462,11 @@ func (repository *LocalBackupRepository) writePayload(ctx context.Context, desti
 	if closeErr != nil {
 		return 0, "", closeErr
 	}
-	if repository.maxItemBytes > 0 && size > repository.maxItemBytes {
-		return 0, "", fmt.Errorf("%w: item exceeds the limit of %d bytes", ErrBackupQuotaExceeded, repository.maxItemBytes)
+	if maxItemBytes > 0 && size > maxItemBytes {
+		return 0, "", fmt.Errorf("%w: item exceeds the limit of %d bytes", ErrBackupQuotaExceeded, maxItemBytes)
 	}
-	if repository.maxBackupBytes > 0 && existingSize+size > repository.maxBackupBytes {
-		return 0, "", fmt.Errorf("%w: item contents exceed the per-backup limit of %d bytes", ErrBackupQuotaExceeded, repository.maxBackupBytes)
+	if maxBackupBytes > 0 && existingSize+size > maxBackupBytes {
+		return 0, "", fmt.Errorf("%w: item contents exceed the per-backup limit of %d bytes", ErrBackupQuotaExceeded, maxBackupBytes)
 	}
 	return size, hex.EncodeToString(hash.Sum(nil)), nil
 }

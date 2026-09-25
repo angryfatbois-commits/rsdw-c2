@@ -1719,6 +1719,9 @@ func main() {
 	if err := app.recoverBackupRepository(context.Background()); err != nil {
 		log.Printf("backup repository recovery: %v", err)
 	}
+	if err := app.reconcileS3Backends(context.Background()); err != nil {
+		log.Printf("S3 backend reconciliation: %v", err)
+	}
 	go app.runSeedCleanup(context.Background())
 	go app.runCollector(context.Background(), 15*time.Second)
 	go app.runRebootScheduler(context.Background())

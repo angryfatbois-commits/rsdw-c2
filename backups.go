@@ -264,7 +264,10 @@ type BackupSchedule struct {
 
 type StorageBackendKind string
 
-const StorageBackendLocal StorageBackendKind = "local"
+const (
+	StorageBackendLocal StorageBackendKind = "local"
+	StorageBackendS3    StorageBackendKind = "s3"
+)
 
 type StorageBackendStatus string
 
@@ -274,11 +277,17 @@ const (
 )
 
 type StorageBackend struct {
-	ID        string               `json:"id"`
-	Name      string               `json:"name"`
-	Kind      StorageBackendKind   `json:"kind"`
-	Status    StorageBackendStatus `json:"status"`
-	Removable bool                 `json:"removable"`
+	ID         string               `json:"id"`
+	Name       string               `json:"name"`
+	Kind       StorageBackendKind   `json:"kind"`
+	Status     StorageBackendStatus `json:"status"`
+	Removable  bool                 `json:"removable"`
+	Endpoint   string               `json:"endpoint,omitempty"`
+	Bucket     string               `json:"bucket,omitempty"`
+	Region     string               `json:"region,omitempty"`
+	PathPrefix string               `json:"pathPrefix,omitempty"`
+	UseSSL     bool                 `json:"useSSL,omitempty"`
+	SecretRef  SecretReference      `json:"secretRef,omitempty"`
 }
 
 func NewLocalStorageBackend(status StorageBackendStatus) StorageBackend {
@@ -292,14 +301,38 @@ func (backend StorageBackend) Validate() error {
 	if err := validateDisplayValue("backend name", backend.Name); err != nil {
 		return err
 	}
-	if backend.Kind != StorageBackendLocal {
-		return fmt.Errorf("unsupported storage backend kind %q", backend.Kind)
-	}
 	if backend.Status != StorageBackendConnected && backend.Status != StorageBackendDisconnected {
 		return fmt.Errorf("unsupported storage backend status %q", backend.Status)
 	}
-	if backend.Removable {
-		return errors.New("the local storage backend cannot be removable")
+	switch backend.Kind {
+	case StorageBackendLocal:
+		if backend.Removable {
+			return errors.New("the local storage backend cannot be removable")
+		}
+	case StorageBackendS3:
+		if !backend.Removable {
+			return errors.New("an S3 storage backend must be removable")
+		}
+		if len(backend.Endpoint) == 0 || len(backend.Endpoint) > 253 {
+			return errors.New("S3 backend endpoint must contain 1 to 253 characters")
+		}
+		if strings.ContainsAny(backend.Endpoint, " \t\r\n\x00") {
+			return errors.New("S3 backend endpoint must not contain whitespace")
+		}
+		if len(backend.Bucket) == 0 || len(backend.Bucket) > 253 {
+			return errors.New("S3 backend bucket must contain 1 to 253 characters")
+		}
+		if len(backend.Region) > 64 {
+			return errors.New("S3 backend region must be 64 characters or fewer")
+		}
+		if len(backend.PathPrefix) > 253 {
+			return errors.New("S3 backend path prefix must be 253 characters or fewer")
+		}
+		if len(backend.SecretRef.Name) > 253 || !secretNamePattern.MatchString(backend.SecretRef.Name) {
+			return errors.New("S3 backend secretRef must contain a Kubernetes Secret name, never a credential")
+		}
+	default:
+		return fmt.Errorf("unsupported storage backend kind %q", backend.Kind)
 	}
 	return nil
 }

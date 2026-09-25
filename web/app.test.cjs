@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(`${__dirname}/app.js`, 'utf8');
 const context = vm.createContext({FormData});
-vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, dashboardModel, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS};', context);
+vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, telemetry, eventsPage, maintenance, dashboard, dashboardModel, metricValue, telemetryRows, usersPage, handleChange, openModal, submitModal, integrationsPage, integrationForm, editSettingsValues, editSettingsPatch, rebootsPage, rebootForm, zonedDate, PATTERN, eventTable, discordConnectionStatus, parseLocationHash, deliveryServerLabel, adminIdsFields, adminIdsFromForm, parseAdminIds, createSettingsFromForm, serviceTypeField, beginDeployWatch, deployProgress, rememberCreatedServer, createdServerFromResponse, deployProgressPanel, DEPLOY_WATCH_TIMEOUT_MS, backupStorageSection, storageBackendForm};', context);
 const {state, telemetry, eventsPage, maintenance} = context.ui;
 state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:true, reboots:true, create:true, restart:true, stop:true, start:true, update:true, logs:true, updateCheck:true};
 
@@ -569,7 +569,7 @@ test('connected players show labeled escaped fields, preserve duplicates, and di
 function refreshFixture(admin = false, extraCapabilities = {}) {
   const elements = new Map();
   const element = (selector) => {
-    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, open:false, close(){this.open=false;}, setAttribute(){}, insertAdjacentHTML(){}, classList:{remove(){}, toggle(){}}});
+    if (!elements.has(selector)) elements.set(selector, {innerHTML:'', textContent:'', value:'', hidden:false, disabled:false, open:false, close(){this.open=false;}, showModal(){this.open=true;}, setAttribute(){}, insertAdjacentHTML(){}, focus(){}, querySelectorAll:()=>[], classList:{remove(){}, toggle(){}, add(){}, contains:()=>false}});
     return elements.get(selector);
   };
   const requests = [];
@@ -578,7 +578,7 @@ function refreshFixture(admin = false, extraCapabilities = {}) {
   const clock = {now:Date.now()};
   let monotonicNow = clock.now;
   const sandbox = vm.createContext({
-    DOMException, AbortController, URLSearchParams, HTMLInputElement:class {},
+    DOMException, AbortController, URLSearchParams, HTMLInputElement:class {}, FormData,
     Date:class extends Date {static now(){return clock.now;}},
     performance:{now:()=>monotonicNow},
     clearTimeout:(id)=>timers.delete(id), setTimeout:(fn,delay)=>{timers.set(++timerID,{fn,delay});return timerID;},
@@ -588,7 +588,7 @@ function refreshFixture(admin = false, extraCapabilities = {}) {
     fetch:(path,options)=>new Promise((resolve,reject)=>requests.push({path,options,resolve,reject})),
   });
   sandbox.history = {replaceState(_state, _title, hash){sandbox.location.hash = hash;}};
-  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, dashboardModel, selectTelemetry, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, dashboardModel, selectTelemetry, parseLocationHash, selectedServer, applyRouteScope, openModal, submitModal, backupStorageSection, storageBackendForm};', sandbox);
   const ui = sandbox.ui;
   const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin,...extraCapabilities}};
   ui.applyAuth(auth);
@@ -1215,4 +1215,60 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   state.dashboardView = 'rows';
   html = context.ui.dashboard();
   assert.doesNotMatch(html,/10\.20|&lt;host|Next reboot|console-badge update|data-action="(?:start|stop|restart)"/);
+});
+
+test('backup storage section renders local and S3 backends with correct affordances', () => {
+  state.backupStorage = [
+    {id:'local', name:'Local', kind:'local', status:'connected', removable:false},
+    {id:'offsite', name:'Offsite <B2>', kind:'s3', status:'connected', removable:true, endpoint:'s3.us-west.example.com', bucket:'rsdw-backups'},
+    {id:'stale', name:'Stale mirror', kind:'s3', status:'disconnected', removable:true, endpoint:'s3.stale.example.com', bucket:'old-bucket'},
+  ];
+  state.backupLimits = {usedBytes:1024, repositoryBytes:4096};
+  const compact = context.ui.backupStorageSection(true);
+  assert.doesNotMatch(compact, /data-testid="add-storage-backend"/);
+  assert.doesNotMatch(compact, /data-testid="delete-storage-backend-local"/);
+  const full = context.ui.backupStorageSection(false);
+  assert.match(full, /data-testid="add-storage-backend"/);
+  assert.match(full, /data-testid="storage-card-local"/);
+  assert.match(full, /data-testid="storage-card-offsite"/);
+  assert.match(full, /Offsite &lt;B2&gt;/);
+  assert.doesNotMatch(full, /<B2>/);
+  assert.match(full, /s3\.us-west\.example\.com/);
+  assert.match(full, /rsdw-backups/);
+  assert.doesNotMatch(full, /data-testid="delete-storage-backend-local"/);
+  assert.match(full, /data-testid="delete-storage-backend-offsite"/);
+  assert.match(full, /data-testid="delete-storage-backend-stale"/);
+  assert.match(full, /status-pill disconnected/);
+  state.backupStorage = [];
+});
+
+test('storage backend form asks for endpoint, bucket, and a Secret name with fixed key convention', () => {
+  const form = context.ui.storageBackendForm();
+  assert.match(form, /data-testid="storage-backend-name"/);
+  assert.match(form, /data-testid="storage-backend-endpoint"/);
+  assert.match(form, /data-testid="storage-backend-bucket"/);
+  assert.match(form, /data-testid="storage-backend-secret-name"/);
+  assert.match(form, /accessKeyId/);
+  assert.match(form, /secretAccessKey/);
+  assert.doesNotMatch(form, /data-testid="storage-backend-secret-key"/);
+});
+
+test('opening add-storage-backend shows the connection form and delete-storage-backend shows a scoped confirmation', () => {
+  const f = refreshFixture(true, {backups:true});
+  f.ui.state.backupStorage = [
+    {id:'local', name:'Local', kind:'local', status:'connected', removable:false},
+    {id:'offsite', name:'Offsite', kind:'s3', status:'connected', removable:true},
+  ];
+  f.ui.openModal('add-storage-backend');
+  assert.equal(f.element('#modal-title').textContent, 'Add storage');
+  assert.match(f.element('#modal-body').innerHTML, /data-testid="storage-backend-endpoint"/);
+  assert.equal(f.ui.state.modalStorageBackendId, '');
+
+  f.ui.openModal('delete-storage-backend', 'offsite');
+  assert.equal(f.element('#modal-title').textContent, 'Remove storage backend?');
+  assert.match(f.element('#modal-body').innerHTML, /Offsite/);
+  assert.match(f.element('#modal-body').innerHTML, /data-testid="delete-storage-backend-confirm"/);
+  assert.equal(f.ui.state.modalStorageBackendId, 'offsite');
+
+  assert.throws(() => f.ui.openModal('delete-storage-backend', 'missing-backend'), /no longer exists/);
 });
