@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,14 +28,14 @@ const (
 )
 
 type backupController struct {
-	repository BackupRepository
-	local      *LocalBackupRepository
-	available  bool
-	demo       bool
-	root       string
-	maxBytes   int64
-	maxItem    int64
-	maxBundle  int64
+	repositories map[string]BackupRepository
+	local        *LocalBackupRepository
+	available    bool
+	demo         bool
+	root         string
+	maxBytes     int64
+	maxItem      int64
+	maxBundle    int64
 }
 
 func (s *State) initBackups() {
@@ -80,7 +81,7 @@ func BuiltinDragonwildsDefinition() BackupDefinition {
 }
 
 func newBackupController(store *Store, demo bool) (*backupController, error) {
-	controller := &backupController{demo: demo, maxBytes: backupDefaultMaxBytes, maxItem: backupDefaultItemSize, maxBundle: backupDefaultBundleSize}
+	controller := &backupController{demo: demo, maxBytes: backupDefaultMaxBytes, maxItem: backupDefaultItemSize, maxBundle: backupDefaultBundleSize, repositories: map[string]BackupRepository{}}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("RSDW_BACKUPS_ENABLED")), "false") {
 		return controller, nil
 	}
@@ -112,7 +113,8 @@ func newBackupController(store *Store, demo bool) (*backupController, error) {
 	if err != nil {
 		return nil, err
 	}
-	controller.local, controller.repository, controller.available = repository, repository, true
+	controller.local, controller.available = repository, true
+	controller.repositories[backupLocalBackendID] = repository
 	return controller, nil
 }
 
@@ -137,10 +139,26 @@ func (a *App) backupAvailable() bool {
 }
 
 func (a *App) backupStorageUsage(ctx context.Context) (int64, error) {
-	if a == nil || a.backups == nil || !a.backups.available || a.backups.repository == nil {
-		return 0, errors.New("backup storage is unavailable")
+	return a.backupStorageUsageFor(ctx, backupLocalBackendID)
+}
+
+func (a *App) backupStorageUsageFor(ctx context.Context, backendID string) (int64, error) {
+	repository, err := a.repositoryFor(backendID)
+	if err != nil {
+		return 0, err
 	}
-	return a.backups.repository.Usage(ctx)
+	return repository.Usage(ctx)
+}
+
+func (a *App) repositoryFor(backendID string) (BackupRepository, error) {
+	if a == nil || a.backups == nil || !a.backups.available {
+		return nil, errors.New("backup storage is unavailable")
+	}
+	repository, ok := a.backups.repositories[backendID]
+	if !ok {
+		return nil, fmt.Errorf("storage backend %q is not connected", backendID)
+	}
+	return repository, nil
 }
 
 func (a *App) backupBundleLimit() int64 {
@@ -163,6 +181,153 @@ func (a *App) updateBackupBackend() error {
 	return a.store.Update(func(state *State) error {
 		state.initBackups()
 		state.StorageBackends[backupLocalBackendID] = backend
+		return nil
+	})
+}
+
+func (a *App) s3Credentials(ctx context.Context, ref SecretReference) (accessKeyID, secretAccessKey string, err error) {
+	if a.demo {
+		return "", "", errors.New("S3 backends require Kubernetes Secret access; unavailable in demo mode")
+	}
+	k, ok := a.orchestrator.(*kubeOrchestrator)
+	if !ok {
+		return "", "", errors.New("S3 backends require Kubernetes Secret access")
+	}
+	return k.s3Credentials(ctx, ref)
+}
+
+func (a *App) buildS3Repository(ctx context.Context, backend StorageBackend) (*S3BackupRepository, error) {
+	accessKeyID, secretAccessKey, err := a.s3Credentials(ctx, backend.SecretRef)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := NewS3BackupRepository(S3BackupRepositoryConfig{
+		Endpoint:           backend.Endpoint,
+		AccessKeyID:        accessKeyID,
+		SecretAccessKey:    secretAccessKey,
+		Bucket:             backend.Bucket,
+		Region:             backend.Region,
+		PathPrefix:         backend.PathPrefix,
+		UseSSL:             backend.UseSSL,
+		MaxRepositoryBytes: a.backupLimit(),
+		MaxBackupBytes:     a.backupBundleLimit(),
+		MaxItemBytes:       a.backupItemLimit(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return repository, nil
+}
+
+// addS3StorageBackend validates and test-connects an S3 backend before
+// persisting it, so misconfiguration surfaces immediately in the UI instead
+// of at the next scheduled backup.
+func (a *App) addS3StorageBackend(ctx context.Context, backend StorageBackend) error {
+	backend.Kind = StorageBackendS3
+	backend.Removable = true
+	backend.Status = StorageBackendConnected
+	if err := backend.Validate(); err != nil {
+		return err
+	}
+	if a.backups == nil || !a.backups.available {
+		return errors.New("backup storage is unavailable")
+	}
+	if _, exists := a.backups.repositories[backend.ID]; exists {
+		return errors.New("a storage backend with this id already exists")
+	}
+	repository, err := a.buildS3Repository(ctx, backend)
+	if err != nil {
+		return fmt.Errorf("connect S3 backend: %w", err)
+	}
+	if _, err := repository.Usage(ctx); err != nil {
+		return fmt.Errorf("S3 backend is unreachable: %w", err)
+	}
+	if err := a.store.Update(func(state *State) error {
+		state.initBackups()
+		if _, exists := state.StorageBackends[backend.ID]; exists {
+			return errors.New("a storage backend with this id already exists")
+		}
+		state.StorageBackends[backend.ID] = backend
+		return nil
+	}); err != nil {
+		return err
+	}
+	a.backups.repositories[backend.ID] = repository
+	return nil
+}
+
+// removeStorageBackend disconnects a non-local backend. Already-published
+// bundles remain in the bucket; C2 simply stops referencing the backend for
+// new runs. Removal is rejected while an enabled schedule still targets it.
+func (a *App) removeStorageBackend(backendID string) error {
+	if backendID == backupLocalBackendID {
+		return errors.New("the local storage backend cannot be removed")
+	}
+	err := a.store.Update(func(state *State) error {
+		backend, ok := state.StorageBackends[backendID]
+		if !ok {
+			return errors.New("storage backend not found")
+		}
+		if !backend.CanRemove() {
+			return errors.New("this storage backend cannot be removed")
+		}
+		for _, schedule := range state.BackupSchedules {
+			if schedule.Enabled && schedule.BackendID == backendID {
+				return errors.New("storage backend is used by an enabled schedule; disable or reassign it first")
+			}
+		}
+		delete(state.StorageBackends, backendID)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if a.backups != nil {
+		delete(a.backups.repositories, backendID)
+	}
+	return nil
+}
+
+// reconcileS3Backends reconstructs live S3 repository instances for every
+// persisted S3 StorageBackend by re-resolving its Secret. A backend whose
+// Secret can no longer be read is marked disconnected in the persisted
+// state rather than failing startup, matching the resilience of the rest
+// of the app.
+func (a *App) reconcileS3Backends(ctx context.Context) error {
+	if a.backups == nil || !a.backups.available {
+		return nil
+	}
+	snapshot := a.store.Snapshot()
+	disconnected := map[string]bool{}
+	for id, backend := range snapshot.StorageBackends {
+		if backend.Kind != StorageBackendS3 {
+			continue
+		}
+		repository, err := a.buildS3Repository(ctx, backend)
+		if err != nil {
+			disconnected[id] = true
+			log.Printf("reconcile S3 backend %q: %v", id, err)
+			continue
+		}
+		if _, err := repository.Usage(ctx); err != nil {
+			disconnected[id] = true
+			log.Printf("reconcile S3 backend %q: %v", id, err)
+			continue
+		}
+		a.backups.repositories[id] = repository
+	}
+	if len(disconnected) == 0 {
+		return nil
+	}
+	return a.store.Update(func(state *State) error {
+		for id := range disconnected {
+			backend, ok := state.StorageBackends[id]
+			if !ok {
+				continue
+			}
+			backend.Status = StorageBackendDisconnected
+			state.StorageBackends[id] = backend
+		}
 		return nil
 	})
 }
@@ -541,7 +706,7 @@ func (a *App) runDueBackups(ctx context.Context) {
 }
 
 func (a *App) recoverBackupRepository(ctx context.Context) error {
-	if a.backups == nil || !a.backups.available || a.backups.repository == nil {
+	if a.backups == nil || !a.backups.available || a.backups.local == nil {
 		return nil
 	}
 	if a.backups.root != "" {
@@ -560,7 +725,7 @@ func (a *App) recoverBackupRepository(ctx context.Context) error {
 			}
 		}
 	}
-	publications, err := a.backups.repository.Recover(ctx)
+	publications, err := a.backups.local.Recover(ctx)
 	if err != nil {
 		return err
 	}

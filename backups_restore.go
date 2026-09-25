@@ -46,7 +46,15 @@ func (a *App) backupRestoreFiles(ctx context.Context, manifestID string) (files 
 	if run.Bundle.Key == "" {
 		return nil, errors.New("completed backup bundle not found")
 	}
-	reader, err := a.backups.repository.OpenBundle(ctx, run.Bundle.Key)
+	backendID := run.BackendID
+	if backendID == "" {
+		backendID = backupLocalBackendID
+	}
+	repository, err := a.repositoryFor(backendID)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := repository.OpenBundle(ctx, run.Bundle.Key)
 	if err != nil {
 		return nil, err
 	}

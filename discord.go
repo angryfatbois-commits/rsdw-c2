@@ -37,6 +37,31 @@ func (k *kubeOrchestrator) discordToken(ctx context.Context, ref SecretReference
 	return token, nil
 }
 
+func (k *kubeOrchestrator) s3Credentials(ctx context.Context, ref SecretReference) (accessKeyID, secretAccessKey string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	namespace := envOr("RSDW_NAMESPACE", "rsdw-system")
+	data, err := k.runner.Run(ctx, k.kubectl, "-n", namespace, "get", "secret", ref.Name, "-o", "json")
+	if err != nil {
+		return "", "", errors.New("S3 Secret could not be read")
+	}
+	var secret struct {
+		Data map[string][]byte `json:"data"`
+	}
+	if json.Unmarshal(data, &secret) != nil {
+		return "", "", errors.New("S3 Secret is invalid")
+	}
+	valid := func(value []byte) bool {
+		return len(value) > 0 && len(value) <= 4096 && !strings.ContainsAny(string(value), " \t\r\n\x00")
+	}
+	accessKeyID = string(secret.Data["accessKeyId"])
+	secretAccessKey = string(secret.Data["secretAccessKey"])
+	if !valid(secret.Data["accessKeyId"]) || !valid(secret.Data["secretAccessKey"]) {
+		return "", "", errors.New("S3 Secret must contain accessKeyId and secretAccessKey keys")
+	}
+	return accessKeyID, secretAccessKey, nil
+}
+
 type discordResult struct {
 	status DeliveryStatus
 	reason string

@@ -25,6 +25,7 @@ const optionalProfile = {...multiProfile,id:'multi-optional',name:'Optional sett
 profiles.push(multiProfile,optionalProfile);
 const runs = [{id:'done',manifestId:'done',serverId:'stopped',serverName:'Ember Hollow',definitionId:'dragonwilds-world-save',profileName:'World save',status:'succeeded',source:'stopped-sav',sourceLabel:'Stopped .sav',createdAt:'2026-09-20T12:00:00Z',items:[captured],itemCount:1,bundleSize:100}, {id:'failed',serverId:'live',serverName:'Aurora Expanse',definitionId:'dragonwilds-world-save',profileName:'World save',status:'failed',error:'Expected .sav.backup is missing',sourceLabel:'Running .sav.backup',createdAt:'2026-09-20T13:00:00Z'}];
 let schedules = [{id:'daily',serverId:'stopped',definitionId:'stopped-only',backendId:'local',enabled:true,mode:'daily',dailyTimes:['02:00','14:30'],timezone:'Asia/Tokyo',timing:'Daily 02:00, 14:30',nextRun:'2026-09-21T12:00:00Z',lastResult:'succeeded'}, {id:'hourly',serverId:'live',definitionId:'dragonwilds-world-save',backendId:'local',enabled:true,mode:'interval',intervalValue:12,intervalUnit:'hours',timezone:'UTC',timing:'Every 12 hours'}];
+let backends = [];
 let requests = [], restoreAttempts = [], viewer = false, rejectRestore = true;
 let healthFixture;
 let browser, page;
@@ -41,7 +42,7 @@ async function main() {
     if (url === '/api/auth') return reply({mode:'token',authenticated:true,required:false,subject:viewer?'viewer':'admin',role:viewer?'viewer':'admin',capabilities:viewer?{telemetry:true}:{backups:true,maintenance:true,telemetry:true,create:true}});
     if (url === '/api/bootstrap') return reply({servers,mode:'demo',cluster:'UI contract fixture'});
     if (url === '/api/users') return reply({users:[]});
-    if (url === '/api/backups' && method === 'GET') return reply({runs,profiles,schedules,available:true,limits:{usedBytes:100,repositoryBytes:1000000},...healthFixture});
+    if (url === '/api/backups' && method === 'GET') return reply({runs,profiles,schedules,available:true,storage:[{id:'local',name:'Local',kind:'local',status:'connected',removable:false},...backends],limits:{usedBytes:100,repositoryBytes:1000000},...healthFixture});
     if (url.endsWith('/download')) return route.fulfill({status:200,contentType:'application/zip',body:Buffer.from('fixture bundle')});
     if (url.endsWith('/export')) return route.fulfill({status:200,contentType:'text/yaml',body:'apiVersion: rsdw-c2.petzko.dev/v1\nkind: BackupDefinition\nid: stopped-only\n'});
     if (url.endsWith('/restore')) {
@@ -77,6 +78,16 @@ async function main() {
       if (url.endsWith('/run')) return reply({id:'extra',scheduleId:id},201);
       if (method==='DELETE') {schedules=schedules.filter(s=>s.id!==id);return reply({});}
       schedules=schedules.map(s=>s.id===id?{...body,id,timezone:body.executionTimezone}:s);return reply(schedules.find(s=>s.id===id));
+    }
+    if (url === '/api/backups/backends' && method === 'POST') {
+      if (backends.some(b=>b.id===body.id)) return reply({error:'a storage backend with this id already exists'},400);
+      const added={id:body.id,name:body.name,kind:'s3',status:'connected',removable:true,endpoint:body.endpoint,bucket:body.bucket};
+      backends.push(added);return reply(added,201);
+    }
+    if (url.startsWith('/api/backups/backends/') && method === 'DELETE') {
+      const id=url.split('/').at(-1);
+      if (schedules.some(s=>s.enabled&&s.backendId===id)) return reply({error:'storage backend is used by an enabled schedule; disable or reassign it first'},409);
+      backends=backends.filter(b=>b.id!==id);return reply({});
     }
     if (url === '/api/backups/runs') return reply({id:'extra',...body},201);
     if (url.endsWith('/create-server')) {assert.match(body.ownerId,/^[a-f0-9]{32}$/);return reply({id:'clone',worldName:body.serverName,name:body.ownerName,status:'stopped'},201);}
@@ -188,6 +199,30 @@ async function main() {
   await choose('imported');await page.getByRole('button',{name:'Edit profile',exact:true}).click();assert.equal(await page.getByTestId('backup-stopped-path-0').inputValue(),'');await cancel();
   download=page.waitForEvent('download');await page.locator('[data-action="export-backup-profile"]').click();assert.match((await download).suggestedFilename(),/yaml$/);
   await page.getByRole('link',{name:'Storage',exact:true}).click();await page.getByTestId('storage-card-local').waitFor();
+  assert.equal(await page.getByTestId('delete-storage-backend-local').count(),0);
+  await page.getByTestId('add-storage-backend').click();
+  await page.getByTestId('storage-backend-name').fill('Offsite mirror');
+  await page.getByTestId('storage-backend-endpoint').fill('s3.example.com');
+  await page.getByTestId('storage-backend-bucket').fill('rsdw-backups');
+  await page.getByTestId('storage-backend-secret-name').fill('rsdw-s3-offsite');
+  await save();
+  await page.getByTestId('storage-card-offsite-mirror').waitFor();
+  assert.equal(requests.at(-1).url,'/api/backups/backends');
+  assert.deepEqual(requests.at(-1).body.secretRef,{name:'rsdw-s3-offsite',key:'accessKeyId'});
+  await page.getByTestId('add-storage-backend').click();
+  await page.getByTestId('storage-backend-name').fill('Offsite mirror');
+  await page.getByTestId('storage-backend-endpoint').fill('s3.example.com');
+  await page.getByTestId('storage-backend-bucket').fill('rsdw-backups');
+  await page.getByTestId('storage-backend-secret-name').fill('rsdw-s3-offsite');
+  await page.getByTestId('confirm-modal').click();
+  await page.locator('#modal-error').waitFor({state:'visible'});
+  assert.match(await page.locator('#modal-error').innerText(),/already exists/);
+  await cancel();
+  await page.locator('[data-action="delete-storage-backend"][data-id="offsite-mirror"]').click();
+  await page.getByTestId('delete-storage-backend-confirm').check();
+  await save();
+  assert.equal(await page.getByTestId('storage-card-offsite-mirror').count(),0);
+  assert.equal(requests.at(-1).url,'/api/backups/backends/offsite-mirror');
   await go('backups/schedules');await page.getByTestId('run-schedule-daily').waitFor();
   await page.getByTestId('add-backup-schedule').click();
   await page.getByTestId('backup-schedule-profile').selectOption('multi-required');

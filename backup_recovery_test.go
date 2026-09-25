@@ -62,7 +62,7 @@ func TestBackupRecoveryReconcilesPublishedRunAndInterruptedCaptures(t *testing.T
 				t.Fatal(err)
 			}
 			restarted := testRepository(t, LocalBackupRepositoryConfig{Root: repository.root})
-			app := &App{store: store, backups: &backupController{available: true, root: repository.root, local: restarted, repository: restarted}, clock: func() time.Time { return request.Manifest.CreatedAt.Add(time.Hour) }}
+			app := &App{store: store, backups: &backupController{available: true, root: repository.root, local: restarted, repositories: map[string]BackupRepository{backupLocalBackendID: restarted}}, clock: func() time.Time { return request.Manifest.CreatedAt.Add(time.Hour) }}
 			if err := app.recoverBackupRepository(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +106,7 @@ func TestBackupRecoveryDiscoversOrphanPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{store: store, backups: &backupController{available: true, repository: repository, root: repository.root}}
+	app := &App{store: store, backups: &backupController{available: true, local: repository, repositories: map[string]BackupRepository{backupLocalBackendID: repository}, root: repository.root}}
 	for range 2 {
 		if err := app.recoverBackupRepository(context.Background()); err != nil {
 			t.Fatal(err)
@@ -130,7 +130,7 @@ func TestBackupRecoveryInterruptsRunWithEmptyRepository(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	app := &App{store: store, backups: &backupController{available: true, repository: repository}}
+	app := &App{store: store, backups: &backupController{available: true, local: repository, repositories: map[string]BackupRepository{backupLocalBackendID: repository}}}
 	if err := app.recoverBackupRepository(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestBackupRecoveryRemovesRestoreTempsPreservingDemoWorlds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{store: store, backups: &backupController{root: repository.root, repository: repository, available: true}}
+	app := &App{store: store, backups: &backupController{root: repository.root, local: repository, repositories: map[string]BackupRepository{backupLocalBackendID: repository}, available: true}}
 	if err := app.recoverBackupRepository(context.Background()); err != nil {
 		t.Fatal(err)
 	}
