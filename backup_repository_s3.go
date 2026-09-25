@@ -447,6 +447,15 @@ func (repository *S3BackupRepository) OpenBundle(ctx context.Context, objectKey 
 	return repository.client.GetObject(ctx, repository.bucket, repository.bundleKey(manifestID), minio.GetObjectOptions{})
 }
 
+func (repository *S3BackupRepository) Delete(ctx context.Context, manifestID string) error {
+	for _, key := range []string{repository.bundleKey(manifestID), repository.publicationKey(manifestID)} {
+		if err := repository.client.RemoveObject(ctx, repository.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+			return fmt.Errorf("delete backup object: %w", err)
+		}
+	}
+	return nil
+}
+
 func (repository *S3BackupRepository) Usage(ctx context.Context) (int64, error) {
 	ok, err := repository.client.BucketExists(ctx, repository.bucket)
 	if err != nil {

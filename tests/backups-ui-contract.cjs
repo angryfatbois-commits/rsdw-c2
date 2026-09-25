@@ -246,6 +246,17 @@ async function main() {
     console.log('PASS invalid hidden interval permits '+mode+' submission');
   }
   await page.locator('[data-action="edit-backup-schedule"][data-id="hourly"]').click();
+  await page.getByTestId('backup-schedule-retain-count').fill('5');
+  await page.getByTestId('backup-schedule-retain-days').fill('14');
+  await save();
+  assert.equal(requests.at(-1).body.retainCount,5);
+  assert.equal(requests.at(-1).body.retainDays,14);
+  await page.locator('[data-action="edit-backup-schedule"][data-id="hourly"]').click();
+  assert.equal(await page.getByTestId('backup-schedule-retain-count').inputValue(),'5');
+  assert.equal(await page.getByTestId('backup-schedule-retain-days').inputValue(),'14');
+  await cancel();
+  console.log('PASS retention fields round-trip through save and reopen');
+  await page.locator('[data-action="edit-backup-schedule"][data-id="hourly"]').click();
   await page.getByTestId('backup-schedule-mode').selectOption('interval');
   assert.equal(await page.locator('[name="intervalValue"]').isEnabled(),true);
   assert.equal(await page.locator('[name="intervalUnit"]').isEnabled(),true);

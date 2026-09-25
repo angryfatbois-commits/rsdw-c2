@@ -319,6 +319,31 @@ func TestLocalBackupRepositoryRecoversValidStagingAndCleansInvalidStaging(t *tes
 	}
 }
 
+func TestLocalBackupRepositoryDeleteRemovesObjectDirectory(t *testing.T) {
+	repository := testRepository(t, LocalBackupRepositoryConfig{Root: t.TempDir()})
+	request := testPublicationRequest(t, "delete-me", "delete-key", []testItem{{name: "world", path: "world.sav.backup", content: "world", consistency: BackupConsistencyStableRead}})
+	published, err := repository.Publish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := repository.objectDirectory("delete-me")
+	if _, err := os.Stat(directory); err != nil {
+		t.Fatalf("published object directory missing before delete: %v", err)
+	}
+	if err := repository.Delete(context.Background(), "delete-me"); err != nil {
+		t.Fatalf("delete backup object: %v", err)
+	}
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("object directory still exists after delete: err=%v", err)
+	}
+	if _, err := repository.OpenBundle(context.Background(), published.Bundle.Key); err == nil {
+		t.Fatal("expected OpenBundle to fail after delete")
+	}
+	if err := repository.Delete(context.Background(), "never-existed"); err != nil {
+		t.Fatalf("delete of a nonexistent manifest should be idempotent, got: %v", err)
+	}
+}
+
 type testItem struct {
 	name        string
 	path        string

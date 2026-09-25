@@ -54,6 +54,7 @@ type BackupRepository interface {
 	Publish(context.Context, PublishBackupRequest) (PublishedBackup, error)
 	Recover(context.Context) ([]PublishedBackup, error)
 	OpenBundle(context.Context, string) (io.ReadCloser, error)
+	Delete(context.Context, string) error
 	Usage(context.Context) (int64, error)
 }
 
@@ -285,6 +286,19 @@ func (repository *LocalBackupRepository) Usage(ctx context.Context) (int64, erro
 		return err
 	})
 	return usage, err
+}
+
+func (repository *LocalBackupRepository) Delete(ctx context.Context, manifestID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return repository.withWriterLock(func() error {
+		directory := repository.objectDirectory(manifestID)
+		if err := os.RemoveAll(directory); err != nil {
+			return fmt.Errorf("delete backup object: %w", err)
+		}
+		return syncDirectory(filepath.Join(repository.root, "objects"))
+	})
 }
 
 func (repository *LocalBackupRepository) createStage(ctx context.Context, request PublishBackupRequest) (PublishedBackup, error) {
