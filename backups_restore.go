@@ -453,7 +453,7 @@ func (a *App) restoreFiles(ctx context.Context, server Server, files []restoreFi
 	if !ok {
 		return errors.New("Kubernetes restore collector is unavailable")
 	}
-	target, cleanup, err := k.backupTarget(ctx, server, BackupServerStopped)
+	target, cleanup, err := k.backupTarget(ctx, server, BackupServerStopped, true)
 	if err != nil {
 		return err
 	}

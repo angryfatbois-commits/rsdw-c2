@@ -59,7 +59,7 @@ func (k *kubeOrchestrator) collectBackup(ctx context.Context, server Server, def
 	} else if source != BackupSourceStoppedSAV {
 		return nil, func() {}, errors.New("unsupported backup source")
 	}
-	target, targetCleanup, err := k.backupTarget(ctx, server, state)
+	target, targetCleanup, err := k.backupTarget(ctx, server, state, false)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -134,7 +134,7 @@ func backupSourceRule(spec BackupItemSpec, state BackupServerState) (*BackupSour
 	return nil, false
 }
 
-func (k *kubeOrchestrator) backupTarget(ctx context.Context, server Server, state BackupServerState) (podTarget, func(), error) {
+func (k *kubeOrchestrator) backupTarget(ctx context.Context, server Server, state BackupServerState, writable bool) (podTarget, func(), error) {
 	if state == BackupServerRunning {
 		target, status, err := k.resolvePod(ctx, server)
 		if err != nil {
@@ -156,7 +156,7 @@ func (k *kubeOrchestrator) backupTarget(ctx context.Context, server Server, stat
 	if err != nil {
 		return podTarget{}, func() {}, err
 	}
-	target, cleanup, err := k.backupInspector(ctx, server, claim)
+	target, cleanup, err := k.backupInspector(ctx, server, claim, writable)
 	if err != nil {
 		return podTarget{}, func() {}, err
 	}
@@ -169,7 +169,7 @@ func (k *kubeOrchestrator) backupTarget(ctx context.Context, server Server, stat
 
 const backupInspectorLabel = "rsdw-c2/backup-inspector"
 
-func (k *kubeOrchestrator) backupInspector(ctx context.Context, server Server, claim string) (podTarget, func(), error) {
+func (k *kubeOrchestrator) backupInspector(ctx context.Context, server Server, claim string, writable bool) (podTarget, func(), error) {
 	if claim == "" {
 		return podTarget{}, func() {}, errors.New("world PVC is required")
 	}
@@ -181,6 +181,7 @@ func (k *kubeOrchestrator) backupInspector(ctx context.Context, server Server, c
 		return podTarget{}, func() {}, fmt.Errorf("server image is invalid: %w", err)
 	}
 	podName := newBackupID("rsdw-c2-backup")
+	mountReadOnly := !writable
 	overrides := map[string]any{"metadata": map[string]any{"labels": map[string]string{backupInspectorLabel: server.ID}}, "spec": map[string]any{
 		"automountServiceAccountToken":  false,
 		"activeDeadlineSeconds":         600,
@@ -200,10 +201,11 @@ func (k *kubeOrchestrator) backupInspector(ctx context.Context, server Server, c
 				"requests": map[string]string{"cpu": "10m", "memory": "8Mi"},
 				"limits":   map[string]string{"cpu": "100m", "memory": "64Mi"},
 			},
-			"volumeMounts": []any{map[string]any{"name": "data", "mountPath": backupDataRoot, "readOnly": true}},
+			"volumeMounts": []any{map[string]any{"name": "data", "mountPath": backupDataRoot, "readOnly": mountReadOnly}},
 		}},
-		"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": claim, "readOnly": true}}},
+		"volumes": []any{map[string]any{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": claim, "readOnly": mountReadOnly}}},
 	}}
+
 	overrideJSON, err := json.Marshal(overrides)
 	if err != nil {
 		return podTarget{}, func() {}, fmt.Errorf("encode stopped-world inspection pod: %w", err)

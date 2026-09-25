@@ -153,7 +153,7 @@ func TestBackupKINDCaptureRestoreAndSafety(t *testing.T) {
 	if err := app.restoreFiles(ctx, server, custom, true); err != nil {
 		t.Fatal(err)
 	}
-	verifyTarget, cleanup, err := k.backupTarget(ctx, server, BackupServerStopped)
+	verifyTarget, cleanup, err := k.backupTarget(ctx, server, BackupServerStopped, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestBackupKINDCaptureRestoreAndSafety(t *testing.T) {
 	if err := k.verifyBackupStopped(ctx, created); err != nil {
 		t.Fatal("new server was not stopped", err)
 	}
-	newTarget, newCleanup, err := k.backupTarget(ctx, created, BackupServerStopped)
+	newTarget, newCleanup, err := k.backupTarget(ctx, created, BackupServerStopped, false)
 	if err != nil {
 		t.Fatal(err)
 	}
