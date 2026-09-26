@@ -1105,7 +1105,7 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"deletions": snapshot.Deletions,
 		"servers":   servers, "events": recentEvents(snapshot.Events, 20), "mode": mode, "cluster": map[string]any{"name": envOr("RSDW_CLUSTER_NAME", "local-cluster"), "region": envOr("RSDW_CLUSTER_REGION", "eu-central"), "uptimeSeconds": int64(time.Since(startedAt).Seconds())},
-		"capabilities": capabilities(RoleAdmin),
+		"capabilities": capabilities(requestPrincipal(r).Role),
 	})
 }
 

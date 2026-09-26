@@ -147,7 +147,7 @@ func (i *testIssuer) sign(claims map[string]any) string {
 func oidcTestApp(t *testing.T) (*App, *testIssuer) {
 	t.Helper()
 	i := newTestIssuer(t)
-	a, err := newOIDCAuth(context.Background(), oidcSettings{Issuer: i.server.URL, ClientID: "console", ClientSecret: "fixture-secret", Origin: "https://console.example", GroupsClaim: "groups", Scopes: []string{"openid", "profile"}, Policy: rolePolicy{AdminGroups: []string{"admin"}, ViewerGroups: []string{"viewer"}}}, i.server.Client().Transport)
+	a, err := newOIDCAuth(context.Background(), oidcSettings{Issuer: i.server.URL, ClientID: "console", ClientSecret: "fixture-secret", Origin: "https://console.example", GroupsClaim: "groups", Scopes: []string{"openid", "profile"}, Policy: rolePolicy{AdminGroups: []string{"admin"}, OperatorGroups: []string{"operator"}, ViewerGroups: []string{"viewer"}}}, i.server.Client().Transport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,6 +382,63 @@ func TestOIDCRoutePolicyAndZeroEffects(t *testing.T) {
 		app.ServeHTTP(w, r)
 		if w.Code != 401 {
 			t.Fatal("mixed credentials accepted")
+		}
+	}
+}
+
+func TestOIDCOperatorRoleAuthorization(t *testing.T) {
+	app, issuer := oidcTestApp(t)
+	orchestrator := &countingOrchestrator{}
+	app.orchestrator = orchestrator
+	operator, operatorCSRF := loginAs(t, app, issuer, "operator")
+	allowed := [][2]string{
+		{"GET", "/api/bootstrap"}, {"GET", "/api/servers/scuffedtards/telemetry"}, {"GET", "/api/events"},
+		{"GET", "/api/servers/scuffedtards/logs"}, {"POST", "/api/servers/scuffedtards/actions/restart"},
+		{"POST", "/api/servers/scuffedtards/actions/update"}, {"POST", "/api/servers/scuffedtards/actions/check-update"},
+		{"POST", "/api/servers/scuffedtards/actions/stop"}, {"POST", "/api/servers/scuffedtards/actions/start"},
+		{"GET", "/api/backups"}, {"GET", "/api/reboots"},
+	}
+	for _, route := range allowed {
+		body := "{}"
+		if strings.HasSuffix(route[1], "/update") {
+			body = `{"imageTag":"0.1.2"}`
+		}
+		if res := authRequest(app, route[0], route[1], operator, app.auth.settings.Origin, operatorCSRF, body); res.Code >= 300 {
+			t.Fatalf("operator %v = %d %s", route, res.Code, res.Body.String())
+		}
+	}
+	denied := [][2]string{
+		{"POST", "/api/servers"}, {"DELETE", "/api/servers/scuffedtards"},
+		{"POST", "/api/servers/scuffedtards/actions/edit-settings"}, {"POST", "/api/integrations"},
+		{"GET", "/api/users"}, {"POST", "/api/backups/backends"},
+	}
+	for _, route := range denied {
+		if res := authRequest(app, route[0], route[1], operator, app.auth.settings.Origin, operatorCSRF, "{}"); res.Code != http.StatusForbidden {
+			t.Fatalf("operator %v = %d, want 403: %s", route, res.Code, res.Body.String())
+		}
+	}
+	caps := capabilities(RoleOperator)
+	for _, allow := range []string{"dashboard", "telemetry", "events", "logs", "maintenance", "reboots", "backups", "restart", "stop", "start", "update", "updateCheck"} {
+		if !caps[allow] {
+			t.Fatalf("operator capability %q = false, want true: %+v", allow, caps)
+		}
+	}
+	for _, deny := range []string{"create", "delete", "integrations", "settings"} {
+		if caps[deny] {
+			t.Fatalf("operator capability %q = true, want false: %+v", deny, caps)
+		}
+	}
+	if res := authRequest(app, "GET", "/api/bootstrap", operator, app.auth.settings.Origin, operatorCSRF, ""); res.Code != http.StatusOK {
+		t.Fatalf("operator bootstrap = %d %s", res.Code, res.Body.String())
+	} else {
+		var payload struct {
+			Capabilities map[string]bool `json:"capabilities"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Capabilities["create"] || payload.Capabilities["delete"] || payload.Capabilities["integrations"] || !payload.Capabilities["backups"] {
+			t.Fatalf("bootstrap leaked admin-only capabilities to operator: %+v", payload.Capabilities)
 		}
 	}
 }
