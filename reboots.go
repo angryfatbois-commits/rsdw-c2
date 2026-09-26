@@ -223,7 +223,7 @@ func executionViews(history []rebootExecution, servers map[string]Server) []rebo
 }
 
 func (a *App) handleReboots(w http.ResponseWriter, r *http.Request) {
-	if requestPrincipal(r).Role != RoleAdmin {
+	if requestPrincipal(r).Role == RoleViewer {
 		writeError(w, http.StatusForbidden, "permission denied")
 		return
 	}

@@ -66,13 +66,13 @@ Set these environment variables on the console process. Supply the secret throug
 | `RSDW_OIDC_CLIENT_SECRET` | Client secret |
 | `RSDW_OIDC_SCOPES` | Space-separated scopes, default `openid profile` |
 | `RSDW_OIDC_GROUPS_CLAIM` | Top-level ID-token claim, default `groups` |
-| `RSDW_OIDC_ROLE_POLICY` | JSON object with `adminSubjects`, `viewerSubjects`, `adminGroups`, and `viewerGroups` arrays |
+| `RSDW_OIDC_ROLE_POLICY` | JSON object with `adminSubjects`, `operatorSubjects`, `viewerSubjects`, `adminGroups`, `operatorGroups`, and `viewerGroups` arrays |
 
 Clear `RSDW_ADMIN_TOKEN` in OIDC mode. Token mode rejects nonempty OIDC environment settings. Missing configuration, discovery failure, and an empty role policy prevent startup. `openid` is required; `offline_access` is unsupported.
 
 ## Verify access
 
-Sign in with each intended role. Admins can create servers, read logs and events, restart servers, update images, and check for updates. Viewers can use the dashboard and telemetry, select servers and time ranges, pause or refresh, and export metric CSV files. Viewer responses omit server configuration, images, endpoints, owner and admin IDs, secret names, events, logs, and raw collection errors.
+Sign in with each intended role. Admins can create and delete servers, and manage integrations and saved user IDs. Operators can read logs and events, restart/stop/start servers, update images, and manage backups and reboots. Viewers can use the dashboard and telemetry, select servers and time ranges, pause or refresh, and export metric CSV files. Viewer responses omit server configuration, images, endpoints, owner and admin IDs, secret names, events, logs, and raw collection errors.
 
 An identity with no exact assignment is denied. Admin takes precedence when an identity explicitly matches both roles. Subject assignments belong to the configured issuer. Group values are case-sensitive and must be in the verified ID token.
 

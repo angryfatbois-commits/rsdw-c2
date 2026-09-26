@@ -75,7 +75,7 @@ func decodeBackupJSON(w http.ResponseWriter, r *http.Request, target any) error 
 }
 
 func (a *App) handleBackups(w http.ResponseWriter, r *http.Request) {
-	if requestPrincipal(r).Role != RoleAdmin {
+	if requestPrincipal(r).Role == RoleViewer {
 		writeError(w, http.StatusForbidden, "permission denied")
 		return
 	}
@@ -177,6 +177,10 @@ func (a *App) handleBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 1 && parts[0] == "backends" {
+		if requestPrincipal(r).Role != RoleAdmin {
+			writeError(w, http.StatusForbidden, "permission denied")
+			return
+		}
 		switch r.Method {
 		case http.MethodPost:
 			a.addStorageBackendHTTP(w, r)
@@ -186,6 +190,10 @@ func (a *App) handleBackups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[0] == "backends" {
+		if requestPrincipal(r).Role != RoleAdmin {
+			writeError(w, http.StatusForbidden, "permission denied")
+			return
+		}
 		switch r.Method {
 		case http.MethodDelete:
 			a.removeStorageBackendHTTP(w, r, parts[1])
@@ -1176,7 +1184,7 @@ type restoreRequest struct {
 }
 
 func (a *App) handleRestore(w http.ResponseWriter, r *http.Request, serverID string) {
-	if requestPrincipal(r).Role != RoleAdmin {
+	if requestPrincipal(r).Role == RoleViewer {
 		writeError(w, http.StatusForbidden, "permission denied")
 		return
 	}

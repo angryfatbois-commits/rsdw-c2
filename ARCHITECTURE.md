@@ -51,9 +51,9 @@ The HTTP handlers parse requests, call a domain operation, and encode JSON or th
 
 ## API contract
 
-`Auth` owns authentication, OIDC transactions, and opaque sessions. A typed principal has a denied zero value, viewer, or admin role. Token mode grants the admin role for a matching bearer token. OIDC mode requires an exact subject or group assignment from a verified ID token and rejects bearer credentials. Demo data does not bypass OIDC.
+`Auth` owns authentication, OIDC transactions, and opaque sessions. A typed principal has a denied zero value, viewer, operator, or admin role. Token mode grants the admin role for a matching bearer token. OIDC mode requires an exact subject or group assignment from a verified ID token and rejects bearer credentials. Demo data does not bypass OIDC.
 
-The HTTP boundary authorizes requests before handlers parse bodies or call the orchestrator. Viewers may only GET bootstrap and a server's telemetry. Unknown routes are denied for viewers. Dedicated viewer response types select display metadata and numeric metrics; they omit operational data and replace collector errors with fixed availability messages. Admin operations include check-update because it changes stored state.
+The HTTP boundary authorizes requests before handlers parse bodies or call the orchestrator. Viewers may only GET bootstrap and a server's telemetry. Operators can manage server lifecycles, backups, and reboots, but cannot create/delete servers or modify integrations. Dedicated viewer response types select display metadata and numeric metrics; they omit operational data and replace collector errors with fixed availability messages.
 
 OIDC login uses authorization code flow, S256 PKCE, browser-bound single-use state, and nonce verification. Sessions expire absolutely and remain in bounded process memory. Logout revokes the session. Cookie-authenticated writes require an exact public Origin and a session CSRF token. The UI uses server capabilities, clears protected state when identity changes, and rejects late responses from older sessions. See [OIDC setup and session behavior](docs/oidc.md).
 
