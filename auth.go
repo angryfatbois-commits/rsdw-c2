@@ -25,6 +25,7 @@ type Role uint8
 const (
 	RoleDenied Role = iota
 	RoleViewer
+	RoleOperator
 	RoleAdmin
 )
 
@@ -32,6 +33,8 @@ func (r Role) String() string {
 	switch r {
 	case RoleAdmin:
 		return "admin"
+	case RoleOperator:
+		return "operator"
 	case RoleViewer:
 		return "viewer"
 	default:
@@ -52,10 +55,12 @@ func requestPrincipal(r *http.Request) Principal {
 }
 
 type rolePolicy struct {
-	AdminSubjects  []string `json:"adminSubjects"`
-	ViewerSubjects []string `json:"viewerSubjects"`
-	AdminGroups    []string `json:"adminGroups"`
-	ViewerGroups   []string `json:"viewerGroups"`
+	AdminSubjects    []string `json:"adminSubjects"`
+	OperatorSubjects []string `json:"operatorSubjects"`
+	ViewerSubjects   []string `json:"viewerSubjects"`
+	AdminGroups      []string `json:"adminGroups"`
+	OperatorGroups   []string `json:"operatorGroups"`
+	ViewerGroups     []string `json:"viewerGroups"`
 }
 
 func (p rolePolicy) role(subject string, groups []string) Role {
@@ -64,6 +69,9 @@ func (p rolePolicy) role(subject string, groups []string) Role {
 	}
 	if slices.Contains(p.AdminSubjects, subject) || overlaps(p.AdminGroups, groups) {
 		return RoleAdmin
+	}
+	if slices.Contains(p.OperatorSubjects, subject) || overlaps(p.OperatorGroups, groups) {
+		return RoleOperator
 	}
 	if slices.Contains(p.ViewerSubjects, subject) || overlaps(p.ViewerGroups, groups) {
 		return RoleViewer
@@ -190,7 +198,7 @@ func newOIDCAuth(ctx context.Context, settings oidcSettings, transport http.Roun
 	origin.Host = host
 	settings.Origin = origin.String()
 	count := 0
-	for _, entries := range [][]string{settings.Policy.AdminSubjects, settings.Policy.ViewerSubjects, settings.Policy.AdminGroups, settings.Policy.ViewerGroups} {
+	for _, entries := range [][]string{settings.Policy.AdminSubjects, settings.Policy.OperatorSubjects, settings.Policy.ViewerSubjects, settings.Policy.AdminGroups, settings.Policy.OperatorGroups, settings.Policy.ViewerGroups} {
 		for _, entry := range entries {
 			if strings.TrimSpace(entry) == "" {
 				return nil, errors.New("role policy entries cannot be empty")
@@ -288,10 +296,28 @@ func (a *Auth) authenticate(r *http.Request) (Principal, authSession) {
 	}
 	return session.Principal, session
 }
-
 func capabilities(role Role) map[string]bool {
-	read, admin := role == RoleViewer || role == RoleAdmin, role == RoleAdmin
-	return map[string]bool{"dashboard": read, "telemetry": read, "events": admin, "maintenance": admin, "integrations": admin, "reboots": admin, "backups": admin, "create": admin, "delete": admin, "restart": admin, "stop": admin, "start": admin, "update": admin, "logs": admin, "updateCheck": admin}
+	read := role == RoleViewer || role == RoleOperator || role == RoleAdmin
+	operate := role == RoleOperator || role == RoleAdmin
+	admin := role == RoleAdmin
+	return map[string]bool{
+		"dashboard":    read,
+		"telemetry":    read,
+		"events":       operate,
+		"logs":         operate,
+		"maintenance":  operate,
+		"reboots":      operate,
+		"backups":      operate,
+		"restart":      operate,
+		"stop":         operate,
+		"start":        operate,
+		"update":       operate,
+		"updateCheck":  operate,
+		"create":       admin,
+		"delete":       admin,
+		"integrations": admin,
+		"settings":     admin,
+	}
 }
 
 func viewerRoute(r *http.Request) bool {
@@ -305,10 +331,52 @@ func viewerRoute(r *http.Request) bool {
 	return len(parts) == 5 && parts[1] == "api" && parts[2] == "servers" && parts[3] != "" && parts[4] == "telemetry"
 }
 
+func operatorRoute(r *http.Request) bool {
+	if viewerRoute(r) {
+		return true
+	}
+	path := r.URL.Path
+	if r.Method == http.MethodPost && path == "/api/servers" {
+		return false // Create server
+	}
+	if r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/servers/") && !strings.Contains(path, "/actions/") {
+		return false // Delete server
+	}
+	if strings.HasSuffix(path, "/actions/edit-settings") {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/integrations") {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/users") {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/backups/backends") {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/auth") {
+		return true
+	}
+	// Allow everything else in /api/
+	return strings.HasPrefix(path, "/api/")
+}
+
 func (a *Auth) authorize(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	p, session := a.authenticate(r)
 	if p.Role == RoleDenied {
 		writeError(w, http.StatusUnauthorized, "authentication required")
+		return r, false
+	}
+	if a.demo && p.Role == RoleViewer && !viewerRoute(r) {
+		writeError(w, http.StatusForbidden, "demo viewer actions are simulated locally without verification")
+		return r, false
+	}
+	if p.Role == RoleViewer && !viewerRoute(r) {
+		writeError(w, http.StatusForbidden, "permission denied")
+		return r, false
+	}
+	if p.Role == RoleOperator && !operatorRoute(r) {
+		writeError(w, http.StatusForbidden, "permission denied")
 		return r, false
 	}
 	if a.isOIDC() {
@@ -317,10 +385,6 @@ func (a *Auth) authorize(w http.ResponseWriter, r *http.Request) (*http.Request,
 			writeError(w, http.StatusForbidden, "request verification failed")
 			return r, false
 		}
-	}
-	if p.Role != RoleAdmin && !viewerRoute(r) {
-		writeError(w, http.StatusForbidden, "permission denied")
-		return r, false
 	}
 	return r.WithContext(context.WithValue(r.Context(), principalKey{}, p)), true
 }

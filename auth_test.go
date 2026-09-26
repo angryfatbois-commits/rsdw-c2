@@ -430,12 +430,12 @@ func TestOIDCViewerProjection(t *testing.T) {
 }
 
 func TestOIDCRolePolicy(t *testing.T) {
-	p := rolePolicy{AdminSubjects: []string{"admin"}, ViewerSubjects: []string{"viewer"}, AdminGroups: []string{"ops"}, ViewerGroups: []string{"readers", "ops"}}
+	p := rolePolicy{AdminSubjects: []string{"admin"}, OperatorSubjects: []string{"operator"}, ViewerSubjects: []string{"viewer"}, AdminGroups: []string{"ops"}, OperatorGroups: []string{"maintainers"}, ViewerGroups: []string{"readers", "ops"}}
 	for _, tc := range []struct {
 		subject string
 		groups  []string
 		want    Role
-	}{{"", []string{"ops"}, RoleDenied}, {"other", nil, RoleDenied}, {"admin", nil, RoleAdmin}, {"viewer", nil, RoleViewer}, {"other", []string{"ops", "readers"}, RoleAdmin}, {"other", []string{"readers"}, RoleViewer}, {"other", []string{"READERS"}, RoleDenied}} {
+	}{{"", []string{"ops"}, RoleDenied}, {"other", nil, RoleDenied}, {"admin", nil, RoleAdmin}, {"operator", nil, RoleOperator}, {"viewer", nil, RoleViewer}, {"other", []string{"ops", "readers"}, RoleAdmin}, {"other", []string{"maintainers"}, RoleOperator}, {"other", []string{"readers"}, RoleViewer}, {"other", []string{"READERS"}, RoleDenied}} {
 		if got := p.role(tc.subject, tc.groups); got != tc.want {
 			t.Fatalf("role = %v want %v", got, tc.want)
 		}
