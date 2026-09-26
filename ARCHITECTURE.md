@@ -72,6 +72,7 @@ POST /api/servers/:id/actions/stop
 POST /api/servers/:id/actions/start
 POST /api/servers/:id/actions/update
 POST /api/servers/:id/actions/check-update
+POST /api/servers/:id/clone
 GET  /api/events?query=&category=&serverId=&since=&limit=&offset=
 GET  /api/reboots
 POST /api/reboots
@@ -80,7 +81,7 @@ DELETE /api/reboots/:id
 POST /api/reboots/preview
 ```
 
-The service emits an `Event` for every mutating action. Restart, stop, start, and update require an explicit confirmation in the browser before the browser sends the request. Stop parks a server with `kubectl scale --replicas=0` while keeping the inventory row and volumes; start scales back to 1. The game chart hardcodes Deployment replicas to 1, so C2 never passes Helm `replicaCount`. Scheduled reboots use one polling loop and atomically persist the due occurrence, next-run cursor, linked restart operation, and audit event before dispatching the existing orchestrator command. Preview and execution share one cron/daily civil-time calculator; nonexistent wall-clock minutes are skipped and repeated minutes use their first UTC occurrence. See [scheduled reboots](docs/reboots.md) for the timing, recovery, and single-replica contract.
+The service emits an `Event` for every mutating action. Restart, stop, start, and update require an explicit confirmation in the browser before the browser sends the request. Stop parks a server with `kubectl scale --replicas=0` while keeping the inventory row and volumes; start scales back to 1. The game chart hardcodes Deployment replicas to 1, so C2 never passes Helm `replicaCount`. Scheduled reboots use one polling loop and atomically persist the due occurrence, next-run cursor, linked restart operation, and audit event before dispatching the existing orchestrator command. Preview and execution share one cron/daily civil-time calculator; nonexistent wall-clock minutes are skipped and repeated minutes use their first UTC occurrence. Clone creates a new server from either a stopped server's own world PVC or a completed keep-mode deletion receipt's retained PVC; both read through the same short-lived, read-only inspection pod the backup collector uses, and neither the server password, admin password, nor admin IDs are copied to the clone. See [scheduled reboots](docs/reboots.md) and [clone a world](docs/clone.md).
 
 ## First-draft scope
 

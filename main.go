@@ -1346,6 +1346,10 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if len(parts) == 2 && parts[1] == "clone" && r.Method == http.MethodPost {
+		a.handleClone(w, r, serverID)
+		return
+	}
 	server, ok := snapshot.Servers[serverID]
 	if !ok {
 		writeError(w, http.StatusNotFound, "server not found")
