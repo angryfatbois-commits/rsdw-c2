@@ -152,6 +152,20 @@ async function run() {
     assert.equal(await pendingReceipt.getByTestId('retry-deletion').count(), 0);
     assert.match(await pendingReceipt.innerText(), new RegExp(`${mode === 'keep' ? 'Retained' : 'Deleted'} source-save PVC dragonwilds/uploaded-source, UID source-uid`));
   }
+  const keptReceipt = retained.locator('article').filter({has:page.getByRole('heading', {name:'PC2-US-EAST-02', exact:true})});
+  await keptReceipt.getByTestId('clone-retained-world').click();
+  await page.getByTestId('clone-server-name').waitFor();
+  assert.equal(await page.locator('#modal-title').textContent(), 'Clone into a new server');
+  await page.getByTestId('clone-server-name').fill('Cloned world');
+  await page.getByTestId('clone-server-owner').fill('b'.repeat(32));
+  await page.locator('[name="confirmCreate"]').check();
+  const clonePending = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().includes('/clone'));
+  await page.getByTestId('confirm-modal').click();
+  const cloneResponse = await clonePending;
+  assert.equal(cloneResponse.request().url(), base + '/api/servers/petzko-02/clone');
+  assert.deepEqual(cloneResponse.request().postDataJSON(), {serverName:'Cloned world', ownerName:'Admin', ownerId:'b'.repeat(32), confirmCreate:true});
+  assert.equal(cloneResponse.status(), 201);
+  await page.locator('#modal').waitFor({state:'hidden'});
   await page.screenshot({path:path.join(output, 'receipts.png'), fullPage:true});
 
   const oidc = await start('go', ['test','-count=1','-run','^TestOIDCBrowserFixture$','-v','-timeout','90s'],
