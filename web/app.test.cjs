@@ -1046,7 +1046,7 @@ test('edit settings omits untouched passwords and distinguishes setting from exp
   const initial = context.ui.editSettingsValues({name:'World', worldName:'World', maxPlayers:4, adminIds:''});
   const form = (entries = []) => createForm([
     ['name','World'], ['worldName','World'], ['maxPlayers','4'],
-    ['memoryLimitMiB','2048'], ['cpuLimitMillis','1000'], ...entries,
+    ['memoryLimitMiB','2048'], ['cpuLimitMillis','1000'], ['storageGiB','40'], ...entries,
   ]);
   assert.equal(context.ui.editSettingsPatch(initial, form()), null);
   assert.equal(context.ui.editSettingsPatch(initial, form([['serverPassword',''], ['adminPassword','']])), null);
@@ -1063,7 +1063,7 @@ test('one edit combines repeated saved and manual administrator IDs without losi
   const initial = context.ui.editSettingsValues({name:'World', worldName:'World', maxPlayers:4, adminIds:''});
   const form = createForm([
     ['name','World'], ['worldName','World'], ['maxPlayers','4'],
-    ['memoryLimitMiB','2048'], ['cpuLimitMillis','1000'],
+    ['memoryLimitMiB','2048'], ['cpuLimitMillis','1000'], ['storageGiB','40'],
     ['adminPlayerId',savedPlayer], ['adminPlayerId',otherPlayer],
     ['adminPlayerIdManual',manualPlayer.toUpperCase()],
     ['adminPlayerIdManual','AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],

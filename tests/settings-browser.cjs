@@ -97,6 +97,8 @@ async function run() {
   await page.getByTestId('edit-maxPlayers').fill('12');
   await page.getByTestId('edit-memoryLimitMiB').fill('3072');
   await page.getByTestId('edit-cpuLimitMillis').fill('1250');
+  await page.getByTestId('edit-storageGiB').fill('80');
+  await page.getByTestId('confirm-storage-grow').check();
   const applyResponse = page.waitForResponse((response) => response.url() === `${base}/api/servers/${encodeURIComponent(target.id)}/actions/edit-settings` && response.request().method() === 'POST');
   await page.getByTestId('confirm-modal').click();
   const response = await applyResponse;
@@ -111,6 +113,7 @@ async function run() {
   assert.equal(after.servers[target.id].maxPlayers, 12);
   assert.equal(after.servers[target.id].memoryLimitMiB, 3072);
   assert.equal(after.servers[target.id].cpuLimitMillis, 1250);
+  assert.equal(after.servers[target.id].storageGiB, 80);
   assert.equal(after.servers[target.id].ownerId, ownerID);
   assert.equal(after.servers[target.id].release, target.release);
   assert.equal(after.servers[neighbor.id].name, 'PETZKO');
@@ -127,6 +130,14 @@ async function run() {
   await page.getByTestId('edit-maxPlayers').fill('0');
   await page.getByTestId('confirm-modal').click();
   assert.equal(await page.locator('#modal').isVisible(), true);
+  assert.equal(editRequests, 1);
+  await page.getByTestId('cancel-modal').click();
+
+  await page.getByTestId('edit-settings').click();
+  await page.getByTestId('edit-storageGiB').fill('160');
+  await page.getByTestId('confirm-modal').click();
+  assert.equal(await page.locator('#modal').isVisible(), true);
+  assert.match(await page.locator('#modal-error').innerText(), /storage growth cannot be undone/);
   assert.equal(editRequests, 1);
   await page.getByTestId('cancel-modal').click();
 
