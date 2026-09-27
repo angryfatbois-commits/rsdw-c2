@@ -10,6 +10,11 @@ memoryPressure:
   thresholdPercent: 85
   duration: 10m
 
+diskPressure:
+  enabled: false
+  thresholdPercent: 85
+  duration: 10m
+
 service:
   type: ClusterIP
   port: 8080

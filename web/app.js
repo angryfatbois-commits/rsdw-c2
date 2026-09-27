@@ -680,7 +680,7 @@ function dashboardModel() {
       return typeof reading === 'number' && Number.isFinite(reading) ? reading : null;
     };
     const players = stopped ? 0 : value('players');
-    const memory = value('memoryUsedBytes'), limit = value('memoryLimitBytes'), cpu = value('cpuPercent');
+    const memory = value('memoryUsedBytes'), limit = value('memoryLimitBytes'), cpu = value('cpuPercent'), disk = value('diskPercent');
     const schedules = state.reboots.filter((item) => item.serverId === server.id && item.enabled);
     const nextRuns = schedules.map((item) => Date.parse(item.nextRun)).filter(Number.isFinite).sort((a,b) => a-b);
     const schedule = !can('reboots') ? {state:'restricted',text:''}
@@ -698,6 +698,7 @@ function dashboardModel() {
       resources:[
         {label:'Memory',text:memory != null && limit > 0 ? `${number(memory / 1073741824)} / ${number(limit / 1073741824)} GiB` : metricText(server, memory == null ? 'memoryUsedBytes' : 'memoryLimitBytes'),percent:memory != null && limit > 0 ? memory / limit * 100 : null},
         {label:'CPU',text:cpu == null ? metricText(server, 'cpuPercent') : number(cpu, '%'),percent:cpu},
+        {label:'Disk',text:disk == null ? metricText(server, 'diskPercent') : number(disk, '%'),percent:disk,pressure:disk != null && disk >= 85},
       ],
       uptime:duration(value('uptimeSeconds')), schedule,
       actions:stopped ? (can('start') ? ['start'] : []) : running ? ['restart','stop'].filter(can) : [],
@@ -722,7 +723,7 @@ function dashboardBadges(row) {
   return `${row.attention ? '<span class="console-badge attention">Attention</span>' : ''}${row.update ? '<span class="console-badge update">Update</span>' : ''}`;
 }
 function dashboardResources(row) {
-  return row.resources.map((resource) => `<div class="console-resource ${resource.percent == null ? 'unavailable' : ''}"><div><span class="console-label">${resource.label}</span><span class="${resource.percent == null ? 'muted' : ''}">${escapeHTML(resource.text)}</span></div>${resource.percent != null ? `<div class="console-bar" aria-hidden="true"><span style="width:${Math.max(0,Math.min(100,resource.percent))}%"></span></div>` : ''}</div>`).join('');
+  return row.resources.map((resource) => `<div class="console-resource ${resource.percent == null ? 'unavailable' : ''} ${resource.pressure ? 'pressure' : ''}"><div><span class="console-label">${resource.label}</span><span class="${resource.percent == null ? 'muted' : ''}">${escapeHTML(resource.text)}</span></div>${resource.percent != null ? `<div class="console-bar" aria-hidden="true"><span style="width:${Math.max(0,Math.min(100,resource.percent))}%"></span></div>` : ''}</div>`).join('');
 }
 function dashboardRow(row) {
   return `<article class="console-row equal-height ${row.attention ? 'attention' : row.status === 'stopped' ? 'stopped' : ''} ${row.deploying ? 'deploying' : ''}" data-server-id="${escapeHTML(row.id)}">
@@ -814,7 +815,7 @@ function serverOverview() {
   const actionPanel = actions && !state.deletions[selected.id] && selected.status !== 'deleting'
     ? `<section class="panel"><div class="panel-heading"><h2>Server actions</h2></div><div class="action-grid">${actions}</div><p class="inline-note">Restart and update actions require confirmation and disconnect active players.</p></section>`
     : '';
-  return `<section class="panel" data-testid="server-overview"><div class="panel-heading"><h2>${escapeHTML(serverLabel(server))}</h2>${status(serverStatus(server))}</div>${evidence}<div class="toolbar">${links}</div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', metricText(server, 'tickRate', ' TPS'), 'pulse')}${stat('Memory working set', metricValue(server, 'memoryUsedBytes') == null ? metricText(server, 'memoryUsedBytes') : bytes(metricValue(server, 'memoryUsedBytes')), 'cpu')}${stat('Memory limit', metricValue(server, 'memoryLimitBytes') == null ? metricText(server, 'memoryLimitBytes') : bytes(metricValue(server, 'memoryLimitBytes')), 'cpu')}</div></section><div class="stack section-gap">${connectedPlayers()}${details}${actionPanel}</div>`;
+  return `<section class="panel" data-testid="server-overview"><div class="panel-heading"><h2>${escapeHTML(serverLabel(server))}</h2>${status(serverStatus(server))}</div>${evidence}<div class="toolbar">${links}</div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', metricText(server, 'tickRate', ' TPS'), 'pulse')}${stat('Memory working set', metricValue(server, 'memoryUsedBytes') == null ? metricText(server, 'memoryUsedBytes') : bytes(metricValue(server, 'memoryUsedBytes')), 'cpu')}${stat('Memory limit', metricValue(server, 'memoryLimitBytes') == null ? metricText(server, 'memoryLimitBytes') : bytes(metricValue(server, 'memoryLimitBytes')), 'cpu')}${stat('Disk usage', metricValue(server, 'diskPercent') == null ? metricText(server, 'diskPercent') : number(metricValue(server, 'diskPercent'), '%'), 'server')}</div></section><div class="stack section-gap">${connectedPlayers()}${details}${actionPanel}</div>`;
 }
 function connectedPlayers() {
   const data = state.telemetry;
@@ -1412,12 +1413,12 @@ async function refresh() {
   }
 }
 function editSettingsValues(server) {
-  return {name:server.name || '', worldName:server.worldName || server.name || '', maxPlayers:server.maxPlayers, memoryLimitMiB:server.memoryLimitMiB || 2048, cpuLimitMillis:server.cpuLimitMillis || 1000, adminIds:parseAdminIds(server.adminIds).join(',')};
+  return {name:server.name || '', worldName:server.worldName || server.name || '', maxPlayers:server.maxPlayers, memoryLimitMiB:server.memoryLimitMiB || 2048, cpuLimitMillis:server.cpuLimitMillis || 1000, storageGiB:server.storageGiB || 40, adminIds:parseAdminIds(server.adminIds).join(',')};
 }
 function editSettingsPatch(initial, values) {
   const patch = {};
   const get = (key) => typeof values.get === 'function' ? values.get(key) : values[key];
-  for (const key of ['name','worldName','maxPlayers','memoryLimitMiB','cpuLimitMillis']) {
+  for (const key of ['name','worldName','maxPlayers','memoryLimitMiB','cpuLimitMillis','storageGiB']) {
     const value = ['name','worldName'].includes(key) ? String(get(key) ?? '').trim() : Number(get(key));
     if (value !== initial[key]) patch[key] = value;
   }
@@ -1432,6 +1433,7 @@ function editSettingsPatch(initial, values) {
     else if (get(field)) patch[field] = get(field);
   }
   if (patch.worldName !== undefined) patch.confirmWorldName = get('confirmWorldName') === 'true';
+  if (patch.storageGiB !== undefined) patch.confirmStorageGiB = get('confirmStorageGiB') === 'true';
   return Object.keys(patch).length ? {...patch, confirm:true} : null;
 }
 function addAdminIDField() {
@@ -1682,7 +1684,7 @@ function openModal(action, userId = '', serverId = '') {
     const image = server.currentImage ? `Running image ${escapeHTML(server.currentImage)}${server.desiredImage && server.desiredImage !== server.currentImage ? ` · Pending image ${escapeHTML(server.desiredImage)}` : ''}` : `Image ${escapeHTML(server.desiredImage || 'Not recorded')}`;
     $('#modal-title').textContent = 'Edit server settings';
     $('#modal-submit').textContent = 'Confirm and apply settings';
-    $('#modal-body').innerHTML = `<p>Stable ID <code>${escapeHTML(server.id)}</code> · Release <code>${escapeHTML(server.namespace)}/${escapeHTML(server.release)}</code></p><p>Stable identity and deployment settings are not editable here: Owner ID ${escapeHTML(server.ownerId || 'Not recorded')} · ${image} · Storage ${escapeHTML(server.storageGiB || 40)} GiB · Port ${escapeHTML(server.gamePort || 7777)} · Service ${escapeHTML(server.serviceType || 'LoadBalancer')}</p><p>Applying changes replaces the game pod and can disconnect active players. This is not hot reload. The existing PVC is retained. C2 performs no save-file rename or migration. Whether this game build renames or selects an existing save from the world name is unverified.</p><div class="form-grid">${[['name','Creator name','text',1,48],['worldName','World name','text',1,2048],['maxPlayers','Max players','number',1,64],['memoryLimitMiB','Memory limit (MiB)','number',256,67584],['cpuLimitMillis','CPU limit (millicores)','number',100,64000]].map(([key,label,type,min,max]) => `<label class="field">${label}<input name="${key}" data-testid="edit-${key}" type="${type}" ${type === 'number' ? `min="${min}" max="${max}" step="1"` : `maxlength="${max}"`} required value="${escapeHTML(state.modalInitialSettings[key])}"></label>`).join('')}</div><fieldset class="form-section field full" data-testid="edit-access"><legend>Passwords</legend><p>Leave a password blank to keep the current value. Passwords are write-only and never displayed. Clear server password to allow passwordless joins, or clear admin password to remove the admin password.</p><div class="form-grid"><label class="field">Server password<input name="serverPassword" data-testid="edit-server-password" type="password" maxlength="2048" autocomplete="new-password"><small>Optional replacement for the join password.</small></label><label class="field">Admin password<input name="adminPassword" data-testid="edit-admin-password" type="password" maxlength="2048" autocomplete="new-password"><small>Optional replacement for the administrator password.</small></label><label class="field checkbox-field"><span><input type="checkbox" name="clearServerPassword" value="true" data-testid="clear-server-password"> Clear server password</span></label><label class="field checkbox-field"><span><input type="checkbox" name="clearAdminPassword" value="true" data-testid="clear-admin-password"> Clear admin password</span></label></div></fieldset>${adminIdsFields(state.users || [], parseAdminIds(server.adminIds))}<label class="field full"><span><input type="checkbox" name="confirmWorldName" value="true" data-testid="confirm-world-name"> I understand that C2 does not rename or migrate save files, and that this game build's world-name save behavior is unverified.</span></label><p id="edit-status" role="status" aria-live="polite">Confirm to request a rollout. Rollout readiness is not verified by this operation.</p>`;
+    $('#modal-body').innerHTML = `<p>Stable ID <code>${escapeHTML(server.id)}</code> · Release <code>${escapeHTML(server.namespace)}/${escapeHTML(server.release)}</code></p><p>Stable identity and deployment settings are not editable here: Owner ID ${escapeHTML(server.ownerId || 'Not recorded')} · ${image} · Port ${escapeHTML(server.gamePort || 7777)} · Service ${escapeHTML(server.serviceType || 'LoadBalancer')}</p><p>Applying changes replaces the game pod and can disconnect active players. This is not hot reload. The existing PVC is retained. C2 performs no save-file rename or migration. Whether this game build renames or selects an existing save from the world name is unverified.</p><div class="form-grid">${[['name','Creator name','text',1,48],['worldName','World name','text',1,2048],['maxPlayers','Max players','number',1,64],['memoryLimitMiB','Memory limit (MiB)','number',256,67584],['cpuLimitMillis','CPU limit (millicores)','number',100,64000],['storageGiB','Storage (GiB)','number',server.storageGiB || 40,2048]].map(([key,label,type,min,max]) => `<label class="field">${label}<input name="${key}" data-testid="edit-${key}" type="${type}" ${type === 'number' ? `min="${min}" max="${max}" step="1"` : `maxlength="${max}"`} required value="${escapeHTML(state.modalInitialSettings[key])}"></label>`).join('')}</div><fieldset class="form-section field full" data-testid="edit-access"><legend>Passwords</legend><p>Leave a password blank to keep the current value. Passwords are write-only and never displayed. Clear server password to allow passwordless joins, or clear admin password to remove the admin password.</p><div class="form-grid"><label class="field">Server password<input name="serverPassword" data-testid="edit-server-password" type="password" maxlength="2048" autocomplete="new-password"><small>Optional replacement for the join password.</small></label><label class="field">Admin password<input name="adminPassword" data-testid="edit-admin-password" type="password" maxlength="2048" autocomplete="new-password"><small>Optional replacement for the administrator password.</small></label><label class="field checkbox-field"><span><input type="checkbox" name="clearServerPassword" value="true" data-testid="clear-server-password"> Clear server password</span></label><label class="field checkbox-field"><span><input type="checkbox" name="clearAdminPassword" value="true" data-testid="clear-admin-password"> Clear admin password</span></label></div></fieldset>${adminIdsFields(state.users || [], parseAdminIds(server.adminIds))}<label class="field full"><span><input type="checkbox" name="confirmWorldName" value="true" data-testid="confirm-world-name"> I understand that C2 does not rename or migrate save files, and that this game build's world-name save behavior is unverified.</span></label><label class="field full"><span><input type="checkbox" name="confirmStorageGiB" value="true" data-testid="confirm-storage-grow"> I understand that growing storage cannot be undone; volumes cannot shrink.</span></label><p id="edit-status" role="status" aria-live="polite">Confirm to request a rollout. Rollout readiness is not verified by this operation.</p>`;
   } else if (action === 'delete') {
     const server = state.servers.find((item) => item.id === state.modalServerId);
     const receipt = state.deletions[state.modalServerId];
@@ -1843,6 +1845,12 @@ async function submitModal(event) {
         $('#modal-error').textContent = 'Acknowledge the world-name save warning before applying this change.';
         $('#modal-error').hidden = false;
         $('[data-testid="confirm-world-name"]').focus();
+        return;
+      }
+      if (body.storageGiB !== undefined && !body.confirmStorageGiB) {
+        $('#modal-error').textContent = 'Acknowledge that storage growth cannot be undone before applying this change.';
+        $('#modal-error').hidden = false;
+        $('[data-testid="confirm-storage-grow"]').focus();
         return;
       }
       path = `/api/servers/${encodeURIComponent(state.modalServerId)}/actions/edit-settings`;

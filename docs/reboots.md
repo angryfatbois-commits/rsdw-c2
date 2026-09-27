@@ -52,6 +52,30 @@ A pressure claim persists before dispatch and uses the existing restart reconcil
 
 Demo mode checks synthetic observations from the seeded server's memory fields and simulates completion. It never calls Kubernetes or Discord for this flow.
 
+## Disk pressure warnings
+
+Disk pressure warnings are disabled by default. The policy applies to every server and is configured at C2 startup, without a policy API or UI.
+
+| Environment variable | Helm value | Default |
+| --- | --- | --- |
+| `RSDW_DISK_PRESSURE_ENABLED` | `diskPressure.enabled` | `false` |
+| `RSDW_DISK_PRESSURE_THRESHOLD_PERCENT` | `diskPressure.thresholdPercent` | `85` |
+| `RSDW_DISK_PRESSURE_DURATION` | `diskPressure.duration` | `10m` |
+
+The enabled value must be a boolean, the threshold must be between 0 and 100 inclusive, and the duration must be a positive Go duration such as `10m` or `1m30s`. Invalid values prevent startup, even when the policy is disabled.
+
+The collector checks fresh data-filesystem usage against the configured threshold. Usage at or above the threshold must persist for the configured duration on the same runtime, using the same streak-tracking semantics as memory pressure (source timestamps, 45-second gap tolerance, runtime-change and restart resets). Unlike memory pressure, disk pressure never triggers a restart: restarting a pod does not free disk space, so this policy is warn-only. It emits one `disk_pressure_warning` event when the streak crosses the duration threshold, then re-arms the next time a fresh sample drops below the threshold and crosses it again.
+
+Enable the `disk_pressure_warning` rule separately in a notification integration to receive these warnings. Grow the affected server's storage from the Edit settings modal; see [Growing server storage](#growing-server-storage) below.
+
+## Growing server storage
+
+An admin can grow a server's world volume from **Edit settings**. Enter a new storage size in GiB and confirm the irreversible-growth acknowledgment. Kubernetes `PersistentVolumeClaim` capacity is grow-only: C2 rejects a value at or below the server's current `storageGiB` before contacting the cluster.
+
+C2 patches the claim's `spec.resources.requests.storage` directly with `kubectl patch --type=merge`, then applies the same value through `--set persistence.size` on the following Helm upgrade so the chart's rendered manifest stays consistent with the live claim. If the claim's `StorageClass` does not set `allowVolumeExpansion: true`, Kubernetes' API server rejects the patch at admission time and C2 surfaces that error directly; the settings change is not applied and no partial state is persisted.
+
+Demo mode accepts any valid grow-only value without contacting Kubernetes.
+
 ## API
 
 All routes require an admin principal. Anonymous requests receive `401`, viewers receive `403` before body parsing or schedule calculation, and OIDC writes—including preview—use the existing Origin and CSRF checks.

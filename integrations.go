@@ -20,6 +20,7 @@ const (
 	RestartRequested               EventKind = "restart_requested"
 	RestartWarning                 EventKind = "restart_warning"
 	MemoryPressureRestartRequested EventKind = "memory_pressure_restart_requested"
+	DiskPressureWarning            EventKind = "disk_pressure_warning"
 	RestartCompleted               EventKind = "restart_completed"
 	RestartFailed                  EventKind = "restart_failed"
 	PlayerJoined                   EventKind = "player_joined"
@@ -47,6 +48,7 @@ var alertRules = []AlertRule{
 	{RestartWarning, "Restart warning", true, "Scheduled or memory-pressure restart warning", "observed"},
 	{RestartRequested, "Restart requested", true, "C2 restart operation", "observed"},
 	{MemoryPressureRestartRequested, "Memory pressure restart requested", true, "Sustained fresh container memory usage at or above the fleet threshold", "observed"},
+	{DiskPressureWarning, "Disk pressure warning", true, "Sustained fresh data filesystem usage at or above the fleet threshold", "observed"},
 	{RestartCompleted, "Restart completed", true, "Owned replacement runtime and fresh engine readiness", "observed"},
 	{RestartFailed, "Restart failed", true, "Restart deadline and fresh runtime observation", "observed"},
 	{PlayerJoined, "Player joined (approximate count increase)", true, "Fresh game API player counts on the same runtime", "approximate"},
@@ -138,6 +140,7 @@ func (s *State) recoverAlerts() {
 	}
 	for id, p := range s.Producers {
 		p.MemoryPressure = nil
+		p.DiskPressure = nil
 		p.Roster = nil
 		p.Runtime, p.PlayerAt, p.LastAt = "", time.Time{}, time.Time{}
 		p.resetStreak()
@@ -205,7 +208,7 @@ func emitAlertEvidence(state *State, server Server, kind EventKind, operation, d
 	case ServerDown, ServerRecovered:
 		category = "health"
 	}
-	if kind == RestartRequested || kind == RestartWarning || kind == MemoryPressureRestartRequested || kind == PlayerLimitReached || kind == ServerStopped {
+	if kind == RestartRequested || kind == RestartWarning || kind == MemoryPressureRestartRequested || kind == DiskPressureWarning || kind == PlayerLimitReached || kind == ServerStopped {
 		severity = "warning"
 	}
 	if kind == RestartFailed || kind == ServerDown || kind == BackupFailed {

@@ -12,16 +12,18 @@ import (
 )
 
 type EditServerRequest struct {
-	Name             *string `json:"name"`
-	WorldName        *string `json:"worldName"`
-	MaxPlayers       *int    `json:"maxPlayers"`
-	MemoryLimitMiB   *int    `json:"memoryLimitMiB"`
-	CPULimitMillis   *int    `json:"cpuLimitMillis"`
-	ServerPassword   *string `json:"serverPassword"`
-	AdminPassword    *string `json:"adminPassword"`
-	AdminIDs         *string `json:"adminIds"`
-	Confirm          bool    `json:"confirm"`
-	ConfirmWorldName bool    `json:"confirmWorldName"`
+	Name              *string `json:"name"`
+	WorldName         *string `json:"worldName"`
+	MaxPlayers        *int    `json:"maxPlayers"`
+	MemoryLimitMiB    *int    `json:"memoryLimitMiB"`
+	CPULimitMillis    *int    `json:"cpuLimitMillis"`
+	StorageGiB        *int    `json:"storageGiB"`
+	ServerPassword    *string `json:"serverPassword"`
+	AdminPassword     *string `json:"adminPassword"`
+	AdminIDs          *string `json:"adminIds"`
+	Confirm           bool    `json:"confirm"`
+	ConfirmWorldName  bool    `json:"confirmWorldName"`
+	ConfirmStorageGiB bool    `json:"confirmStorageGiB"`
 }
 
 func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id string) {
@@ -36,7 +38,7 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 		writeError(w, http.StatusBadRequest, "expected one JSON object")
 		return
 	}
-	if !request.Confirm || (request.Name == nil && request.WorldName == nil && request.MaxPlayers == nil && request.MemoryLimitMiB == nil && request.CPULimitMillis == nil && request.ServerPassword == nil && request.AdminPassword == nil && request.AdminIDs == nil) {
+	if !request.Confirm || (request.Name == nil && request.WorldName == nil && request.MaxPlayers == nil && request.MemoryLimitMiB == nil && request.CPULimitMillis == nil && request.StorageGiB == nil && request.ServerPassword == nil && request.AdminPassword == nil && request.AdminIDs == nil) {
 		writeError(w, http.StatusBadRequest, "at least one setting and confirm: true are required")
 		return
 	}
@@ -71,7 +73,7 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 		name     string
 		value    *int
 		min, max int
-	}{{"maxPlayers", request.MaxPlayers, 1, 64}, {"memoryLimitMiB", request.MemoryLimitMiB, 256, 67584}, {"cpuLimitMillis", request.CPULimitMillis, 100, 64000}} {
+	}{{"maxPlayers", request.MaxPlayers, 1, 64}, {"memoryLimitMiB", request.MemoryLimitMiB, 256, 67584}, {"cpuLimitMillis", request.CPULimitMillis, 100, 64000}, {"storageGiB", request.StorageGiB, 1, 2048}} {
 		if field.value != nil && (*field.value < field.min || *field.value > field.max) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("%s must be between %d and %d", field.name, field.min, field.max))
 			return
@@ -87,6 +89,14 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 	}
 	if request.WorldName != nil && strings.TrimSpace(*request.WorldName) != defaultValue(server.WorldName, server.Name) && !request.ConfirmWorldName {
 		writeError(w, http.StatusBadRequest, "changing worldName requires confirmWorldName: true; C2 does not rename or migrate saved world data and this game build's save-selection behavior is unverified")
+		return
+	}
+	if request.StorageGiB != nil && *request.StorageGiB <= server.StorageGiB {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("storageGiB must be greater than the current size (%d GiB); Kubernetes volumes cannot shrink", server.StorageGiB))
+		return
+	}
+	if request.StorageGiB != nil && !request.ConfirmStorageGiB {
+		writeError(w, http.StatusBadRequest, "growing storageGiB requires confirmStorageGiB: true; volume growth cannot be undone")
 		return
 	}
 	if request.Name != nil {
@@ -115,6 +125,16 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
+	if request.StorageGiB != nil {
+		if k, ok := a.orchestrator.(*kubeOrchestrator); ok {
+			if err := k.resizeWorldClaim(ctx, server, *request.StorageGiB); err != nil {
+				log.Printf("storage resize failed for server %s, release %s/%s: %v", server.ID, server.Namespace, server.Release, err)
+				writeError(w, http.StatusBadGateway, fmt.Sprintf("Could not grow storage for server %s, release %s/%s: %s. Settings were not applied.", server.ID, server.Namespace, server.Release, err))
+				return
+			}
+		}
+		server.StorageGiB = *request.StorageGiB
+	}
 	observed, err := a.orchestrator.Refresh(ctx, server)
 	if err != nil || observed.CurrentImage == "" {
 		if err == nil {

@@ -31,6 +31,7 @@ type AlertProducer struct {
 	StreakSince     time.Time            `json:"streakSince"`
 	Restart         *RestartOperation    `json:"restart,omitempty"`
 	MemoryPressure  *MemoryPressureState `json:"memoryPressure,omitempty"`
+	DiskPressure    *DiskPressureState   `json:"diskPressure,omitempty"`
 }
 
 func (p *AlertProducer) resetStreak() {

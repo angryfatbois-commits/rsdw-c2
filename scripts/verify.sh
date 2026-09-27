@@ -13,6 +13,7 @@ node --test web/app.test.cjs
 node --test verification/save-import.test.cjs
 bash scripts/verify-auth-chart.sh
 bash scripts/verify-memory-pressure-chart.sh
+bash scripts/verify-disk-pressure-chart.sh
 node <<'NODE'
 const fs = require('fs');
 const source = fs.readFileSync('web/app.js', 'utf8') + fs.readFileSync('web/index.html', 'utf8');

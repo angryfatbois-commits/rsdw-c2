@@ -18,7 +18,7 @@ The **HTTPS webhooks** page accepts a public HTTPS endpoint on port 443. The URL
 
 Each integration can set quiet hours with an IANA timezone. C2 evaluates the event time in that stored timezone when it creates a delivery. Suppressed events remain in event history but do not enter the queue, and changing quiet hours does not replay them. Test deliveries bypass quiet hours.
 
-Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. Production telemetry is not simulated in demo mode. The memory pressure policy uses synthetic observations from seeded memory fields in demo mode.
+Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. Production telemetry is not simulated in demo mode. The memory pressure and disk pressure policies use synthetic observations from seeded memory and disk fields in demo mode.
 
 ## Discord messages
 
@@ -49,6 +49,7 @@ Each event has an immutable `id`, `kind`, `source`, `accuracy`, timestamp, serve
 | --- | --- |
 | `restart_requested` | C2 durably recorded a restart operation before issuing the Kubernetes command. This does not assert that Kubernetes accepted it. |
 | `memory_pressure_restart_requested` | Sustained memory pressure triggered a durable restart claim. This warning uses the shared completion and failure events. See [memory pressure configuration](reboots.md#memory-pressure-restarts). |
+| `disk_pressure_warning` | Sustained data filesystem usage at or above the configured threshold. Warn-only; it does not restart the server. See [disk pressure warnings](reboots.md#disk-pressure-warnings). |
 | `restart_completed` | A fresh, owned runtime has the operation's Pod-template annotation, a different runtime identity, a start time at or after the request at Kubernetes' second precision, and both Pod and engine readiness. |
 | `restart_failed` | After five minutes, a fresh definitive observation still cannot confirm a ready marked replacement. |
 | `restart_warning` | An optional scheduled-restart notice. The event contains the scheduled UTC instant, warning minutes, and durable occurrence identity. It is canceled when the occurrence is no longer eligible. |

@@ -319,13 +319,14 @@ console.log('Viewer capability rendering checks passed.');
 
 const test = require('node:test');
 test('edit settings uses effective values and sends only changed fields', () => {
-  const server = {id:'target', name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250};
+  const server = {id:'target', name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250, storageGiB:80};
   const initial = context.ui.editSettingsValues(server);
-  assert.deepEqual({...initial}, {name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250, adminIds:''});
+  assert.deepEqual({...initial}, {name:'PETZKO', worldName:'PC2-US-EAST-01', maxPlayers:8, memoryLimitMiB:3072, cpuLimitMillis:1250, storageGiB:80, adminIds:''});
   assert.equal(context.ui.editSettingsPatch(initial, {...initial}), null);
   assert.deepEqual({...context.ui.editSettingsPatch(initial, {...initial, name:'New creator', maxPlayers:'12'})}, {name:'New creator', maxPlayers:12, confirm:true});
   assert.deepEqual({...context.ui.editSettingsPatch(initial, {...initial, worldName:'New world', confirmWorldName:'true'})}, {worldName:'New world', confirmWorldName:true, confirm:true});
-  assert.deepEqual({...context.ui.editSettingsValues({name:'Legacy creator', maxPlayers:4})}, {name:'Legacy creator', worldName:'Legacy creator', maxPlayers:4, memoryLimitMiB:2048, cpuLimitMillis:1000, adminIds:''});
+  assert.deepEqual({...context.ui.editSettingsPatch(initial, {...initial, storageGiB:'120', confirmStorageGiB:'true'})}, {storageGiB:120, confirmStorageGiB:true, confirm:true});
+  assert.deepEqual({...context.ui.editSettingsValues({name:'Legacy creator', maxPlayers:4})}, {name:'Legacy creator', worldName:'Legacy creator', maxPlayers:4, memoryLimitMiB:2048, cpuLimitMillis:1000, storageGiB:40, adminIds:''});
 });
 test('create uploads one save with settings and preserves authentication headers', async () => {
   const requests = [];
