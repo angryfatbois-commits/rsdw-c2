@@ -6,6 +6,15 @@ import (
 	"fmt"
 )
 
+// storageResizer is satisfied by *kubeOrchestrator and by any test wrapper
+// that embeds it. edit.go asserts against this interface rather than the
+// concrete *kubeOrchestrator type so a wrapping struct (used by tests to
+// override Refresh) still dispatches through the real resize logic via
+// Go's method promotion.
+type storageResizer interface {
+	resizeWorldClaim(ctx context.Context, server Server, storageGiB int) error
+}
+
 // resizeWorldClaim grows a server's world PersistentVolumeClaim to storageGiB.
 // Kubernetes' API server rejects a storage-request increase at admission time
 // when the claim's StorageClass does not set allowVolumeExpansion, so the

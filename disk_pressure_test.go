@@ -98,6 +98,7 @@ func TestDiskPressureRearmsAfterClearing(t *testing.T) {
 	policy := DiskPressurePolicy{Enabled: true, ThresholdPercent: 85, Duration: time.Minute}
 
 	observeDiskPressure(t, policy, state, server, diskPressureSample(start), start)
+	observeDiskPressure(t, policy, state, server, diskPressureSample(start.Add(30*time.Second)), start.Add(30*time.Second))
 	observeDiskPressure(t, policy, state, server, diskPressureSample(start.Add(time.Minute)), start.Add(time.Minute))
 	if len(state.Events) != 1 {
 		t.Fatalf("first disk pressure warning = %+v", eventKinds(state))
@@ -110,8 +111,10 @@ func TestDiskPressureRearmsAfterClearing(t *testing.T) {
 		t.Fatalf("disk pressure streak retained after clearing: %+v", p.DiskPressure)
 	}
 
-	resumed := start.Add(90*time.Second + time.Minute)
+	resumed := start.Add(120 * time.Second)
 	observeDiskPressure(t, policy, state, server, diskPressureSample(resumed), resumed)
+	observeDiskPressure(t, policy, state, server, diskPressureSample(resumed.Add(30*time.Second)), resumed.Add(30*time.Second))
+	observeDiskPressure(t, policy, state, server, diskPressureSample(resumed.Add(time.Minute)), resumed.Add(time.Minute))
 	if len(state.Events) != 2 || eventKinds(state)[1] != DiskPressureWarning {
 		t.Fatalf("disk pressure did not rearm: %+v", eventKinds(state))
 	}
@@ -227,6 +230,9 @@ func TestDiskPressureUsesSourceTimeAndInclusiveThreshold(t *testing.T) {
 		o := diskPressureSample(start)
 		setReading(o.metrics, "diskPercent", threshold, start)
 		observeDiskPressure(t, policy, state, server, o, start)
+		mid := diskPressureSample(start.Add(30 * time.Second))
+		setReading(mid.metrics, "diskPercent", threshold, start.Add(30*time.Second))
+		observeDiskPressure(t, policy, state, server, mid, start.Add(30*time.Second))
 		next := diskPressureSample(start.Add(time.Minute))
 		setReading(next.metrics, "diskPercent", threshold, start.Add(time.Minute))
 		observeDiskPressure(t, policy, state, server, next, start.Add(time.Minute))

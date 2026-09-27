@@ -126,7 +126,7 @@ func (a *App) handleEditSettings(w http.ResponseWriter, r *http.Request, id stri
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	if request.StorageGiB != nil {
-		if k, ok := a.orchestrator.(*kubeOrchestrator); ok {
+		if k, ok := a.orchestrator.(storageResizer); ok {
 			if err := k.resizeWorldClaim(ctx, server, *request.StorageGiB); err != nil {
 				log.Printf("storage resize failed for server %s, release %s/%s: %v", server.ID, server.Namespace, server.Release, err)
 				writeError(w, http.StatusBadGateway, fmt.Sprintf("Could not grow storage for server %s, release %s/%s: %s. Settings were not applied.", server.ID, server.Namespace, server.Release, err))
