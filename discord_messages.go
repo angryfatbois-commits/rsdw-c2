@@ -46,6 +46,7 @@ type discordMessageSpec struct {
 
 var discordMessageSpecs = []discordMessageSpec{
 	{MemoryPressureRestartRequested, "Memory pressure restart requested", "The server kept hogging memory. C2 requested a restart before it ate the whole damn limit.", 0xF59E0B, true},
+	{DiskPressureWarning, "Disk pressure warning", "The world save volume has been sitting at a dangerous fill level for a while. Grow the storage before it runs out and takes the world down with it.", 0xF59E0B, true},
 	{RestartWarning, "Restart approaching", "A scheduled restart is approaching. Save your progress.", 0xF59E0B, true},
 	{RestartRequested, "Restart requested", "The server was told to get its act together. It chose a dramatic reboot instead.", 0xF59E0B, true},
 	{RestartCompleted, "Restart completed", "The corpse has staggered back online. It did the bare minimum and expects a fucking parade.", 0x22C55E, true},
@@ -96,6 +97,9 @@ func renderDiscordEmbed(event Event) (discordEmbed, error) {
 		}
 		if warning := event.Evidence.RestartWarning; warning != nil {
 			embed.Description = fmt.Sprintf("Restart in %d minutes. Save your progress. Scheduled for %s.", warning.Minutes, warning.RestartAt.UTC().Format(time.RFC3339))
+		}
+		if pressure := event.Evidence.DiskPressure; pressure != nil {
+			embed.Description = fmt.Sprintf("Data filesystem usage is at %.0f%%, at or above the configured %.0f%% threshold.", pressure.Percent, pressure.ThresholdPercent)
 		}
 		return embed, nil
 	}

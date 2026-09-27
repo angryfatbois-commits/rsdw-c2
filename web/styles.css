@@ -167,6 +167,7 @@ tbody tr.deploying:hover { background: var(--color-nav-current); }
 .console-bar { height: 6px; margin-top: 6px; background: var(--color-divider); border-radius: 2px; overflow: hidden; }
 .console-bar span { display: block; height: 100%; background: var(--color-primary); border-radius: inherit; }
 .console-row.attention .console-bar span { background: var(--warning); }
+.console-resource.pressure .console-bar span { background: var(--warning); }
 .console-schedule { font-size: 13px; }
 .console-schedule > span + span { display: block; margin-top: 4px; }
 .console-actions { display: flex; justify-content: flex-end; gap: 8px; position: relative; z-index: 1; }

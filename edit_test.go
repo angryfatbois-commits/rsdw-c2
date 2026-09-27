@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -113,7 +114,10 @@ func TestEditSettingsRejectsInvalidOrImmutableRequests(t *testing.T) {
 		{"invalid memory limit", `{"memoryLimitMiB":67585,"confirm":true}`},
 		{"world name requires explicit confirmation", `{"worldName":"New world","confirm":true}`},
 		{"invalid CPU limit", `{"cpuLimitMillis":99,"confirm":true}`},
-		{"blank creator", `{"name":"  ","confirm":true}`},
+		{"storageGiB below minimum", `{"storageGiB":0,"confirm":true}`},
+		{"storageGiB above maximum", `{"storageGiB":2049,"confirm":true}`},
+		{"storageGiB shrink rejected", `{"storageGiB":100,"confirm":true,"confirmStorageGiB":true}`},
+		{"storageGiB grow requires explicit confirmation", `{"storageGiB":200,"confirm":true}`},
 		{"trailing JSON", `{"name":"new","confirm":true}{}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -306,4 +310,90 @@ type editKubeOrchestrator struct{ *kubeOrchestrator }
 
 func (o *editKubeOrchestrator) Refresh(_ context.Context, server Server) (Server, error) {
 	return server, nil
+}
+
+type pvcResizeRunner struct {
+	recordingRunner
+	claimName string
+}
+
+func (r *pvcResizeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	call := strings.Join(append([]string{name}, args...), " ")
+	if strings.Contains(call, "get persistentvolumeclaims") {
+		r.calls = append(r.calls, call)
+		return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":%q,"namespace":"games"}}]}`, r.claimName)), nil
+	}
+	return r.recordingRunner.Run(ctx, name, args...)
+}
+
+func TestEditSettingsGrowsStorageAndPatchesClaim(t *testing.T) {
+	app := newTestApp(t, false)
+	runner := &pvcResizeRunner{claimName: "target-world"}
+	app.orchestrator = &editKubeOrchestrator{kubeOrchestrator: &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "chart", imageRepository: "example/server"}}
+	server := editFixtureServer()
+	if err := app.store.Update(func(state *State) error { state.Servers[server.ID] = server; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	res := requestJSON(t, app, http.MethodPost, "/api/servers/target/actions/edit-settings", `{"storageGiB":200,"confirm":true,"confirmStorageGiB":true}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("edit status = %d: %s", res.Code, res.Body.String())
+	}
+	if got := app.store.Snapshot().Servers[server.ID].StorageGiB; got != 200 {
+		t.Fatalf("persisted storageGiB = %d, want 200", got)
+	}
+	var patchCall, helmCall string
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, "kubectl -n games patch persistentvolumeclaims/target-world") {
+			patchCall = call
+		}
+		if strings.HasPrefix(call, "helm ") {
+			helmCall = call
+		}
+	}
+	if patchCall == "" || !strings.Contains(patchCall, `"storage":"200Gi"`) {
+		t.Fatalf("PVC patch call = %q, want a merge patch to 200Gi", patchCall)
+	}
+	if !strings.Contains(helmCall, "persistence.size=200Gi") {
+		t.Fatalf("Helm call missing persistence.size=200Gi: %s", helmCall)
+	}
+}
+
+func TestEditSettingsResizeFailurePreventsPersistence(t *testing.T) {
+	app := newTestApp(t, false)
+	runner := &pvcResizeRunner{claimName: ""}
+	app.orchestrator = &editKubeOrchestrator{kubeOrchestrator: &kubeOrchestrator{runner: runner, helm: "helm", kubectl: "kubectl", chart: "chart", imageRepository: "example/server"}}
+	server := editFixtureServer()
+	if err := app.store.Update(func(state *State) error { state.Servers[server.ID] = server; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	before := app.store.Snapshot()
+	res := requestJSON(t, app, http.MethodPost, "/api/servers/target/actions/edit-settings", `{"storageGiB":200,"confirm":true,"confirmStorageGiB":true}`)
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("edit status = %d: %s", res.Code, res.Body.String())
+	}
+	if !reflect.DeepEqual(before, app.store.Snapshot()) {
+		t.Fatal("failed resize changed persisted state")
+	}
+	for _, call := range runner.calls {
+		if strings.HasPrefix(call, "helm ") {
+			t.Fatalf("resize failure still deployed via Helm: %s", call)
+		}
+	}
+}
+
+func TestEditSettingsDemoModeSkipsPVCPatch(t *testing.T) {
+	app := newTestApp(t, true)
+	orchestrator := &editOrchestrator{}
+	app.orchestrator = orchestrator
+	server := editFixtureServer()
+	if err := app.store.Update(func(state *State) error { state.Servers[server.ID] = server; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	res := requestJSON(t, app, http.MethodPost, "/api/servers/target/actions/edit-settings", `{"storageGiB":200,"confirm":true,"confirmStorageGiB":true}`)
+	if res.Code != http.StatusOK {
+		t.Fatalf("edit status = %d: %s", res.Code, res.Body.String())
+	}
+	if got := app.store.Snapshot().Servers[server.ID].StorageGiB; got != 200 {
+		t.Fatalf("persisted storageGiB = %d, want 200", got)
+	}
 }

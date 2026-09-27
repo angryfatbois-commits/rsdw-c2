@@ -93,6 +93,12 @@ spec:
               value: {{ .Values.memoryPressure.thresholdPercent | quote }}
             - name: RSDW_MEMORY_PRESSURE_DURATION
               value: {{ .Values.memoryPressure.duration | quote }}
+            - name: RSDW_DISK_PRESSURE_ENABLED
+              value: {{ .Values.diskPressure.enabled | quote }}
+            - name: RSDW_DISK_PRESSURE_THRESHOLD_PERCENT
+              value: {{ .Values.diskPressure.thresholdPercent | quote }}
+            - name: RSDW_DISK_PRESSURE_DURATION
+              value: {{ .Values.diskPressure.duration | quote }}
             - name: RSDW_BACKUP_PATH
               value: {{ .Values.backups.path | quote }}
             - name: RSDW_BACKUP_MAX_REPOSITORY_BYTES

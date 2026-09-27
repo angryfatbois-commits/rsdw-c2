@@ -228,10 +228,14 @@ func (a *App) collectTelemetry(ctx context.Context) {
 						observeAlerts(state, current, result, now)
 						var err error
 						dispatch, err = a.memoryPressure.observe(state, current, result, now)
-						if err == nil {
-							cancelObsoleteWarnings(state, now)
+						if err != nil {
+							return err
 						}
-						return err
+						if err := a.diskPressure.observe(state, current, result, now); err != nil {
+							return err
+						}
+						cancelObsoleteWarnings(state, now)
+						return nil
 					}
 					return nil
 				}); err != nil {

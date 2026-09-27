@@ -18,6 +18,7 @@ func TestDiscordMessagePayloads(t *testing.T) {
 		fields             []discordEmbedField
 	}{
 		{MemoryPressureRestartRequested, "Memory pressure restart requested", "The server kept hogging memory. C2 requested a restart before it ate the whole damn limit.", 0xF59E0B, []discordEmbedField{{"Server", "Example server"}}},
+		{DiskPressureWarning, "Disk pressure warning", "The world save volume has been sitting at a dangerous fill level for a while. Grow the storage before it runs out and takes the world down with it.", 0xF59E0B, []discordEmbedField{{"Server", "Example server"}}},
 		{RestartWarning, "Restart approaching", "A scheduled restart is approaching. Save your progress.", 0xF59E0B, []discordEmbedField{{"Server", "Example server"}}},
 		{RestartRequested, "Restart requested", "The server was told to get its act together. It chose a dramatic reboot instead.", 0xF59E0B, []discordEmbedField{{"Server", "Example server"}}},
 		{RestartCompleted, "Restart completed", "The corpse has staggered back online. It did the bare minimum and expects a fucking parade.", 0x22C55E, []discordEmbedField{{"Server", "Example server"}}},

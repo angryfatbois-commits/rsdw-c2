@@ -20,10 +20,16 @@ type RestartWarningEvidence struct {
 	Minutes   int       `json:"minutes"`
 }
 
+type DiskPressureEvidence struct {
+	Percent          float64 `json:"percent"`
+	ThresholdPercent float64 `json:"thresholdPercent"`
+}
+
 type AlertEvidence struct {
 	PlayerCount    *PlayerCountEvidence    `json:"playerCount,omitempty"`
 	JoinedPlayers  []ConnectedPlayer       `json:"joinedPlayers,omitempty"`
 	RestartWarning *RestartWarningEvidence `json:"restartWarning,omitempty"`
+	DiskPressure   *DiskPressureEvidence   `json:"diskPressure,omitempty"`
 }
 
 func (event Event) clone() Event {
@@ -35,6 +41,10 @@ func (event Event) clone() Event {
 	if event.Evidence.RestartWarning != nil {
 		warning := *event.Evidence.RestartWarning
 		event.Evidence.RestartWarning = &warning
+	}
+	if event.Evidence.DiskPressure != nil {
+		pressure := *event.Evidence.DiskPressure
+		event.Evidence.DiskPressure = &pressure
 	}
 	return event
 }

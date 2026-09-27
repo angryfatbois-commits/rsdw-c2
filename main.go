@@ -380,6 +380,10 @@ func (s State) clone() State {
 			pressure := *producer.MemoryPressure
 			producer.MemoryPressure = &pressure
 		}
+		if producer.DiskPressure != nil {
+			pressure := *producer.DiskPressure
+			producer.DiskPressure = &pressure
+		}
 		producer.Roster = append([]ConnectedPlayer(nil), producer.Roster...)
 		if producer.Restart != nil {
 			restart := *producer.Restart
@@ -1009,6 +1013,7 @@ type App struct {
 	orchestrator   Orchestrator
 	demo           bool
 	memoryPressure MemoryPressurePolicy
+	diskPressure   DiskPressurePolicy
 	auth           *Auth
 	imageRepo      string
 	telemetryOnce  sync.Once
@@ -1698,6 +1703,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	diskPressure, err := diskPressurePolicyFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	demo := strings.EqualFold(os.Getenv("RSDW_DEMO_DATA"), "true")
 	auth, err := authFromEnv(context.Background(), demo)
 	if err != nil {
@@ -1716,7 +1725,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure, backups: backups}
+	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure, diskPressure: diskPressure, backups: backups}
 	if err := app.updateBackupBackend(); err != nil {
 		log.Fatal(err)
 	}
